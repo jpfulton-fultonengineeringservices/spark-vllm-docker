@@ -6,7 +6,7 @@ I now have comprehensive understanding of the Container & Build Infrastructure m
 
 ## 1. Overview
 
-The **Container & Build Infrastructure** domain is the foundation layer of `codekeeper`. It produces the runtime container image in which every mod is later applied, and it pre-conditions the same vLLM source tree that deployment-time mods mutate. Unlike the mod system — which operates at *deployment time* inside a running container — this domain operates entirely at *image build time*, baking deterministic, reproducible fixes and dependency pins into the artifact that ships to DGX Spark nodes.
+The **Container & Build Infrastructure** domain is the foundation layer of `spark-vllm-docker`. It produces the runtime container image in which every mod is later applied, and it pre-conditions the same vLLM source tree that deployment-time mods mutate. Unlike the mod system — which operates at *deployment time* inside a running container — this domain operates entirely at *image build time*, baking deterministic, reproducible fixes and dependency pins into the artifact that ships to DGX Spark nodes.
 
 The domain is deliberately scoped to three cooperating submodules:
 
@@ -253,7 +253,7 @@ The build-time/runtime split is a deliberate architectural boundary: structural 
 
 ## 10. Summary
 
-The Container & Build Infrastructure domain is the deterministic foundation of `codekeeper`. Through a multi-stage Docker build orchestrated by `build-and-copy.sh`, it assembles a runtime image that:
+The Container & Build Infrastructure domain is the deterministic foundation of `spark-vllm-docker`. Through a multi-stage Docker build orchestrated by `build-and-copy.sh`, it assembles a runtime image that:
 
 - Pins CUDA 13.0.2, PyTorch 2.13.0, and CUTLASS DSL 4.7.0 for reproducibility.
 - Applies a curated, idempotent, fail-closed suite of AST/regex-based vLLM patches that fix memory accounting, attention behavior, platform issues, and model-specific bugs for SM12x / DGX Spark hardware.

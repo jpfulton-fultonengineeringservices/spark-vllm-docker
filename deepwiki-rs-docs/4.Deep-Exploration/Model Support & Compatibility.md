@@ -6,7 +6,7 @@ I now have comprehensive information about the Model Support & Compatibility mod
 
 ## 1. Overview
 
-The **Model Support & Compatibility** domain is one of the two core business domains of the `codekeeper` repository. Its purpose is to make an *externally installed* vLLM inference stack correctly serve a broad portfolio of cutting-edge and vendor-specific model families — **DiffusionGemma/Gemma4, Qwen3.x/3.5/3.6/3.8, GLM-4.7/5.x, Nemotron Nano/Super, Step-3.7, MiniMax, and DSpark draft models** — without forking vLLM.
+The **Model Support & Compatibility** domain is one of the two core business domains of the `spark-vllm-docker` repository. Its purpose is to make an *externally installed* vLLM inference stack correctly serve a broad portfolio of cutting-edge and vendor-specific model families — **DiffusionGemma/Gemma4, Qwen3.x/3.5/3.6/3.8, GLM-4.7/5.x, Nemotron Nano/Super, Step-3.7, MiniMax, and DSpark draft models** — without forking vLLM.
 
 Rather than shipping a modified inference engine, this domain delivers **per-model compatibility as a set of self-contained, reversible patches and launchers** under `mods/`. Each model family owns a dedicated `mods/<name>/` directory containing:
 
@@ -237,4 +237,4 @@ sequenceDiagram
 
 ## 8. Summary
 
-The **Model Support & Compatibility** domain is the mechanism by which `codekeeper` extends an unmodified vLLM to serve a wide, fast-moving portfolio of model families. It achieves this through a disciplined, patch-based approach: unified diffs and AST rewrites for architecture registration and quantization fixes, Jinja templates for prompt correctness, and reasoning-channel patches for clean API responses — all orchestrated by fail-fast, idempotent `run.sh` launchers with legacy/main fallbacks. The domain's design prioritizes reversibility, traceability, and tolerance of upstream version drift, at the cost of some technique divergence and reliance on runtime network fetches that operators should be aware of.
+The **Model Support & Compatibility** domain is the mechanism by which `spark-vllm-docker` extends an unmodified vLLM to serve a wide, fast-moving portfolio of model families. It achieves this through a disciplined, patch-based approach: unified diffs and AST rewrites for architecture registration and quantization fixes, Jinja templates for prompt correctness, and reasoning-channel patches for clean API responses — all orchestrated by fail-fast, idempotent `run.sh` launchers with legacy/main fallbacks. The domain's design prioritizes reversibility, traceability, and tolerance of upstream version drift, at the cost of some technique divergence and reliance on runtime network fetches that operators should be aware of.
