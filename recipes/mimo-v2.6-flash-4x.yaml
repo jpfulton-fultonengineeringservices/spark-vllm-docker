@@ -29,11 +29,17 @@ mods:
   - mods/mimo-v2.6-flash
 
 # Default settings (can be overridden via CLI where supported)
+# gpu_memory_utilization 0.80 (not the 2x recipe's 0.87): the FES bge-m3 embed
+# units stay resident on every rank (~12 GiB docker cap) and the flagship
+# glm53-flash-tp4 proved 0.80 + embed 0.10 co-existence. At TP4 the per-rank
+# weights are ~43 GB, so 0.80 (~97 GiB) still leaves a far larger KV budget
+# than the 2x config needed for the 1M context (fp8 KV ~7 GiB per 1M token per
+# rank vs ~14 GiB at TP2).
 defaults:
   port: 8000
   host: 0.0.0.0
   tensor_parallel: 4
-  gpu_memory_utilization: 0.87
+  gpu_memory_utilization: 0.80
   max_model_len: 1048576
   max_num_seqs: 8
   max_num_batched_tokens: 8192
