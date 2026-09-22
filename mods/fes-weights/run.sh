@@ -66,6 +66,26 @@ make_shim() {
     echo "$PREFIX $model: hub shim created ($snap -> $src)"
 }
 
+# The HF cache lives on node1's local ext4, NFS-exported to the peer ranks
+# with root_squash (see cluster.env LLM_HF_CACHE_DIR / /etc/exports). This mod
+# runs as root: REAL root on node1, squashed to nobody on the peers. The vLLM
+# server runs as the image's non-root user (ubuntu, uid 1000). Anything left
+# root-owned in the cache -- the shim's snapshots/refs dirs here, and
+# transformers' dynamic-module cache <HF_HOME>/modules created by the first
+# root-run python importing transformers -- makes the server die with EACCES
+# (observed 2026-09-22: dynamic_module_utils makedirs
+# '/root/.cache/huggingface/modules' on the peer ranks). Hand the cache to
+# the serving user; on squashed peers chown/chmod fail harmlessly -- node1's
+# run fixes the shared tree for everyone. -h keeps chown off the fes-staged
+# symlinks into the read-only /model mount; chmod -R skips symlinks entirely.
+fix_hf_cache_perms() {
+    local hf_dir="${HF_HOME:-/root/.cache/huggingface}"
+    [ -d "$hf_dir" ] || return 0
+    mkdir -p "$hf_dir/modules" 2>/dev/null || true
+    chown -R -h ubuntu:ubuntu "$hf_dir" 2>/dev/null || true
+    chmod -R u+rwX,g+rwX "$hf_dir" 2>/dev/null || true
+}
+
 verify "$weights_dir" "main weights"
 if [ -n "${FES_DRAFT_DIR:-}" ]; then
     verify "$draft_dir" "draft weights"
@@ -76,5 +96,6 @@ fi
 if [ -n "${FES_DRAFT_HUB_MODEL:-}" ]; then
     make_shim "$FES_DRAFT_HUB_MODEL" "$draft_dir"
 fi
+fix_hf_cache_perms
 
 echo "$PREFIX FES_WEIGHTS_OK op=verify dir=$weights_dir slug=${FES_HUB_MODEL:-none}"
