@@ -62,6 +62,9 @@ command: |
       --max-num-seqs {max_num_seqs} \
       --max-num-batched-tokens {max_num_batched_tokens} \
       --gpu-memory-utilization {gpu_memory_utilization} \
+      --enable-chunked-prefill \
+      --async-scheduling \
+      --enable-prefix-caching \
       --speculative-config '{{"method":"dflash","model":"/workspace/MiMo-V2.6-Flash-RL-dflash","num_speculative_tokens":{num_speculative_tokens},"attention_backend":"TRITON_ATTN"}}' \
       --compilation-config '{{"cudagraph_mode":"FULL_DECODE_ONLY"}}' \
       --generation-config vllm \
