@@ -43,6 +43,14 @@ env: {}
 # - fp8 KV cache + 0.87 utilization: bf16 KV holds ~614K tokens at 0.85, short
 #   of the model's 1M context. A 1M sequence needs 14.3 GiB of fp8 KV; 0.85
 #   left 13.85 GiB, so 0.87 provides the headroom (~105.8 of 121.6 GiB).
+# - Prefix caching + chunked prefill + async scheduling are pinned explicitly,
+#   following the pattern proven alongside DFlash in qwen3.8-27b-nvfp4-dflash2
+#   .yaml. The hybrid DIFFKV attention plus SWA drafter is exactly the class of
+#   model where vLLM's defaults silently constrain prefix reuse and prefill
+#   chunking; asserting them keeps the intent auditable. With max_model_len at
+#   1M and 8192 batched tokens, chunked prefill prevents long-context prompts
+#   from monopolizing the batch, and prefix caching avoids re-prefill of shared
+#   system prompts and multi-turn history.
 # - DFlash drafter ships inside the checkpoint under dflash/ (block size 8 ->
 #   7 draft tokens). Its SWA layers carry attention sink biases and DFlash needs
 #   non-causal attention, so the draft is pinned to TRITON_ATTN.
@@ -62,6 +70,9 @@ command: |
       --max-num-seqs {max_num_seqs} \
       --max-num-batched-tokens {max_num_batched_tokens} \
       --gpu-memory-utilization {gpu_memory_utilization} \
+      --enable-chunked-prefill \
+      --async-scheduling \
+      --enable-prefix-caching \
       --speculative-config '{{"method":"dflash","model":"/workspace/MiMo-V2.6-Flash-RL-dflash","num_speculative_tokens":{num_speculative_tokens},"attention_backend":"TRITON_ATTN"}}' \
       --compilation-config '{{"cudagraph_mode":"FULL_DECODE_ONLY"}}' \
       --generation-config vllm \
