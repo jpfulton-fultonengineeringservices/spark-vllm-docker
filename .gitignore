@@ -3,6 +3,10 @@
 build-metadata.yaml
 .DS_STORE
 
+.litho
+.kilo
+.opencode
+
 # Python bytecode and tool caches
 **/__pycache__/
 **/*.py[cod]
