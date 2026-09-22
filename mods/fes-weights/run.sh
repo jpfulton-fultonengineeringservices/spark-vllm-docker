@@ -16,6 +16,13 @@ set -euo pipefail
 PREFIX="[fes-weights]"
 MOD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Opt-in mod: recipes may list fes-weights unconditionally. Without the FES
+# env (no fes-eval.sh launch), stay inert so hub-cache mode is unaffected.
+if [ -z "${FES_WEIGHTS_ENABLED:-}" ]; then
+    echo "$PREFIX FES_WEIGHTS_SKIP op=verify reason=FES_WEIGHTS_ENABLED not set (hub-cache mode)"
+    exit 0
+fi
+
 weights_dir="${FES_WEIGHTS_DIR:-/model}"
 draft_dir="${FES_DRAFT_DIR:-/drafter}"
 hub_root="${HF_HOME:-/root/.cache/huggingface}/hub"
