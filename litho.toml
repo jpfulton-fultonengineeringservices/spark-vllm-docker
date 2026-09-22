@@ -1,0 +1,99 @@
+# litho.toml - deepwiki-rs (Litho) analysis configuration for codekeeper.
+#
+# IMPORTANT: do NOT add an [llm] section here. deepwiki-rs serde-defaults a
+# missing [llm].api_key to "" which silently disables the LITHO_LLM_API_KEY
+# env-var fallback, and a partial [llm] section fails TOML deserialization
+# (all non-Option fields are required when the section is present). LLM
+# settings (base URL, models) are passed as CLI flags by
+# scripts/generate-deepwiki.sh; the API key is exported as
+# LITHO_LLM_API_KEY for the child process only.
+#
+# Config discovery is CWD-based (./litho.toml); the script cd's to the repo
+# root before invoking the tool.
+
+project_name = "spark-vllm-docker"
+target_language = "en"
+
+# Field-level serde default for this key is `false` when absent from a present
+# TOML file (it overrides the Config::default() value of `true`), so it must
+# be set explicitly. Untracked files are skipped.
+git_tracked_only = true
+
+# These arrays REPLACE the tool's built-in defaults entirely, so the upstream
+# defaults (Config::default() in src/config.rs) are restated here plus
+# codekeeper additions. Do NOT add "bin" - bin/codekeeper is tracked source
+# that must be analyzed.
+excluded_dirs = [
+    # upstream defaults
+    ".litho",
+    "litho.docs",
+    "target",
+    "node_modules",
+    ".git",
+    "build",
+    "dist",
+    "venv",
+    ".svelte-kit",
+    "__pycache__",
+    "__tests__",
+    "__mocks__",
+    "__fixtures__",
+    # codekeeper additions (gitignored local dirs - the shadow tree excludes
+    # them from tracked analysis, but keeping them here is cheap defense in
+    # depth for --no-shadow runs)
+    "lib",
+    "coverage",
+    ".cache",
+    ".cloned-repos",
+    # "docs",
+    "deepwiki-rs-docs",
+    ".kilo",
+    "out",
+    "temp",
+    "tmp",
+]
+
+excluded_files = [
+    # upstream defaults
+    "litho.toml",
+    "*.litho",
+    "*.log",
+    "*.tmp",
+    "*.cache",
+    "bun.lock",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "Cargo.lock",
+    ".gitignore",
+    "*.tpl",
+    "*.md",
+    "*.txt",
+    ".env",
+    # codekeeper additions
+    ".env.*",
+    ".release-please-manifest.json",
+]
+
+excluded_extensions = [
+    # upstream defaults (images / media / archives)
+    "jpg",
+    "jpeg",
+    "png",
+    "gif",
+    "bmp",
+    "ico",
+    "mp3",
+    "mp4",
+    "avi",
+    "pdf",
+    "zip",
+    "tar",
+    "exe",
+    "dll",
+    "so",
+    "archive",
+]
+
+# [cache], [boundary_analysis], and [knowledge] are intentionally omitted -
+# their built-in defaults are correct for this repo.
