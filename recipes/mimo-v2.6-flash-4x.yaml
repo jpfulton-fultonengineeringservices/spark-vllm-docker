@@ -1,0 +1,65 @@
+# Recipe: MiMo-V2.6-Flash-RL 4x
+# Same model and serve args as mimo-v2.6-flash.yaml, but TP=4 across four DGX
+# Spark nodes (~43 GB of weights per rank at fp8 KV; 0.87 utilization leaves a
+# large KV budget for the 1M context). Intended for FES evaluation:
+# scripts/fes-eval.sh (cluster-config) launches it against FES-staged weights
+# via the fes-weights mod; a plain run-recipe.sh launch still works because
+# fes-weights is opt-in (inert without FES_WEIGHTS_ENABLED=1) and falls back to
+# the hub cache via .env HF_HOME.
+
+recipe_version: "1"
+name: MiMo-V2.6-Flash-RL 4x
+description: vLLM serving XiaomiMiMo/MiMo-V2.6-Flash-RL with DFlash speculative decoding on a four-node DGX Spark cluster (TP=4)
+
+# HuggingFace model to download (optional, for --download-model)
+model: XiaomiMiMo/MiMo-V2.6-Flash-RL
+
+# Container image to use (vLLM main from 2026-09-21 or newer)
+container: vllm-node
+
+# ~173 GB of weights: needs all four Sparks
+cluster_only: true
+
+# fes-weights must run FIRST: it verifies the FES-staged mount and builds the
+# hub-cache shim that lets both this recipe's `vllm serve <org/model>` and the
+# mimo drafter-staging mod's snapshot_download() resolve offline (see
+# docs/fes-weight-staging.md). In hub-cache mode it no-ops.
+mods:
+  - mods/fes-weights
+  - mods/mimo-v2.6-flash
+
+# Default settings (can be overridden via CLI where supported)
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 4
+  gpu_memory_utilization: 0.87
+  max_model_len: 1048576
+  max_num_seqs: 8
+  max_num_batched_tokens: 8192
+  num_speculative_tokens: 7
+
+# Environment variables
+env: {}
+
+# The vLLM serve command template - identical to mimo-v2.6-flash.yaml (see that
+# recipe for the per-flag rationale; the only difference is the TP size).
+command: |
+  vllm serve XiaomiMiMo/MiMo-V2.6-Flash-RL \
+      --trust-remote-code \
+      --host {host} \
+      --port {port} \
+      --tensor-parallel-size {tensor_parallel} \
+      --moe-backend marlin \
+      --max-model-len {max_model_len} \
+      --kv-cache-dtype fp8 \
+      --max-num-seqs {max_num_seqs} \
+      --max-num-batched-tokens {max_num_batched_tokens} \
+      --gpu-memory-utilization {gpu_memory_utilization} \
+      --speculative-config '{{"method":"dflash","model":"/workspace/MiMo-V2.6-Flash-RL-dflash","num_speculative_tokens":{num_speculative_tokens},"attention_backend":"TRITON_ATTN"}}' \
+      --compilation-config '{{"cudagraph_mode":"FULL_DECODE_ONLY"}}' \
+      --generation-config vllm \
+      --override-generation-config '{{"top_p":0.95}}' \
+      --reasoning-parser mimo \
+      --tool-call-parser mimo \
+      --enable-auto-tool-choice

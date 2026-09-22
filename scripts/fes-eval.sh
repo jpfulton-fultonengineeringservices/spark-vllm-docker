@@ -81,6 +81,7 @@ echo "[fes-eval] recipe=$RECIPE slug=$SLUG hub-model=$HUB_MODEL weights=$weights
 exec "$REPO_DIR/run-recipe.sh" "$RECIPE" \
     --apply-mod "$REPO_DIR/mods/fes-weights" \
     -v "$weights_dir:/model:ro" \
+    -e "FES_WEIGHTS_ENABLED=1" \
     -e "FES_WEIGHTS_DIR=/model" \
     -e "FES_HUB_MODEL=$HUB_MODEL" \
     -e "HF_HUB_OFFLINE=1" \
