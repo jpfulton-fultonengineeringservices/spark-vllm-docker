@@ -6,7 +6,7 @@ The project filesystem is not accessible in this environment, so I'll base the d
 
 ## 1. Overview
 
-The **Mod Management & Patch Orchestration** domain is the core business domain of `codekeeper`. It is the mechanism by which the repository customizes an *externally installed* vLLM inference stack **without forking it**. Rather than maintaining a divergent vLLM branch, `codekeeper` expresses every customization as a self-contained, reversible, and traceable **mod** that mutates vLLM's installed `site-packages` in place at deployment time.
+The **Mod Management & Patch Orchestration** domain is the core business domain of `spark-vllm-docker`. It is the mechanism by which the repository customizes an *externally installed* vLLM inference stack **without forking it**. Rather than maintaining a divergent vLLM branch, `spark-vllm-docker` expresses every customization as a self-contained, reversible, and traceable **mod** that mutates vLLM's installed `site-packages` in place at deployment time.
 
 This domain owns four responsibilities:
 
@@ -319,6 +319,6 @@ The recipe runner orchestrates by resolving mod names, calling `run.sh` scripts,
 
 ## 11. Summary
 
-The **Mod Management & Patch Orchestration** domain is the operational heart of `codekeeper`. It transforms deployment from a manual, fork-based customization exercise into a declarative, reproducible, and traceable operation. By combining AST-based source patching, unified diff application, vendored asset installation, and recipe-driven orchestration — all under fail-fast, idempotent, marker-guarded discipline — it enables teams to apply isolated patches for new model support, hardware-specific kernel optimizations, and deployment fixes, then launch patched servers without ever forking upstream vLLM.
+The **Mod Management & Patch Orchestration** domain is the operational heart of `spark-vllm-docker`. It transforms deployment from a manual, fork-based customization exercise into a declarative, reproducible, and traceable operation. By combining AST-based source patching, unified diff application, vendored asset installation, and recipe-driven orchestration — all under fail-fast, idempotent, marker-guarded discipline — it enables teams to apply isolated patches for new model support, hardware-specific kernel optimizations, and deployment fixes, then launch patched servers without ever forking upstream vLLM.
 
 The domain's principal strengths are its non-invasive philosophy and defense-in-depth validation. Its principal risks are non-deterministic runtime network fetches and a divergent patching taxonomy. Addressing these gaps — particularly by vendoring runtime PR diffs and unifying the patching framework — would materially improve the repository's reproducibility and maintainability.

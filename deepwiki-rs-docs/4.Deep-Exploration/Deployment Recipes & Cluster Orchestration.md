@@ -6,7 +6,7 @@ I now have comprehensive grounding in the actual source. Let me write the techni
 
 ## 1. Overview
 
-The **Deployment Recipes & Cluster Orchestration** domain is the declarative control plane of `codekeeper`. It transforms a single YAML file into a fully provisioned, patched, and running vLLM inference service — either on one DGX Spark node or across a 3x/4x/8x multi-node cluster.
+The **Deployment Recipes & Cluster Orchestration** domain is the declarative control plane of `spark-vllm-docker`. It transforms a single YAML file into a fully provisioned, patched, and running vLLM inference service — either on one DGX Spark node or across a 3x/4x/8x multi-node cluster.
 
 The domain owns three categories of artifacts:
 

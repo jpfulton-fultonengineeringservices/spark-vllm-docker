@@ -1,4 +1,4 @@
-# litho.toml - deepwiki-rs (Litho) analysis configuration for codekeeper.
+# litho.toml - deepwiki-rs (Litho) analysis configuration for spark-vllm-docker.
 #
 # IMPORTANT: do NOT add an [llm] section here. deepwiki-rs serde-defaults a
 # missing [llm].api_key to "" which silently disables the LITHO_LLM_API_KEY
@@ -21,7 +21,7 @@ git_tracked_only = true
 
 # These arrays REPLACE the tool's built-in defaults entirely, so the upstream
 # defaults (Config::default() in src/config.rs) are restated here plus
-# codekeeper additions. Do NOT add "bin" - bin/codekeeper is tracked source
+# spark-vllm-docker additions. Do NOT add "bin" - bin/spark-vllm-docker is tracked source
 # that must be analyzed.
 excluded_dirs = [
     # upstream defaults
@@ -38,7 +38,7 @@ excluded_dirs = [
     "__tests__",
     "__mocks__",
     "__fixtures__",
-    # codekeeper additions (gitignored local dirs - the shadow tree excludes
+    # spark-vllm-docker additions (gitignored local dirs - the shadow tree excludes
     # them from tracked analysis, but keeping them here is cheap defense in
     # depth for --no-shadow runs)
     "lib",
@@ -70,7 +70,7 @@ excluded_files = [
     "*.md",
     "*.txt",
     ".env",
-    # codekeeper additions
+    # spark-vllm-docker additions
     ".env.*",
     ".release-please-manifest.json",
 ]

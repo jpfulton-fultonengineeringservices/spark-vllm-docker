@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-The **Weight Loading & Memory Optimization** domain is a supporting domain within `codekeeper` that reduces the GPU memory footprint of a vLLM deployment by mutating the *installed* vLLM source tree at deployment time. It follows the repository-wide **"patch the dependency, don't fork it"** philosophy: rather than shipping a modified vLLM, each optimization is expressed as a self-contained, idempotent, marker-guarded source transformation applied by a fail-fast `run.sh` entry script.
+The **Weight Loading & Memory Optimization** domain is a supporting domain within `spark-vllm-docker` that reduces the GPU memory footprint of a vLLM deployment by mutating the *installed* vLLM source tree at deployment time. It follows the repository-wide **"patch the dependency, don't fork it"** philosophy: rather than shipping a modified vLLM, each optimization is expressed as a self-contained, idempotent, marker-guarded source transformation applied by a fail-fast `run.sh` entry script.
 
 The domain addresses two distinct memory pressures that arise when serving large models on constrained hardware (notably the unified-memory DGX Spark platform):
 

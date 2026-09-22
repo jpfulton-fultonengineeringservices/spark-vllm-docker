@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-The **FlashAttention Kernel Domain** is the compute core of the `codekeeper` repository. It is realized by a single vendored Python package, **`inkling_sm120_fa4`**, located at:
+The **FlashAttention Kernel Domain** is the compute core of the `spark-vllm-docker` repository. It is realized by a single vendored Python package, **`inkling_sm120_fa4`**, located at:
 
 ```
 mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/
@@ -37,7 +37,7 @@ Everything else is an internal building block composed by the architecture-speci
 
 ## 2. Position Within the System
 
-The kernel domain is a **Core Technical Domain** of `codekeeper`. It does not run standalone; it is installed into an externally installed vLLM package and invoked through a patched dispatch path. The integration chain is:
+The kernel domain is a **Core Technical Domain** of `spark-vllm-docker`. It does not run standalone; it is installed into an externally installed vLLM package and invoked through a patched dispatch path. The integration chain is:
 
 ```
 vLLM Inkling FA4 dispatch (fa4_rel_attention.py)

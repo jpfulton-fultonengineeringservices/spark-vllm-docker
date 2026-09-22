@@ -2,7 +2,7 @@
 # shellcheck shell=bash
 #
 # scripts/lib/toolchain.sh - Validates and installs the supporting toolchains
-# for the codekeeper scripts:
+# for the spark-vllm-docker scripts:
 #
 #   rust / cargo / rustup   - required to build deepwiki-rs from the FSE fork
 #   python3 + pyenv         - required for the shadow-tree builder; pyenv is

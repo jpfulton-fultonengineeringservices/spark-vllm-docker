@@ -296,10 +296,10 @@ BASE_URL="${BASE_URL%/}"
 # root cache serves all subtree runs.
 
 if [ "${TARGET_PATH}" = "." ]; then
-    PROJECT_NAME="codekeeper"
+    PROJECT_NAME="spark-vllm-docker"
     [ -z "${OUTPUT_DIR}" ] && OUTPUT_DIR="deepwiki-rs-docs"
 else
-    PROJECT_NAME="codekeeper/${TARGET_PATH}"
+    PROJECT_NAME="spark-vllm-docker/${TARGET_PATH}"
     [ -z "${OUTPUT_DIR}" ] && OUTPUT_DIR="deepwiki-rs-docs/${TARGET_PATH}"
 fi
 CACHE_DIR=".litho"
