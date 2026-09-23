@@ -23,3 +23,6 @@ benchmark-plots
 backup-wheels
 .codex
 wheels
+
+# Scratch findings/notes (local only)
+tmp/
