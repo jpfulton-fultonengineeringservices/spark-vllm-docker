@@ -25,3 +25,6 @@ backup-wheels
 .codex
 wheels
 artifacts
+
+# Scratch findings/notes (local only)
+tmp/

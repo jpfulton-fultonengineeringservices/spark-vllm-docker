@@ -28,8 +28,8 @@ defaults:
   tensor_parallel: 2
   gpu_memory_utilization: 0.87
   max_model_len: 1048576
-  max_num_seqs: 8
-  max_num_batched_tokens: 8192
+  max_num_seqs: 32
+  max_num_batched_tokens: 16384
   num_speculative_tokens: 7
 
 # Environment variables
@@ -48,9 +48,14 @@ env: {}
 #   .yaml. The hybrid DIFFKV attention plus SWA drafter is exactly the class of
 #   model where vLLM's defaults silently constrain prefix reuse and prefill
 #   chunking; asserting them keeps the intent auditable. With max_model_len at
-#   1M and 8192 batched tokens, chunked prefill prevents long-context prompts
+#   1M and 16384 batched tokens, chunked prefill prevents long-context prompts
 #   from monopolizing the batch, and prefix caching avoids re-prefill of shared
 #   system prompts and multi-turn history.
+# - max_num_seqs 32 / max_num_batched_tokens 16384: a 17h production run at
+#   8/8192 peaked at 2 running requests and 4.6% KV-pool usage with zero
+#   preemptions, while 454K-token prompts queued up to 235s p99 behind the
+#   8192-token chunk budget. 32x concurrency headroom in KV terms and 2x
+#   prefill chunking directly target those idle GPU / TTFT-spike symptoms.
 # - DFlash drafter ships inside the checkpoint under dflash/ (block size 8 ->
 #   7 draft tokens). Its SWA layers carry attention sink biases and DFlash needs
 #   non-causal attention, so the draft is pinned to TRITON_ATTN.
