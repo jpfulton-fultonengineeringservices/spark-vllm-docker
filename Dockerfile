@@ -684,6 +684,13 @@ RUN --mount=type=cache,id=ccache,target=/root/.ccache \
     VLLM_REQUIRE_RUST_FRONTEND=1 CARGO_BUILD_JOBS=${MAX_JOBS} \
     uv build --no-build-isolation --wheel . --out-dir=/workspace/wheels -v
 
+# Keep this optional example with the selected source build for the runner.
+# The .vllm- prefix also ties it to wheel-download backup and replacement.
+RUN if [ -f examples/features/structured_diffusion/structured_server.py ]; then \
+        cp examples/features/structured_diffusion/structured_server.py \
+            /workspace/wheels/.vllm-structured-server.py; \
+    fi
+
 # Dump git refs in the wheels dir.
 RUN \
     git rev-parse HEAD > /workspace/wheels/.vllm-commit && \
@@ -795,6 +802,13 @@ RUN --mount=type=bind,from=flashinfer_wheels,target=/workspace/flashinfer-wheels
     fi && \
     uv pip install /workspace/flashinfer-wheels/*.whl /workspace/vllm-wheels/*.whl \
         --override /tmp/wheel-override.txt
+
+# Older source refs and downloaded wheel sets may not include this example.
+RUN --mount=type=bind,from=vllm_wheels,target=/workspace/vllm-wheels \
+    if [ -f /workspace/vllm-wheels/.vllm-structured-server.py ]; then \
+        install -m 644 /workspace/vllm-wheels/.vllm-structured-server.py \
+            "$VLLM_BASE_DIR/structured_server.py"; \
+    fi
 
 # Setup environment for runtime
 ARG TORCH_CUDA_ARCH_LIST="12.1a"

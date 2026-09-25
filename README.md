@@ -1788,6 +1788,11 @@ Only regular vLLM wheels are downloaded from the published wheel release.
 `--exp-b12x` is therefore incompatible with `--use-wheels`: use bare
 `--exp-b12x` for the published image or add `--rebuild-vllm` for a source build.
 
+Source builds also retain `examples/features/structured_diffusion/structured_server.py`
+at `/workspace/vllm/structured_server.py` in the container when the selected
+vLLM source includes it. The script travels with locally exported wheels;
+older source refs and downloaded wheel sets without it skip this copy.
+
 Regular `vllm-project/vllm` runner builds install the latest `b12x` release from
 PyPI, including builds using precompiled vLLM wheels. A per-build cache key and
 package-index refresh prevent stale B12X releases from being reused. The
