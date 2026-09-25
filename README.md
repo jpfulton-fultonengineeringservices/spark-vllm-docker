@@ -48,6 +48,12 @@ WSL, vLLM keeps CUDA's reported free memory instead of replacing it with guest
 RAM availability. Native Linux UMA accounting and proactive allocator-cache
 release keep their upstream behavior.
 
+Source builds also trim unused glibc CPU heap pages after startup garbage
+collection in API servers and workers. This complements the existing CUDA
+allocator cleanup before KV cache sizing/allocation. The CPU trim is included
+in exported vLLM wheels and runs after warmup; platforms without `malloc_trim`
+skip it.
+
 Runtime images also set `VLLM_WSL2_ENABLE_PIN_MEMORY=1` by default. Pass
 `-e VLLM_WSL2_ENABLE_PIN_MEMORY=0` to `launch-cluster.sh` or `docker run` to opt
 out.

@@ -636,6 +636,10 @@ RUN python3 /tmp/vllm-patches/patch_vllm_routed_experts_weight_shape.py .
 # reservations behind just before vLLM sizes and allocates KV cache blocks.
 RUN python3 /tmp/vllm-patches/patch_vllm_spark_kv_cache_cleanup.py .
 
+# Return unused glibc CPU heap pages after startup GC in API servers and
+# workers. Keep this in the source build so exported wheels include it too.
+RUN python3 /tmp/vllm-patches/patch_vllm_startup_heap_trim.py .
+
 # TEMPORARY PATCH: local-inference-lab/vllm 3d5f2b04 exports temporary MoE
 # tuning tensors as PreparedCall.owners, which b12x retains in serving plans.
 # Keep the trial lifetime in call closures so KV profiling can reclaim them.
