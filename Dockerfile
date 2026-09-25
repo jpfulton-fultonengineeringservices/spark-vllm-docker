@@ -645,11 +645,19 @@ RUN python3 /tmp/vllm-patches/patch_vllm_b12x_moe_tuning_memory.py .
 # Keep the fix in exported wheels as well as the runner below.
 RUN python3 /tmp/vllm-patches/patch_vllm_wsl_cuda_uma.py .
 
-# Prepare build requirements
+# Prepare build requirements. Upstream moved the Torch helper under tools/;
+# keep supporting older refs and forks with the root-level helper.
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     python3 /tmp/vllm-patches/pin_cutlass_dsl.py \
         "$CUTLASS_DSL_VERSION" --expected-count 1 requirements/cuda.txt && \
-    python3 use_existing_torch.py && \
+    if [ -f tools/use_existing_torch.py ]; then \
+        python3 tools/use_existing_torch.py; \
+    elif [ -f use_existing_torch.py ]; then \
+        python3 use_existing_torch.py; \
+    else \
+        echo "ERROR: vLLM source is missing tools/use_existing_torch.py and use_existing_torch.py; cannot preserve the installed PyTorch." >&2; \
+        exit 1; \
+    fi && \
     sed -i "/flashinfer/d" requirements/cuda.txt && \
     sed -i '/^triton\b/d' requirements/test/cuda.txt && \
     sed -i '/^fastsafetensors\b/d' requirements/test/cuda.txt && \
