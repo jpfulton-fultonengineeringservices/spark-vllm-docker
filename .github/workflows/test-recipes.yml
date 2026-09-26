@@ -56,7 +56,9 @@ jobs:
       run: python3 tests/test_qwen3_next_autoround_mod.py
 
     - name: Test memory profiling mod
-      run: python3 tests/test_memory_profile_mod.py
+      run: |
+        python3 tests/test_memory_profile_mod.py
+        python3 tests/test_memory_capacity.py
 
     - name: Run recipe integration tests
       run: |

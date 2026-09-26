@@ -143,6 +143,165 @@ The report includes coverage/failure flags, readiness and peak footprints,
 model/KV storage, KV bytes per 1,000 equivalent capacity tokens, graph deltas,
 CPU heap counters, the initial utilization check, and the checkpoint table.
 
+## Hardware requirements and current cluster fit
+
+`capacity.py` produces a concise Markdown requirements report from a YAML or
+JSON card. It needs Python and PyYAML, but not vLLM, Torch or matplotlib:
+
+```bash
+# Offline: original allocation/context and a smaller cache for one 128K sequence.
+python3 mods/memory-profile/capacity.py memory-profiles/qwen-baseline-01.yaml
+
+# On the head: also check current memory on the required nodes.
+python3 mods/memory-profile/capacity.py memory-profiles/qwen-baseline-01.yaml \
+  --check-host --output memory-profiles/qwen-capacity.md
+
+# Plain console report to stdout (add --check-host for a live assessment).
+python3 mods/memory-profile/capacity.py memory-profiles/qwen-baseline-01.yaml \
+  --format console
+```
+
+The report shows the original context, parallelism, scheduling limits, GPU,
+KV dtype and speculation settings. Requirements are **per physical host**:
+available RAM needed at launch, and total RAM assuming the recorded background
+footprint. The smaller-cache example supplies `--max-model-len`,
+`--max-num-seqs 1`, explicit **per-rank** `--kv-cache-memory-bytes`, and an
+automatic-sizing equivalent for `--gpu-memory-utilization`. Keep the remaining
+recipe settings. Explicit KV bytes control cache size independently of utilization;
+the profiled worker still checks utilization during initial memory admission.
+To let utilization determine cache size, omit `--kv-cache-memory-bytes`.
+This estimates a minimum cache configuration on the **same topology**, not the
+minimum number of GPUs or a guarantee that a new configuration will start.
+Preserving the original cache allocation on a different RAM size also requires
+retuning utilization or setting an explicit KV budget; the total-RAM estimate
+does not imply that unchanged automatic-sizing flags reproduce the same cache.
+
+The RAM labels distinguish the host's current state from the model's requirement:
+
+- **Available now** is Linux `MemAvailable`: the kernel's estimate of capacity
+  usable without swapping. It includes unused memory plus the reclaimable
+  portion of file and kernel caches, while allowing for kernel reserves.
+  `MemFree` measures only unused pages. See the [Linux memory counters](https://docs.kernel.org/filesystems/proc.html#meminfo).
+- **Required available RAM** is the estimated capacity that must be available
+  **before launching** the model, including its startup peak/admission requirement
+  and the requested reserve. Compare this number with the live `MemAvailable`.
+- **Total RAM** in the requirements table adds the recorded OS/background
+  footprint to required available RAM. For example, 52.154 GiB required available
+  plus 5.239 GiB background gives 57.393 GiB estimated total RAM.
+
+On Spark this is a shared physical CPU/GPU memory pool. Do not add a separate
+VRAM allowance to these host requirements. Swap does not count as available RAM
+in this check, and the estimate does not assume that existing workloads stop.
+
+The utilization table distinguishes three targets:
+
+- Preserve the recorded KV allocation and the original `max-num-seqs` setting.
+- Provision KV for `max-num-seqs` simultaneous sequences **each at the full
+  profiled context**, including estimated block slack.
+- Provision the smaller target context (128K by default) for one sequence.
+
+`max-num-seqs` is a scheduling limit. A successfully started server can have less
+KV than needed for that many full-length sequences. The report also prints the
+recorded group-aware full-context concurrency to make this visible.
+
+For each rank, the calculation is:
+
+```text
+sizing_cost = original_requested_bytes - measured_KV_budget
+minimum_utilization = (sizing_cost + desired_KV_bytes) / device_total_bytes
+```
+
+The common setting uses the largest ratio across ranks and rounds **up** to
+0.001. These are estimates with the profiled non-KV overhead retained, not
+remeasured minima for different scheduling settings. With `--check-host`, both
+the ratios and suggested settings use the checked devices' memory sizes.
+
+The utilization denominator is the device's full reported memory, not the
+report's estimated total-RAM requirement. vLLM's cache-sizing budget and whole
+host startup RAM account for different costs. The host estimate is:
+
+```text
+adjusted_peak = max(pre_KV_peak, post_KV_peak - old_KV + new_KV)
+available_RAM = max(adjusted_peak, initial_gate_requirement) + reserve
+total_RAM = recorded_background_RAM + available_RAM
+```
+
+Peaks above are increments from the pre-vLLM baseline. For example, a 27.47 GiB
+sizing budget on a 121.69 GiB device corresponds to utilization about 0.226;
+the same configuration can need over 50 GiB of available host RAM during
+startup. Increasing utilization to the host-RAM fraction would allocate more KV
+in automatic mode. See [vLLM's cache sizing options](https://docs.vllm.ai/en/stable/configuration/engine_args/#--kv-cache-memory-bytes)
+for the explicit-KV override behavior.
+
+JSON output includes each rank's sizing cost, desired KV, device total, minimum
+ratio, limiting rank, and rounding result in `utilization_estimates`. Host rows
+also include `target_kv_breakdown` (full-attention, retained state/window, slack
+and null blocks) and `target_host_memory_breakdown` for auditing the arithmetic.
+
+With `--check-host`, a solo card checks only the local machine. A cluster card
+uses the saved `.env` and the first required nodes in `CLUSTER_NODES`, like the
+launcher; extra nodes are ignored. The script verifies that it is on the
+configured head. Use `--config PATH` for another saved configuration. Explicit
+mapping is available as `--host local --host worker-ssh-alias`, in rank order.
+Hosts are never taken from untrusted labels in the profile card.
+
+The probe reads `/proc/meminfo` and CUDA driver properties without creating a
+CUDA context. It uses noninteractive SSH with timeouts for peers. It does not
+run discovery, import Torch, launch containers, change clocks, stop workloads,
+or modify `.env`. An already-running model counts as occupied memory: the
+result answers whether there is room for an **additional launch now**.
+
+Options:
+
+- `--context N`: reduced-cache target; default **131072**, meaning 128K tokens
+  for one sequence, including prompt and generated tokens. Extrapolating above
+  the profiled context is unsupported.
+- `--reserve-gib N`: additional reserve per host; default **4 GiB**. This is
+  separate from the recorded loading and warmup peaks.
+- `--format markdown|console|json`: output format; default `markdown`. Console
+  uses aligned plain-text tables and wrapped paragraphs, without Markdown markup
+  or terminal colors. It works with stdout, redirection, pagers and `--output`.
+- `--json`: alias for `--format json`.
+- `--output PATH`: save the report; otherwise print to stdout.
+
+The live verdicts are **LIKELY FITS**, **DOES NOT FIT**, or **UNKNOWN**, separately
+for the original cache/settings, the target context with tuned KV settings,
+and a small usable cache at a reduced context. If the original utilization
+would create less KV than the recorded allocation, the original-profile test
+fails even if a smaller cache could still serve requests. On larger hosts it
+also accounts for extra KV allocated by the original utilization setting.
+The printed utilization for the target uses the checked hosts' RAM sizes.
+Exit codes are `0` for a successful offline report or a likely original-profile
+fit, `1` when that live fit fails (even if reduced KV fits), and `2` for unknown,
+unsupported, incomplete, or invalid input.
+
+The estimator retains the pre-KV loading/profiling peak. Only the post-KV peak
+is adjusted by the change in cache size, and the initial utilization admission
+check is evaluated separately. CPU PSS and CUDA counters are never added to
+host RAM. Swap and spare memory on another host do not satisfy a rank's needs.
+
+For supported shared-pool layouts, it recovers blocks per full-context request
+from the card's block count and group-aware concurrency. Only ordinary full
+attention blocks shrink with the target context; the measured Mamba/window
+cost stays fixed, with extra block and speculative lookahead slack. This follows
+the pool/concurrency accounting in [vLLM's KV cache utilities](https://github.com/vllm-project/vllm/blob/main/vllm/v1/core/kv_cache_utils.py).
+It avoids treating a hybrid model's average bytes/token as an exact marginal
+cost. These are conservative estimates, **not exact minima**. Between the
+non-KV startup floor and the conservative small-cache bound, the answer remains
+unknown because a tighter cache may fit.
+
+Current support is native Linux UMA, one GPU rank per host, TP/PP with
+DP=DCP=PCP=1, matching GPU name/architecture, and complete startup coverage.
+The source card must use automatic KV sizing: an explicit-KV run skips sizing
+cost profiling, so subtracting its fixed cache budget from the initial request
+cannot establish a utilization minimum.
+Resizing supports verified uniform shared pools containing `FullAttentionSpec`,
+`MambaSpec`, and `SlidingWindowSpec`. Other layouts can still reuse the measured
+allocation at the same RAM size, but reduced-cache estimates remain unknown.
+Discrete GPUs, WSL, changed topology and unsupported layouts need a new or richer
+profile. Software versions, image identity, checkpoint availability, transport
+and maximum serving workload are assumptions, not verified by this memory check.
+
 ## What is measured
 
 - Exact free/total snapshot passed to the initial `gpu_memory_utilization`
@@ -228,4 +387,5 @@ Run the CPU-only regression suite with:
 
 ```bash
 python3 tests/test_memory_profile_mod.py
+python3 tests/test_memory_capacity.py
 ```
