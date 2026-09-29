@@ -126,4 +126,6 @@ command: |
       --override-generation-config '{{"top_p":0.95}}' \
       --reasoning-parser mimo \
       --tool-call-parser mimo \
-      --enable-auto-tool-choice
+      --enable-auto-tool-choice \
+      --kv-cache-metrics \
+      --enable-mfu-metrics
