@@ -14,6 +14,13 @@ set -euo pipefail
 # 2. triton_attn_diffkv.py — the backend sm_121 selects for the 192/128 K/V
 #    head dims — rejects quantized KV outright and does not view the cache as
 #    fp8 on read.
+# 3. attention.py — with --kv-cache-dtype-skip-layers the platform estimates
+#    skip_page_size_padded from the model-level KV head count (4), but the SWA
+#    layers have 8, so the shared page comes out smaller than even the
+#    smallest B12X kernel block page (64) and the engine asserts in
+#    resolve_kv_cache_layout. The patch floors the SWA spec's padded page at
+#    its chosen kernel block's natural page (needed only with skip-layers on
+#    coarse kernel block sizes such as B12X's 64/128).
 #
 # Same fix as tonyd2wild/MiMo-V2.6-Flash-2x-DGX-Spark patches 01+03, verified
 # on GB10 (fp8 KV pool measured at 12.6 GiB, needle tests at 250K). Unlike his
@@ -25,21 +32,22 @@ PREFIX="[mimo-diffkv-fp8-kv]"
 PYTHON_ROOT="${VLLM_SITE_PACKAGES:-${PYTHON_ROOT:-/usr/local/lib/python3.12/dist-packages}}"
 MIMO="$PYTHON_ROOT/vllm/model_executor/models/mimo_v2.py"
 DIFFKV="$PYTHON_ROOT/vllm/v1/attention/backends/triton_attn_diffkv.py"
+ATTENTION="$PYTHON_ROOT/vllm/model_executor/layers/attention/attention.py"
 
 echo "=== MiMo fp8 KV cache mod ==="
 
-for f in "$MIMO" "$DIFFKV"; do
+for f in "$MIMO" "$DIFFKV" "$ATTENTION"; do
   if [ ! -f "$f" ]; then
     echo "$PREFIX Missing $f; a newer image is required." >&2
     exit 1
   fi
 done
 
-python3 - "$MIMO" "$DIFFKV" <<'PY'
+python3 - "$MIMO" "$DIFFKV" "$ATTENTION" <<'PY'
 from pathlib import Path
 import sys
 
-mimo_path, diffkv_path = (Path(p) for p in sys.argv[1:3])
+mimo_path, diffkv_path, attention_path = (Path(p) for p in sys.argv[1:4])
 
 
 def patch(path: Path, edits: list[tuple[str, str]], label: str) -> None:
@@ -134,6 +142,30 @@ patch(
         ),
     ],
     "triton_attn_diffkv.py",
+)
+
+patch(
+    attention_path,
+    [
+        (
+            "                page_size_padded=shared_page,\n",
+            "                # mimo-diffkv-fp8-kv: the platform's skip_page_size_padded is\n"
+            "                # estimated from the model-level KV head count (4 for MiMo),\n"
+            "                # but the SWA layers have 8 and DiffKV is not slot-packed, so\n"
+            "                # the estimate lands below even the smallest kernel block page\n"
+            "                # (B12X supports only 64/128). The spec then violates\n"
+            "                # page_size_padded >= unpadded_page_size_bytes and the engine\n"
+            "                # dies in resolve_kv_cache_layout. Floor the padded page at the\n"
+            "                # chosen kernel block's natural page; page unification scales\n"
+            "                # the full-attention blocks up to match.\n"
+            "                page_size_padded=(\n"
+            "                    max(shared_page, sw_block_size * sw_per_token)\n"
+            "                    if shared_page is not None\n"
+            "                    else None\n"
+            "                ),\n",
+        ),
+    ],
+    "attention.py",
 )
 PY
 
