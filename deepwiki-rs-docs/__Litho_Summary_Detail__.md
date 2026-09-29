@@ -1,29 +1,31 @@
 # Project Analysis Summary Report (Full Version)
 
-Generation Time: 2026-09-22 05:10:56 UTC
+Generation Time: 2026-09-29 15:15:41 UTC
 
 ## Execution Timing Statistics
 
-- **Total Execution Time**: 2159.43 seconds
-- **Preprocessing Phase**: 512.60 seconds (23.7%)
-- **Research Phase**: 751.48 seconds (34.8%)
-- **Document Generation Phase**: 895.36 seconds (41.5%)
+- **Total Execution Time**: 3583.16 seconds
+- **Preprocessing Phase**: 0.48 seconds (0.0%)
+- **Research Phase**: 635.02 seconds (17.7%)
+- **Document Generation Phase**: 2947.66 seconds (82.3%)
 - **Output Phase**: 0.00 seconds (0.0%)
 - **Summary Generation Time**: 0.001 seconds
 
 ## Cache Performance Statistics and Savings
 
 ### Performance Metrics
-- **Cache Hit Rate**: 0.0%
-- **Total Operations**: 61
-- **Cache Hits**: 0 times
-- **Cache Misses**: 61 times
-- **Cache Writes**: 62 times
+- **Cache Hit Rate**: 68.1%
+- **Total Operations**: 69
+- **Cache Hits**: 47 times
+- **Cache Misses**: 22 times
+- **Cache Writes**: 23 times
 
 ### Savings
-- **Inference Time Saved**: 0.0 seconds
-- **Tokens Saved**: 0 input + 0 output = 0 total
-- **Estimated Cost Savings**: $0.0000
+- **Inference Time Saved**: 385.8 seconds
+- **Tokens Saved**: 96332 input + 79750 output = 176082 total
+- **Estimated Cost Savings**: $0.1620
+- **Performance Improvement**: 68.1%
+- **Efficiency Improvement Ratio**: 0.1x (saved time / actual execution time)
 
 ## Core Research Data Summary
 
@@ -34,75 +36,70 @@ Provides core objectives, user roles, and system boundary information for the pr
 
 ```json
 {
-  "business_value": "Enables rapid, reproducible customization of vLLM without forking upstream. Teams can apply isolated, traceable patches for new model support, hardware-specific kernel optimizations (Blackwell SM120 paged-KV FlashAttention), and deployment fixes, then launch patched servers via orchestration scripts. Reduces time-to-production for cutting-edge models on new GPU hardware and multi-node Spark clusters.",
-  "confidence_score": 7.5,
+  "business_value": "Enables efficient deployment of large language models on Spark clusters with NVIDIA Blackwell GPUs by providing hardware-specific optimizations, memory profiling, and targeted fixes for model architectures.",
+  "confidence_score": 7.0,
   "external_systems": [
     {
-      "description": "Open-source LLM inference and serving engine. Mods patch its installed site-packages source (FA4 dispatch, weight iterators, model registry, chat templates) and its server is launched by mod entry scripts.",
-      "interaction_type": "Source patching (AST/text rewriting) and process launch",
+      "description": "Open-source LLM serving engine that is patched and extended by this project.",
+      "interaction_type": "patches and extends source code",
       "name": "vLLM"
     },
     {
-      "description": "GPU programming stack used by the vendored inkling_sm120_fa4 kernels: tcgen05 MMA, TMA, mbarrier pipelines, PTX descriptors on SM90/SM100/SM120 hardware.",
-      "interaction_type": "Compile-time and runtime dependency",
-      "name": "NVIDIA CUDA / CUTLASS CuTe-DSL"
+      "description": "Library for high-performance attention kernels, used as a dependency in patching.",
+      "interaction_type": "provides kernel source and JIT compilation",
+      "name": "FlashInfer"
     },
     {
-      "description": "Autograd integration layer; attention kernels are exposed through torch.autograd.Function classes (FlashAttnFunc, FlashAttnVarlenFunc).",
-      "interaction_type": "API integration",
-      "name": "PyTorch"
+      "description": "NVIDIA's CUDA architecture for Blackwell GPUs (SM12), target hardware for kernel customization.",
+      "interaction_type": "target hardware platform",
+      "name": "NVIDIA Blackwell GPU (SM120)"
     },
     {
-      "description": "The use-ngc-vllm mod suggests sourcing vLLM from NGC-published images as an alternative to official releases.",
-      "interaction_type": "Package/artifact source",
-      "name": "NVIDIA NGC containers"
+      "description": "Model repository used for offline weight access in cluster deployments.",
+      "interaction_type": "model weight source",
+      "name": "Hugging Face Hub"
     }
   ],
-  "project_description": "A patch and mod management repository for vLLM deployments. It contains a 'mods' directory of targeted source patches (AST-based patchers, diff patches, chat templates, shell entry scripts) that modify an installed vLLM package, plus a vendored FlashAttention kernel package (inkling_sm120_fa4) written in CUTLASS CuTe-DSL for SM90/SM100/SM120 NVIDIA GPUs, and 'recipes' for multi-node DGX Spark clusters. Each mod is self-contained and applies fixes or features such as new model architectures (DiffusionGemma, Nemotron, Step), quantization fixes (AWQ, NVFP4, AutoRound), chat template corrections, zero-copy weight loading, and paged-KV attention kernels.",
+  "project_description": "A collection of patches, custom kernel implementations, memory profiling tools, and deployment recipes to optimize vLLM for Spark clusters equipped with NVIDIA Blackwell GPUs. Includes vendor kernel packages for FlashAttention on SM120, memory capacity analysis, and model-specific fixes for architectures like Qwen3, Gemma, and DiffusionGemma.",
   "project_name": "spark-vllm-docker",
-  "project_type": "CLITool",
+  "project_type": "Other",
   "system_boundary": {
     "excluded_components": [
-      "vLLM engine and server implementation (external, patched in place)",
-      "Upstream flash-attention and CUTLASS projects (source of vendored/reimplemented kernels)",
-      "Model weights and model repositories (Qwen, Gemma, GLM, Nemotron, Step, etc.)",
-      "GPU drivers and CUDA toolkit distribution",
-      "Cluster hardware provisioning and orchestration beyond provided recipes"
+      "Core vLLM development",
+      "Model training pipelines",
+      "Hardware design and drivers",
+      "Spark cluster orchestration and management"
     ],
     "included_components": [
-      "mods/ directory: per-change patch scripts, diff patches, Jinja chat templates, and run.sh launchers",
-      "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4: vendored CuTe-DSL FlashAttention kernels (forward, backward, MLA, split-K combine, paged KV manager, softmax, tile scheduler, Blackwell helpers)",
-      "AST-based patcher tools (patch_inkling.py, patch_weight_utils.py) with idempotency and mod-marker traceability",
-      "recipes/ directory: 3x/4x/8x DGX Spark cluster setup recipes",
-      "docker/ directory: containerization assets"
+      "Docker configuration for building custom vLLM images",
+      "Kernel patches for FlashAttention on SM120/SM100 GPUs",
+      "Patching scripts for specific model architectures (Qwen3, Gemma4, etc.)",
+      "Memory profiling and capacity analysis modules",
+      "Weight verification and offline model setup scripts",
+      "Chat template fixes for Qwen3.5 and DiffusionGemma",
+      "Example scripts and cluster deployment recipes (3x, 4x, 8x Spark clusters)"
     ],
-    "scope": "The repository owns the mod definitions (patch scripts, diff patches, templates, entry scripts), the vendored inkling_sm120_fa4 FlashAttention kernel package, and cluster deployment recipes. It does not own vLLM itself; it modifies an externally installed vLLM at deployment time."
+    "scope": "Optimizing vLLM serving engine for Spark clusters with Blackwell GPUs through source-level patches, custom attention kernels, and deployment tooling."
   },
   "target_users": [
     {
-      "description": "Engineers deploying and tuning vLLM serving stacks on NVIDIA GPUs, including new Blackwell hardware.",
-      "name": "LLM inference engineers",
+      "description": "Engineers responsible for deploying and optimizing LLM inference on Spark clusters with NVIDIA Blackwell hardware.",
+      "name": "ML Infrastructure Engineer",
       "needs": [
-        "Apply targeted fixes to installed vLLM without maintaining a fork",
-        "Enable new or unreleased model architectures (DiffusionGemma, Qwen3.x, GLM, Nemotron, Step)",
-        "Fix quantization and chat template issues for specific models"
+        "Apply hardware-specific optimizations to vLLM for Blackwell GPUs",
+        "Fix model compatibility issues with vLLM for Qwen3, Gemma, etc.",
+        "Profile and estimate memory capacity for cluster nodes",
+        "Verify weight integrity for offline model serving",
+        "Deploy vLLM in Spark cluster environments with custom chat templates"
       ]
     },
     {
-      "description": "Performance engineers working on attention kernels for Hopper and Blackwell architectures.",
-      "name": "GPU kernel engineers",
+      "description": "Researchers or engineers working on novel model architectures that require patching vLLM for support.",
+      "name": "AI Model Developer",
       "needs": [
-        "Vendored, modifiable FlashAttention forward/backward kernels in CuTe-DSL",
-        "Paged-KV attention support for SM120 consumer GPUs",
-        "Benchmarking utilities and tile scheduling primitives"
-      ]
-    },
-    {
-      "description": "Operators provisioning multi-node DGX Spark inference clusters.",
-      "name": "Cluster operators",
-      "needs": [
-        "Ready-made recipes for 3x/4x/8x Spark cluster setups",
-        "Deterministic, fail-fast patch application and server launch scripts"
+        "Integrate custom quantization support (e.g., NVFP4) for MoE routers",
+        "Apply patches to support emerging model variants (e.g., DiffusionGemma, Qwen3.5)",
+        "Leverage advanced attention kernels (MLA) for Blackwell hardware"
       ]
     }
   ]
@@ -114,787 +111,710 @@ Provides high-level domain division, module relationships, and core business pro
 
 ```json
 {
-  "architecture_summary": "spark-vllm-docker is a patch-and-mod management repository that customizes an externally installed vLLM inference stack without forking it. Architecturally it is organized into six functional domains: (1) a Mod Management & Patch Orchestration core that applies AST-based and diff-based patches and launches patched servers; (2) a vendored FlashAttention Kernel domain (inkling_sm120_fa4) written in CUTLASS CuTe-DSL targeting SM90/SM100/SM120 GPUs, providing forward, backward, MLA, split-K combine, paged-KV, softmax and tile-scheduling kernels; (3) a Model Support & Compatibility domain delivering per-model architecture, quantization and chat-template fixes; (4) a Deployment Recipes & Cluster Orchestration domain for 3x/4x/8x DGX Spark clusters; (5) a Container & Build Infrastructure domain; and (6) a Weight Loading & Memory Optimization domain. The dominant technology choices are Python AST/text source rewriting for idempotent patching, Bash fail-fast entry scripts, Jinja2 chat templates, YAML recipes, and GPU kernel programming via CUTLASS CuTe-DSL with tcgen05 MMA, TMA and mbarrier pipelines. The repository owns mod definitions, the vendored kernel package and recipes, but delegates the actual inference engine to vLLM, which it mutates in place at deployment time.",
+  "architecture_summary": "spark-vllm-docker is a patch-and-orchestration layer around the open-source vLLM serving engine, purpose-built for Spark clusters with NVIDIA Blackwell GPUs. Architecturally it is organized as: (1) a Core Attention Kernel domain providing a vendored CuTe-DSL FlashAttention package (SM90/SM100/SM120 forward, backward, MLA, split-K, paged-KV) integrated into vLLM through an AST-based dispatch patch; (2) a Core Engine Patching domain comprising a shared build-time patch library under docker/ plus per-model fix and feature mods under mods/, which restore quantization, chat template, and architecture support for Qwen, Gemma, DiffusionGemma, GLM, Nemotron and others; (3) a Core Deployment domain of declarative YAML recipes and shell/python runners (run-recipe, launch-cluster) that sequence mods and launch 3x/4x/8x cluster deployments; (4) a Supporting Memory Profiling domain that instruments vLLM startup, consolidates profile cards, and performs topology-aware capacity validation; (5) a Supporting Model Weights domain providing offline weight verification and HF hub-cache setup; (6) an Infrastructure Container Build domain (Dockerfile, Dockerfile.mxfp4, build scripts) that composes the patched image; and (7) minimal Developer Tooling (fes-eval, DeepWiki docs). The dominant interaction style is non-invasive source patching (idempotent AST/text rewrites with mod markers) of an external vLLM dependency, with recipes acting as the composition root that binds mods, weights, kernels, and cluster launch together. Code structure aligns well with the documented system boundary; the main observed misalignment is that engine-level fixes are split across two locations (build-time patches in docker/ and runtime mods in mods/fix-*), which are conceptually one 'Engine Compatibility' concern but physically separated by when they execute.",
   "business_flows": [
     {
-      "description": "The primary end-to-end flow: a mod's run.sh resolves the installed vLLM site-packages, applies its patches (AST or diff) with legacy/main fallbacks, and launches the vLLM server with the mod's configuration. Triggered by executing a mod's run.sh or via the recipe runner.",
-      "entry_point": "mods/<mod>/run.sh",
-      "importance": 9.5,
-      "involved_domains_count": 3,
-      "name": "Apply Mod and Launch Patched vLLM Server",
-      "steps": [
-        {
-          "code_entry_point": "mods/diffusiongemma/run.sh",
-          "domain_module": "Mod Management & Patch Orchestration",
-          "operation": "Resolve the Python site-packages root and set fail-fast behavior (set -euo pipefail)",
-          "step": 1,
-          "sub_module": "Mod Entry Scripts"
-        },
-        {
-          "code_entry_point": "mods/inkling-sm12-paged-kv/patch_inkling.py",
-          "domain_module": "Mod Management & Patch Orchestration",
-          "operation": "Apply AST-based source patches with idempotency and mod-marker guards",
-          "step": 2,
-          "sub_module": "AST-Based Source Patchers"
-        },
-        {
-          "code_entry_point": "mods/diffusiongemma/diffusiongemma-support.patch",
-          "domain_module": "Mod Management & Patch Orchestration",
-          "operation": "Apply unified diff patches with main/legacy fallback ordering",
-          "step": 3,
-          "sub_module": "Diff Patch Mods"
-        },
-        {
-          "code_entry_point": "mods/diffusiongemma/chat_template_no_think.jinja",
-          "domain_module": "Model Support & Compatibility",
-          "operation": "Install the corrected chat template used by the server",
-          "step": 4,
-          "sub_module": "Chat Template Rendering"
-        },
-        {
-          "code_entry_point": "mods/diffusiongemma/run.sh",
-          "domain_module": "Mod Management & Patch Orchestration",
-          "operation": "Launch the vLLM server with the patched package and custom template",
-          "step": 5,
-          "sub_module": "Mod Entry Scripts"
-        }
-      ]
-    },
-    {
-      "description": "A recipe YAML is parsed by the recipe runner, which resolves the required mods, applies them, and launches the model server on the target DGX Spark cluster topology. Triggered by run-recipe.sh with a recipe path.",
+      "description": "End-to-end path from selecting a model recipe to serving on a Spark cluster: parse recipe, verify offline weights, apply required fix/feature mods to the installed vLLM package, then launch head/worker nodes with the correct chat template and quantization configuration.",
       "entry_point": "run-recipe.sh",
-      "importance": 8.5,
+      "importance": 9.5,
       "involved_domains_count": 4,
-      "name": "Recipe-Driven Cluster Deployment",
+      "name": "Recipe-Driven Cluster Model Deployment Flow",
       "steps": [
-        {
-          "code_entry_point": "recipes/4x-spark-cluster/minimax-m2.5.yaml",
-          "domain_module": "Deployment Recipes & Cluster Orchestration",
-          "operation": "Load the recipe YAML defining model, quantization and cluster topology",
-          "step": 1,
-          "sub_module": "Cluster Recipes"
-        },
         {
           "code_entry_point": "run-recipe.py",
-          "domain_module": "Mod Management & Patch Orchestration",
-          "operation": "Parse the recipe and resolve the ordered list of required mods",
-          "step": 2,
-          "sub_module": "Recipe Runner"
+          "domain_module": "Deployment Recipes & Cluster Orchestration Domain",
+          "operation": "Select and parse a model/cluster recipe YAML (e.g., 4x-spark-cluster/qwen3.5-397b-int4-autoround.yaml) to determine mods, parallelism, and quantization.",
+          "step": 1,
+          "sub_module": "Recipe Catalog"
         },
         {
-          "code_entry_point": "mods/use-official-vllm/run.sh",
-          "domain_module": "Mod Management & Patch Orchestration",
-          "operation": "Invoke each required mod's run.sh to patch the installed vLLM",
+          "code_entry_point": "mods/fes-weights/run.sh",
+          "domain_module": "Model Weights & Offline Serving Domain",
+          "operation": "Verify staged model weights and construct the HF hub-cache layout for offline serving.",
+          "step": 2,
+          "sub_module": "Offline Hub Cache Setup"
+        },
+        {
+          "code_entry_point": "mods/fes-weights/verify.py",
+          "domain_module": "Model Weights & Offline Serving Domain",
+          "operation": "Validate shards against safetensors index, size parity, and quantization config; fail fast on mismatch.",
           "step": 3,
-          "sub_module": "Mod Entry Scripts"
+          "sub_module": "Weight Verification"
+        },
+        {
+          "code_entry_point": "mods/fix-qwen3-next-autoround/patch_qwen3_next.py",
+          "domain_module": "Engine Patching & Model Compatibility Domain",
+          "operation": "Apply model-specific patches and chat templates (AST rewrites, .patch/.diff files) to the installed vLLM/transformers sources.",
+          "step": 4,
+          "sub_module": "Model-Specific Fix Mods"
+        },
+        {
+          "code_entry_point": "mods/diffusiongemma/run.sh",
+          "domain_module": "Engine Patching & Model Compatibility Domain",
+          "operation": "Run feature mods (DiffusionGemma support, zero-copy weights, KV-cache cleanup) that patch and then optionally launch the engine.",
+          "step": 5,
+          "sub_module": "Feature Enablement Mods"
         },
         {
           "code_entry_point": "launch-cluster.sh",
-          "domain_module": "Deployment Recipes & Cluster Orchestration",
-          "operation": "Launch the multi-node inference cluster",
-          "step": 4,
-          "sub_module": "Cluster Launch"
+          "domain_module": "Deployment Recipes & Cluster Orchestration Domain",
+          "operation": "Launch head and worker nodes across the Spark cluster with the patched container.",
+          "step": 6,
+          "sub_module": "Recipe Runners & Cluster Launchers"
         },
         {
-          "code_entry_point": "mods/nemotron-super/run.sh",
-          "domain_module": "Model Support & Compatibility",
-          "operation": "Serve the target model with its model-specific patches active",
-          "step": 5,
-          "sub_module": "GLM / Nemotron / Step / MiniMax Support"
+          "code_entry_point": "mods/inkling-sm12-paged-kv/patch_inkling.py",
+          "domain_module": "Attention Kernel Domain",
+          "operation": "At engine start, the FA4 dispatch patch routes SM12.x devices to the vendored paged-KV attention kernel.",
+          "step": 7,
+          "sub_module": "vLLM Dispatch Integration"
         }
       ]
     },
     {
-      "description": "The runtime attention computation path: the PyTorch-facing API validates inputs and selects tile sizes, the paged-KV manager loads KV blocks, and the architecture-specific forward kernel computes attention with online softmax, optionally combining split-K partial outputs. Triggered by a model forward call during inference.",
-      "entry_point": "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/interface.py",
+      "description": "Builds the custom vLLM Docker image by installing vLLM and FlashInfer, applying the shared engine patch library, building FlashInfer JIT-cache provider wheels, and validating wheels before producing the final (base or MXFP4) image.",
+      "entry_point": "Dockerfile",
+      "importance": 8.5,
+      "involved_domains_count": 3,
+      "name": "Custom Container Image Build Flow",
+      "steps": [
+        {
+          "code_entry_point": "build-and-copy.sh",
+          "domain_module": "Container Build & Image Composition Domain",
+          "operation": "Invoke the Dockerfile build (base or MXFP4 variant) and copy resulting image artifacts.",
+          "step": 1,
+          "sub_module": "Image Definitions"
+        },
+        {
+          "code_entry_point": "docker/build_flashinfer_jit_providers.sh",
+          "domain_module": "Container Build & Image Composition Domain",
+          "operation": "Build FlashInfer JIT-cache provider wheels for the target CUDA architectures.",
+          "step": 2,
+          "sub_module": "Build-Time Patch & JIT Toolchain"
+        },
+        {
+          "code_entry_point": "docker/patch_vllm_flashinfer_b12x_swigluoai.py",
+          "domain_module": "Engine Patching & Model Compatibility Domain",
+          "operation": "Apply idempotent patches to installed vLLM/FlashInfer/B12X sources (SwiGLU-OAI plumbing, cache integrity, memory trims, top-k controls).",
+          "step": 3,
+          "sub_module": "vLLM Core Patch Set"
+        },
+        {
+          "code_entry_point": "docker/validate_flashinfer_wheels.py",
+          "domain_module": "Container Build & Image Composition Domain",
+          "operation": "Validate built FlashInfer wheels and pin CUTLASS DSL versions for reproducibility.",
+          "step": 4,
+          "sub_module": "Build-Time Patch & JIT Toolchain"
+        },
+        {
+          "code_entry_point": "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4",
+          "domain_module": "Attention Kernel Domain",
+          "operation": "Vendor the SM120 FlashAttention kernel package into the image for later dispatch integration.",
+          "step": 5,
+          "sub_module": "Vendored FlashAttention Kernel Library"
+        }
+      ]
+    },
+    {
+      "description": "Profiles a model's startup memory on the target cluster, consolidates per-rank events into a profile card, and validates that the deployment fits available host memory to guide topology-aware host selection.",
+      "entry_point": "mods/memory-profile/run.sh",
+      "importance": 8.5,
+      "involved_domains_count": 2,
+      "name": "Memory Profiling & Capacity Validation Flow",
+      "steps": [
+        {
+          "code_entry_point": "mods/memory-profile/probe.py",
+          "domain_module": "Memory Profiling & Capacity Domain",
+          "operation": "Install and activate the startup instrumentation plugin inside vLLM to record per-phase memory during worker startup.",
+          "step": 1,
+          "sub_module": "Startup Memory Probe"
+        },
+        {
+          "code_entry_point": "mods/memory-profile/profile_card.py",
+          "domain_module": "Memory Profiling & Capacity Domain",
+          "operation": "Collect per-rank event JSONL from run directories and merge into a model/recipe YAML profile card.",
+          "step": 2,
+          "sub_module": "Profile Collection & Card Generation"
+        },
+        {
+          "code_entry_point": "mods/memory-profile/capacity.py",
+          "domain_module": "Memory Profiling & Capacity Domain",
+          "operation": "Estimate startup RAM and KV-cache budget, validate against available host memory per topology, and emit capacity metrics.",
+          "step": 3,
+          "sub_module": "Capacity Analysis & Reporting"
+        },
+        {
+          "code_entry_point": "mods/memory-profile/report.py",
+          "domain_module": "Memory Profiling & Capacity Domain",
+          "operation": "Probe host hardware and generate the human-readable capacity report.",
+          "step": 4,
+          "sub_module": "Capacity Analysis & Reporting"
+        },
+        {
+          "code_entry_point": "run-recipe.sh",
+          "domain_module": "Deployment Recipes & Cluster Orchestration Domain",
+          "operation": "Use capacity findings to choose topology-appropriate hosts when launching the cluster deployment.",
+          "step": 5,
+          "sub_module": "Recipe Runners & Cluster Launchers"
+        }
+      ]
+    },
+    {
+      "description": "At inference startup, vLLM's FlashAttention 4 dispatch is patched so that compute-capability 12.x devices route attention work to the vendored paged-KV kernel, which selects architecture-specific forward/MLA/split-K kernels and exposes them through the PyTorch autograd interface.",
+      "entry_point": "mods/inkling-sm12-paged-kv/run.sh",
       "importance": 9.0,
-      "involved_domains_count": 2,
-      "name": "FlashAttention Forward Pass with Paged KV",
-      "steps": [
-        {
-          "code_entry_point": "interface.py",
-          "domain_module": "FlashAttention Kernel Domain",
-          "operation": "Validate inputs, parse device architecture, compute tile sizes and split-KV heuristics",
-          "step": 1,
-          "sub_module": "Public API & Autograd Interface"
-        },
-        {
-          "code_entry_point": "paged_kv.py",
-          "domain_module": "FlashAttention Kernel Domain",
-          "operation": "Load the page table and compute K/V pointers for paged KV blocks",
-          "step": 2,
-          "sub_module": "Paged KV Cache Management"
-        },
-        {
-          "code_entry_point": "flash_fwd_sm120_tma.py",
-          "domain_module": "FlashAttention Kernel Domain",
-          "operation": "Execute the architecture-specific forward kernel (SM90/SM100/SM120 or MLA) with tiled MMA",
-          "step": 3,
-          "sub_module": "Forward Pass Kernels"
-        },
-        {
-          "code_entry_point": "softmax.py",
-          "domain_module": "FlashAttention Kernel Domain",
-          "operation": "Apply online softmax with row max tracking and output rescaling",
-          "step": 4,
-          "sub_module": "Softmax & Numerical Core"
-        },
-        {
-          "code_entry_point": "flash_fwd_combine.py",
-          "domain_module": "FlashAttention Kernel Domain",
-          "operation": "Merge split-K partial outputs using log-sum-exp weighted reduction",
-          "step": 5,
-          "sub_module": "Split-K Combine"
-        }
-      ]
-    },
-    {
-      "description": "The gradient computation path: preprocess extracts statistics, the architecture-specific backward kernel computes dQ, dK and dV gradients with tiled MMA pipelines, and postprocess finalizes gradients. Triggered during training or fine-tuning workloads.",
-      "entry_point": "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_bwd_preprocess.py",
-      "importance": 8.0,
       "involved_domains_count": 1,
-      "name": "FlashAttention Backward Pass (Training)",
+      "name": "Attention Kernel Dispatch on Blackwell Flow",
       "steps": [
         {
-          "code_entry_point": "flash_bwd_preprocess.py",
-          "domain_module": "FlashAttention Kernel Domain",
-          "operation": "Run the backward preprocess kernel to extract per-row statistics",
+          "code_entry_point": "mods/inkling-sm12-paged-kv/patch_inkling.py",
+          "domain_module": "Attention Kernel Domain",
+          "operation": "Patch vLLM's NVIDIA FA4 dispatch source to inject a cached _use_sm12_paged_kv capability check.",
           "step": 1,
-          "sub_module": "Backward Pass Kernels"
+          "sub_module": "vLLM Dispatch Integration"
         },
         {
-          "code_entry_point": "flash_bwd_sm90.py",
-          "domain_module": "FlashAttention Kernel Domain",
-          "operation": "Execute the architecture-specific backward kernel computing dQ, dK, dV",
+          "code_entry_point": "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/interface.py",
+          "domain_module": "Attention Kernel Domain",
+          "operation": "Validate inputs, compute tile sizes and split-KV heuristics, and wrap kernels in autograd Functions.",
           "step": 2,
-          "sub_module": "Backward Pass Kernels"
+          "sub_module": "Kernel Runtime Support"
         },
         {
-          "code_entry_point": "softmax.py",
-          "domain_module": "FlashAttention Kernel Domain",
-          "operation": "Recompute softmax statistics for gradient accumulation",
+          "code_entry_point": "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/tile_scheduler.py",
+          "domain_module": "Attention Kernel Domain",
+          "operation": "Schedule persistent work tiles and prepare paged-KV cache layouts for the launch.",
           "step": 3,
-          "sub_module": "Softmax & Numerical Core"
+          "sub_module": "Kernel Runtime Support"
         },
         {
-          "code_entry_point": "flash_bwd_postprocess.py",
-          "domain_module": "FlashAttention Kernel Domain",
-          "operation": "Run the backward postprocess kernel to finalize gradients",
+          "code_entry_point": "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_fwd_sm100.py",
+          "domain_module": "Attention Kernel Domain",
+          "operation": "Execute architecture-selected forward (SM90/SM100/SM120/MLA) or backward kernels, including split-K combine when work is split across KV chunks.",
           "step": 4,
-          "sub_module": "Backward Pass Kernels"
+          "sub_module": "Vendored FlashAttention Kernel Library"
         }
       ]
     },
     {
-      "description": "A memory-optimization flow: the AST patcher rewrites vLLM's InstantTensor weights iterator to use zero-copy views, then the server loads model weights with reduced memory overhead. Triggered by running the instanttensor-zero-copy mod.",
-      "entry_point": "mods/instanttensor-zero-copy/run.sh",
-      "importance": 7.0,
+      "description": "Onboarding a new or emerging model architecture: author a fix or feature mod (patch, diff, or chat template), register it in a recipe, and have the recipe runner apply it before the vLLM server starts with the corrected template/configuration.",
+      "entry_point": "mods/<model-fix>/run.sh",
+      "importance": 8.0,
       "involved_domains_count": 2,
-      "name": "Zero-Copy Weight Loading Optimization",
+      "name": "Model Support Enablement Flow",
       "steps": [
         {
-          "code_entry_point": "mods/instanttensor-zero-copy/patch_weight_utils.py",
-          "domain_module": "Weight Loading & Memory Optimization",
-          "operation": "Parse vLLM weight utility source and locate copy=True tensor calls",
+          "code_entry_point": "mods/diffusiongemma/run.sh",
+          "domain_module": "Engine Patching & Model Compatibility Domain",
+          "operation": "Author model-support patches (e.g., diffusiongemma-support.patch, attention backend patches) and a run.sh orchestrator that applies them with legacy fallbacks.",
           "step": 1,
-          "sub_module": "Zero-Copy Weight Loading"
+          "sub_module": "Feature Enablement Mods"
         },
         {
-          "code_entry_point": "mods/instanttensor-zero-copy/patch_weight_utils.py",
-          "domain_module": "Weight Loading & Memory Optimization",
-          "operation": "Rewrite copy calls to zero-copy views with ownership comments and mod markers",
+          "code_entry_point": "mods/fix-qwen3.5-chat-template/chat_template.jinja",
+          "domain_module": "Engine Patching & Model Compatibility Domain",
+          "operation": "Provide corrected chat templates or AST-based rewrites for model-specific serialization and quantization behavior.",
           "step": 2,
-          "sub_module": "Zero-Copy Weight Loading"
+          "sub_module": "Model-Specific Fix Mods"
         },
         {
-          "code_entry_point": "mods/instanttensor-zero-copy/run.sh",
-          "domain_module": "Mod Management & Patch Orchestration",
-          "operation": "Launch the server with the patched weight loader",
+          "code_entry_point": "recipes/diffusion-gemma-nvfp4.yaml",
+          "domain_module": "Deployment Recipes & Cluster Orchestration Domain",
+          "operation": "Reference the mod from a new recipe YAML describing model, quantization, and cluster size.",
           "step": 3,
-          "sub_module": "Mod Entry Scripts"
+          "sub_module": "Recipe Catalog"
+        },
+        {
+          "code_entry_point": "run-recipe.sh",
+          "domain_module": "Deployment Recipes & Cluster Orchestration Domain",
+          "operation": "Run the recipe so mods are applied in order and the server starts with the custom template.",
+          "step": 4,
+          "sub_module": "Recipe Runners & Cluster Launchers"
         }
       ]
     }
   ],
-  "confidence_score": 8.0,
+  "confidence_score": 7.5,
   "domain_modules": [
     {
       "code_paths": [
-        ".litho/tree/repo/mods",
-        ".litho/tree/repo/run-recipe.py",
-        ".litho/tree/repo/run-recipe.sh",
-        ".litho/tree/repo/autodiscover.sh",
-        ".litho/tree/repo/build-and-copy.sh"
-      ],
-      "complexity": 7.5,
-      "description": "The core business domain of the repository. It defines, applies and orchestrates self-contained mods that mutate an installed vLLM package. It provides AST-based source patchers with idempotency and mod-marker traceability, diff-based patch mods, per-mod run.sh entry scripts, and the recipe runner that drives end-to-end deployment.",
-      "domain_type": "Core Business Domain",
-      "importance": 9.5,
-      "name": "Mod Management & Patch Orchestration",
-      "sub_modules": [
-        {
-          "code_paths": [
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/patch_inkling.py",
-            ".litho/tree/repo/mods/instanttensor-zero-copy/patch_weight_utils.py",
-            ".litho/tree/repo/mods/instanttensor-hybrid-draft-loader/patch_model_loader.py",
-            ".litho/tree/repo/docker/patch_instanttensor_vllm_memory.py",
-            ".litho/tree/repo/docker/patch_torch_schema_enumeration.py",
-            ".litho/tree/repo/docker/patch_vllm_b12x_moe_tuning_memory.py",
-            ".litho/tree/repo/docker/patch_vllm_sm120_cooperative_topk.py"
-          ],
-          "description": "Python tools that parse vLLM source with the ast module and perform idempotent, single-occurrence text rewrites guarded by mod markers, injecting capability checks or zero-copy behavior.",
-          "importance": 9.0,
-          "key_functions": [
-            "patch_inkling.py: inject _use_sm12_paged_kv capability check into FA4 dispatch",
-            "patch_weight_utils.py: rewrite copy=True tensor calls to zero-copy views",
-            "AST validation and idempotent single-occurrence replacement",
-            "Mod-marker insertion for traceability"
-          ],
-          "name": "AST-Based Source Patchers"
-        },
-        {
-          "code_paths": [
-            ".litho/tree/repo/mods/fix-glm-4.7-flash-AWQ",
-            ".litho/tree/repo/mods/fix-qwen35-tp4-marlin",
-            ".litho/tree/repo/mods/fix-qwen3-coder-next",
-            ".litho/tree/repo/mods/fix-Salyut1-GLM-4.7-NVFP4",
-            ".litho/tree/repo/mods/fix-eagle-fine-prefix",
-            ".litho/tree/repo/mods/radixark-dspark",
-            ".litho/tree/repo/mods/step-3.7-flash",
-            ".litho/tree/repo/mods/gpu-mem-util-gb"
-          ],
-          "description": "Per-model and per-fix mods that ship unified diff patches applied to vLLM source, covering quantization, attention backends, RoPE, MoE and parser fixes.",
-          "importance": 8.5,
-          "key_functions": [
-            "Apply unified diff patches to installed vLLM",
-            "Fix quantization (AWQ, NVFP4, AutoRound) and RoPE issues",
-            "Patch attention backends and MoE tuning"
-          ],
-          "name": "Diff Patch Mods"
-        },
-        {
-          "code_paths": [
-            ".litho/tree/repo/mods/diffusiongemma/run.sh",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/run.sh",
-            ".litho/tree/repo/mods/instanttensor-zero-copy/run.sh",
-            ".litho/tree/repo/mods/use-official-vllm/run.sh",
-            ".litho/tree/repo/mods/use-ngc-vllm/run.sh",
-            ".litho/tree/repo/mods/drop-caches/run.sh"
-          ],
-          "description": "Fail-fast Bash launchers (run.sh) that resolve the Python site-packages root, apply the mod's patches with legacy/main fallbacks, and start the vLLM server with the appropriate configuration.",
-          "importance": 8.5,
-          "key_functions": [
-            "Resolve site-packages root",
-            "Apply patches with legacy/main fallback ordering",
-            "Launch vLLM server with custom chat template"
-          ],
-          "name": "Mod Entry Scripts"
-        },
-        {
-          "code_paths": [
-            ".litho/tree/repo/run-recipe.py",
-            ".litho/tree/repo/run-recipe.sh",
-            ".litho/tree/repo/autodiscover.sh"
-          ],
-          "description": "Top-level orchestration that reads YAML recipes and drives mod application and server launch for a given model/hardware combination.",
-          "importance": 8.0,
-          "key_functions": [
-            "Parse recipe YAML",
-            "Resolve and sequence required mods",
-            "Invoke mod run.sh entry scripts"
-          ],
-          "name": "Recipe Runner"
-        }
-      ]
-    },
-    {
-      "code_paths": [
-        ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4"
+        "mods/inkling-sm12-paged-kv"
       ],
       "complexity": 9.5,
-      "description": "A vendored CUTLASS CuTe-DSL FlashAttention package (inkling_sm120_fa4) providing high-performance attention kernels for NVIDIA SM90 (Hopper), SM100 (Blackwell datacenter) and SM120 (Blackwell consumer/DGX Spark) GPUs. It covers forward and backward passes, Multi-head Latent Attention, split-K combine, paged-KV cache management, online softmax, tile scheduling and Blackwell-specific primitives.",
-      "domain_type": "Core Technical Domain",
+      "description": "Provides custom FlashAttention kernel implementations vendored for NVIDIA Blackwell (SM90/SM100/SM120) hardware, including forward/backward/MLA kernels, paged-KV support, tile scheduling, and a PyTorch-facing autograd interface. This is the computational core that extends vLLM's attention capability on Spark cluster GPUs.",
+      "domain_type": "Core Business Domain",
       "importance": 9.5,
-      "name": "FlashAttention Kernel Domain",
+      "name": "Attention Kernel Domain",
       "sub_modules": [
         {
           "code_paths": [
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_fwd.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_fwd_sm90.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_fwd_sm100.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_fwd_sm120.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_fwd_sm120_tma.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_fwd_mla_sm100.py"
+            "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_fwd.py",
+            "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_fwd_sm90.py",
+            "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_fwd_sm100.py",
+            "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_fwd_sm120.py",
+            "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_fwd_sm120_tma.py",
+            "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_fwd_mla_sm100.py",
+            "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_fwd_combine.py",
+            "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_bwd.py",
+            "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_bwd_sm90.py",
+            "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_bwd_sm100.py",
+            "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_bwd_sm120.py"
           ],
-          "description": "FlashAttention forward kernels across architectures, including the base class, SM80/SM90/SM100 variants, the SM120 CpAsync and TMA variants, and the MLA forward kernel for paged-KV inference.",
+          "description": "CuTe-DSL kernel implementations covering forward and backward passes across SM80/SM90/SM100/SM120 architectures, MLA variants, split-K combine, and TMA-accelerated variants.",
           "importance": 9.5,
           "key_functions": [
-            "FlashAttentionForwardBase setup and tiled MMA construction",
-            "FlashAttentionForwardSm80/Sm90/Sm100 kernel classes",
-            "FlashAttentionMLAForwardSm100 with warp-specialized pipelines",
-            "TMA-based SM120 forward with mbarrier KV double buffering"
+            "FlashAttentionForwardBase",
+            "FlashAttentionForwardSm90",
+            "FlashAttentionForwardSm100",
+            "FlashAttentionMLAForwardSm100",
+            "FlashAttentionBackwardSm80",
+            "FlashAttentionBackwardSm90",
+            "FlashAttentionBackwardSm100",
+            "FlashAttentionForwardCombine"
           ],
-          "name": "Forward Pass Kernels"
+          "name": "Vendored FlashAttention Kernel Library"
         },
         {
           "code_paths": [
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_bwd.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_bwd_sm90.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_bwd_sm100.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_bwd_sm120.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_bwd_preprocess.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_bwd_postprocess.py"
+            "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/interface.py",
+            "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/paged_kv.py",
+            "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/tile_scheduler.py",
+            "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/mask.py",
+            "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/softmax.py",
+            "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/blackwell_helpers.py",
+            "mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/pipeline.py"
           ],
-          "description": "FlashAttention backward (gradient) kernels computing dQ, dK and dV across SM80/SM90/SM100/SM120, plus preprocess and postprocess stages.",
+          "description": "Shared infrastructure for kernels: PyTorch autograd interface with tile heuristics and validation, paged-KV cache handling, persistent tile scheduling, masking, softmax, and hardware helper utilities.",
           "importance": 9.0,
           "key_functions": [
-            "FlashAttentionBackwardSm80/Sm90/Sm100/Sm120 gradient computation",
-            "Tiled MMA pipeline for dQ/dK/dV accumulation",
-            "Statistics-based softmax recomputation",
-            "SMEM capacity adaptation for SM120 99KB budget"
+            "FwdConfig/BwdConfig parsing and validation",
+            "FlashAttnFunc autograd Function",
+            "FlashAttnVarlenFunc autograd Function",
+            "CLC-based tile scheduling"
           ],
-          "name": "Backward Pass Kernels"
+          "name": "Kernel Runtime Support"
         },
         {
           "code_paths": [
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/paged_kv.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/topk_gather_kv.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/cache_utils.py"
+            "mods/inkling-sm12-paged-kv/patch_inkling.py",
+            "mods/inkling-sm12-paged-kv/adapter.py",
+            "mods/inkling-sm12-paged-kv/run.sh"
           ],
-          "description": "Manages paged KV-cache loading for attention kernels, including page-table loads, K/V pointer computation and block-wise KV tile loading from non-contiguous memory.",
+          "description": "Patch and adapter layer that routes compute-capability 12.x devices in vLLM's FA4 dispatch path to the vendored paged-KV kernel.",
           "importance": 8.5,
           "key_functions": [
-            "PagedKVManager page-table loading",
-            "compute_X_ptr for K/V pointer computation",
-            "load_KV block-wise tile loading",
-            "Fast divmod page-size arithmetic"
+            "AST-based FA4 dispatch patching",
+            "_use_sm12_paged_kv capability check injection",
+            "mod run entry"
           ],
-          "name": "Paged KV Cache Management"
-        },
-        {
-          "code_paths": [
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/flash_fwd_combine.py"
-          ],
-          "description": "Post-processing kernel that merges numerically-corrected partial attention outputs from the split-K forward pass using log-sum-exp weighted merging.",
-          "importance": 7.5,
-          "key_functions": [
-            "FlashAttentionForwardCombine kernel",
-            "Log-sum-exp weighted merging of partial outputs",
-            "Split-K reduction for varlen/split forward"
-          ],
-          "name": "Split-K Combine"
-        },
-        {
-          "code_paths": [
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/softmax.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/fast_math.py"
-          ],
-          "description": "Online (streaming) softmax implementation used by attention kernels, handling row max tracking, exponentiation, output rescaling and fast math primitives.",
-          "importance": 8.0,
-          "key_functions": [
-            "Softmax and SoftmaxSm100 online softmax classes",
-            "Row maximum tracking and running statistics update",
-            "Output accumulator rescaling"
-          ],
-          "name": "Softmax & Numerical Core"
-        },
-        {
-          "code_paths": [
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/tile_scheduler.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/pipeline.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/barrier.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/named_barrier.py"
-          ],
-          "description": "Persistent kernel work distribution and synchronization layer, including CLC-based scheduling modes, work tile info, and mbarrier/named-barrier pipeline primitives.",
-          "importance": 8.0,
-          "key_functions": [
-            "SchedulingMode, WorkTileInfo, ClcState definitions",
-            "TileSchedulerProtocol with cluster launch control",
-            "PipelineTmaAsync and mbarrier synchronization"
-          ],
-          "name": "Tile Scheduling & Pipelines"
-        },
-        {
-          "code_paths": [
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/utils.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/blackwell_helpers.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/ampere_helpers.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/copy_utils.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/block_sparse_utils.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/mma_sm100_desc.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/cute_dsl_utils.py"
-          ],
-          "description": "Shared low-level GPU primitives, Blackwell-specific helpers (tcgen05 MMA, PTX descriptors), data-copy utilities, block-sparse helpers and MMA descriptor construction.",
-          "importance": 8.5,
-          "key_functions": [
-            "tcgen05 MMA and PTX descriptor helpers",
-            "TMA and bulk copy utilities",
-            "Device-side DSL ops (smid, atomic_add_fp32, warp prefix sum)",
-            "Kernel caching hashes and fastdiv setup"
-          ],
-          "name": "Kernel Utilities & Blackwell Helpers"
-        },
-        {
-          "code_paths": [
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/interface.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/mask.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/seqlen_info.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/pack_gqa.py",
-            ".litho/tree/repo/mods/inkling-sm12-paged-kv/vendor/inkling_sm120_fa4/dropout.py"
-          ],
-          "description": "Top-level PyTorch-facing API for FlashAttention, including FwdConfig/BwdConfig dataclasses, tile-size heuristics, input validation, masking, sequence-length info and autograd Function classes.",
-          "importance": 9.0,
-          "key_functions": [
-            "FwdConfig/BwdConfig dataclasses and tile-size heuristics",
-            "FlashAttnFunc and FlashAttnVarlenFunc autograd Functions",
-            "Device architecture parsing and input validation",
-            "Causal/local window and split-KV resolution"
-          ],
-          "name": "Public API & Autograd Interface"
+          "name": "vLLM Dispatch Integration"
         }
       ]
     },
     {
       "code_paths": [
-        ".litho/tree/repo/mods/diffusiongemma",
-        ".litho/tree/repo/mods/fix-qwen3.5-chat-template",
-        ".litho/tree/repo/mods/fix-qwen3.6-chat-template",
-        ".litho/tree/repo/mods/fix-qwen3.5-autoround",
-        ".litho/tree/repo/mods/fix-qwen3-next-autoround",
-        ".litho/tree/repo/mods/nemotron-nano",
-        ".litho/tree/repo/mods/nemotron-super",
-        ".litho/tree/repo/mods/fix-gemma4-tool-parser"
+        "mods",
+        "docker"
       ],
-      "complexity": 7.0,
-      "description": "Delivers per-model architecture support, quantization compatibility and prompt-format correctness for the models deployed through the repository, including DiffusionGemma, Qwen3.x/3.5/3.6/3.8, GLM, Nemotron, Step, MiniMax and Gemma4.",
+      "complexity": 7.5,
+      "description": "Applies targeted source patches, AST-based rewriters, and chat templates to vLLM (and related libraries) so that specific model families (Qwen3/Qwen3.5/Qwen3.6, Gemma4, DiffusionGemma, GLM-4.7, Nemotron, MiniMax, Step-3.7, Mimo, RadixArk) and experimental features work correctly on the target hardware and quantization schemes.",
       "domain_type": "Core Business Domain",
       "importance": 8.5,
-      "name": "Model Support & Compatibility",
+      "name": "Engine Patching & Model Compatibility Domain",
       "sub_modules": [
         {
           "code_paths": [
-            ".litho/tree/repo/mods/diffusiongemma/diffusiongemma-support.patch",
-            ".litho/tree/repo/mods/diffusiongemma/diffusiongemma-attention-main.patch",
-            ".litho/tree/repo/mods/diffusiongemma/diffusiongemma-attention-legacy.patch",
-            ".litho/tree/repo/mods/diffusiongemma/gemma4-content-channel-sanitizer.patch",
-            ".litho/tree/repo/mods/diffusiongemma/gemma4-streaming-reasoning.patch",
-            ".litho/tree/repo/mods/diffusiongemma/mr5-attention-backends-docs.patch"
+            "mods/fix-qwen3-next-autoround/patch_qwen3_next.py",
+            "mods/fix-qwen3-next-autoround/run.sh",
+            "mods/fix-qwen3.5-chat-template/chat_template.jinja",
+            "mods/fix-qwen3.6-chat-template/chat_template.jinja",
+            "mods/fix-glm-4.7-flash-AWQ",
+            "mods/fix-qwen3-coder-next",
+            "mods/fix-qwen35-tp4-marlin",
+            "mods/fix-Salyut1-GLM-4.7-NVFP4",
+            "mods/fix-eagle-fine-prefix",
+            "mods/fix-gemma4-tool-parser",
+            "mods/fix-qwen3.5-autoround"
           ],
-          "description": "Registers the DiffusionGemmaForBlockDiffusion architecture in vLLM, including config parsing for text_config MoE parameters, block-diffusion sampling support, attention backend patches and streaming-reasoning/content-channel sanitizer patches.",
+          "description": "Per-model fix modules under mods/fix-*, each with a run.sh entry and patches/diffs restoring correct behavior (quantization, chat templates, crash/slowness fixes).",
           "importance": 8.5,
           "key_functions": [
-            "Register DiffusionGemmaForBlockDiffusion architecture",
-            "Parse text_config MoE parameters (num_experts, topk, hidden sizes)",
-            "Block diffusion sampling scheduler/decoder support",
-            "Content-channel sanitizer and streaming reasoning"
+            "gate_call/patched_text AST rewrite for MoE router quantization",
+            "chat template rendering with multimodal validation",
+            "model patch application via run.sh"
           ],
-          "name": "DiffusionGemma Support"
+          "name": "Model-Specific Fix Mods"
         },
         {
           "code_paths": [
-            ".litho/tree/repo/mods/fix-qwen3.5-chat-template/chat_template.jinja",
-            ".litho/tree/repo/mods/fix-qwen3.6-chat-template/chat_template.jinja",
-            ".litho/tree/repo/mods/fix-qwen3.5-autoround/transformers.patch",
-            ".litho/tree/repo/mods/fix-qwen35-tp4-marlin/qwen3_5.patch",
-            ".litho/tree/repo/mods/fix-qwen35-tp4-marlin/fix_rope.py",
-            ".litho/tree/repo/mods/fix-qwen3-coder-next/fix_crash.diff"
+            "mods/diffusiongemma/run.sh",
+            "mods/diffusiongemma/*.patch",
+            "mods/instanttensor-zero-copy/patch_weight_utils.py",
+            "mods/instanttensor-hybrid-draft-loader/patch_model_loader.py",
+            "mods/kv-cache-prealloc-cleanup/run.sh",
+            "mods/gpu-mem-util-gb/gpu_mem.patch",
+            "mods/mimo-diffkv-fp8-kv/run.sh",
+            "mods/exp-b12x/run.sh",
+            "mods/exp-w4a16/run.sh",
+            "mods/drop-caches/run.sh"
           ],
-          "description": "Chat template corrections, AutoRound quantization fixes and TP4 Marlin/RoPE fixes for the Qwen3.x/3.5/3.6/3.8 model families.",
+          "description": "Mods that enable additional model architectures or runtime behaviors: DiffusionGemma/Gemma4 support, speculative decoding loaders, KV-cache and GPU memory tuning, drop-caches, and experimental W4A16/B12X flags.",
           "importance": 8.0,
           "key_functions": [
-            "Corrected Qwen3.5/3.6 chat templates with multimodal rendering",
-            "AutoRound quantization compatibility patches",
-            "TP4 Marlin and RoPE fixes",
-            "Qwen3-coder-next crash and slowness fixes"
+            "Patch-and-launch orchestration (run.sh)",
+            "zero-copy tensor view rewrite in weight iterator",
+            "hybrid draft model loading"
           ],
-          "name": "Qwen Family Support"
+          "name": "Feature Enablement Mods"
         },
         {
           "code_paths": [
-            ".litho/tree/repo/mods/fix-glm-4.7-flash-AWQ/glm47_flash.patch",
-            ".litho/tree/repo/mods/fix-Salyut1-GLM-4.7-NVFP4/glm4_moe.patch",
-            ".litho/tree/repo/mods/nemotron-nano/run.sh",
-            ".litho/tree/repo/mods/nemotron-super/run.sh",
-            ".litho/tree/repo/mods/step-3.7-flash/step-3.7-support.patch",
-            ".litho/tree/repo/mods/radixark-dspark/radixark-dspark.patch"
+            "docker/patch_vllm_flashinfer_b12x_swigluoai.py",
+            "docker/patch_b12x_cache_integrity.py",
+            "docker/patch_vllm_spark_kv_cache_cleanup.py",
+            "docker/patch_vllm_startup_heap_trim.py",
+            "docker/patch_vllm_sm120_cooperative_topk.py",
+            "docker/patch_vllm_swa_block_size.py",
+            "docker/patch_vllm_routed_experts_weight_shape.py",
+            "docker/patch_instanttensor_vllm_memory.py",
+            "docker/pin_cutlass_dsl.py",
+            "docker/validate_flashinfer_wheels.py"
           ],
-          "description": "Model-specific patches and launchers for GLM-4.7/5.x, Nemotron Nano/Super, Step-3.7 and MiniMax families, covering AWQ/NVFP4 quantization and architecture registration.",
-          "importance": 7.5,
+          "description": "Build-time patch scripts applied to installed vLLM/FlashInfer/B12X source trees inside the Docker image: attention backend fixes, memory trims, quantization adjustments, and SWiGLU-OAI parameter plumbing.",
+          "importance": 8.5,
           "key_functions": [
-            "GLM-4.7 Flash AWQ and NVFP4 fixes",
-            "Nemotron Nano/Super launch configuration",
-            "Step-3.7 architecture support",
-            "MiniMax and DSPark patches"
+            "Idempotent AST/text patching of vLLM sources",
+            "FlashInfer B12x SwiGLU-OAI parameter plumbing",
+            "cache-integrity patch application"
           ],
-          "name": "GLM / Nemotron / Step / MiniMax Support"
-        },
-        {
-          "code_paths": [
-            ".litho/tree/repo/mods/fix-qwen3.5-chat-template/chat_template.jinja",
-            ".litho/tree/repo/mods/fix-qwen3.6-chat-template/chat_template.jinja",
-            ".litho/tree/repo/mods/diffusiongemma/chat_template_no_think.jinja"
-          ],
-          "description": "Jinja2 chat templates that serialize conversation messages into model prompts, including multimodal content handling and validation of invalid content placement.",
-          "importance": 7.5,
-          "key_functions": [
-            "Render conversation messages to prompts",
-            "Handle multimodal image/video content with namespace counters",
-            "Validate and reject images in system messages"
-          ],
-          "name": "Chat Template Rendering"
+          "name": "vLLM Core Patch Set"
         }
       ]
     },
     {
       "code_paths": [
-        ".litho/tree/repo/recipes",
-        ".litho/tree/repo/launch-cluster.sh",
-        ".litho/tree/repo/hf-download.sh"
+        "recipes",
+        "run-recipe.sh",
+        "run-recipe.py",
+        "launch-cluster.sh",
+        "examples"
       ],
       "complexity": 6.0,
-      "description": "Provides ready-made YAML recipes and launch scripts for deploying specific models on 3x/4x/8x DGX Spark clusters and single-node configurations, binding model, quantization, hardware topology and required mods together.",
-      "domain_type": "Infrastructure Domain",
-      "importance": 8.0,
-      "name": "Deployment Recipes & Cluster Orchestration",
+      "description": "YAML recipe catalog plus orchestration scripts that describe how to deploy a given model on 3x/4x/8x Spark clusters, selecting which mods to apply and how to launch the vLLM service. Recipes are the primary user-facing deployment artifact and drive mod data flows.",
+      "domain_type": "Core Business Domain",
+      "importance": 9.0,
+      "name": "Deployment Recipes & Cluster Orchestration Domain",
       "sub_modules": [
         {
           "code_paths": [
-            ".litho/tree/repo/recipes/3x-spark-cluster/qwen3.5-397b-int4-autoround.yaml",
-            ".litho/tree/repo/recipes/4x-spark-cluster/minimax-m2.5.yaml",
-            ".litho/tree/repo/recipes/4x-spark-cluster/nemotron-3-ultra-nvfp4.yaml",
-            ".litho/tree/repo/recipes/8x-spark-cluster/glm-5.2-nvfp4.yaml"
+            "recipes",
+            "recipes/3x-spark-cluster",
+            "recipes/4x-spark-cluster",
+            "recipes/8x-spark-cluster"
           ],
-          "description": "Multi-node DGX Spark cluster recipes for 3x, 4x and 8x topologies, defining model, quantization and parallelism settings.",
+          "description": "Model/cluster recipe YAML files (deepseek, qwen, glm, nemotron, minimax, diffusion-gemma, step, mimo, etc.) for solo and clustered Spark deployments.",
+          "importance": 9.0,
+          "key_functions": [
+            "Declarative model + mod + cluster configuration",
+            "quantization and parallelism selection"
+          ],
+          "name": "Recipe Catalog"
+        },
+        {
+          "code_paths": [
+            "run-recipe.sh",
+            "run-recipe.py",
+            "launch-cluster.sh",
+            "autodiscover.sh",
+            "examples"
+          ],
+          "description": "Entry scripts that parse recipes, orchestrate mod execution, and launch head/worker nodes on Spark clusters.",
+          "importance": 8.5,
+          "key_functions": [
+            "recipe parsing and mod sequencing",
+            "cluster node bootstrap and launch"
+          ],
+          "name": "Recipe Runners & Cluster Launchers"
+        },
+        {
+          "code_paths": [
+            "mods/use-ngc-vllm/run.sh",
+            "mods/use-official-vllm/run.sh"
+          ],
+          "description": "Mods choosing the base vLLM build (NGC vs official) at launch time.",
+          "importance": 5.0,
+          "key_functions": [
+            "container flavor switching"
+          ],
+          "name": "vLLM Flavor Selection Mods"
+        }
+      ]
+    },
+    {
+      "code_paths": [
+        "mods/memory-profile"
+      ],
+      "complexity": 7.0,
+      "description": "Instruments vLLM worker startup to collect per-phase memory data, consolidates it into profile cards, and performs capacity analysis to validate that a profiled deployment fits within available host memory — enabling topology-aware host selection for Spark clusters.",
+      "domain_type": "Supporting Domain",
+      "importance": 8.5,
+      "name": "Memory Profiling & Capacity Domain",
+      "sub_modules": [
+        {
+          "code_paths": [
+            "mods/memory-profile/probe.py",
+            "mods/memory-profile/patch.py",
+            "mods/memory-profile/run.sh"
+          ],
+          "description": "Plugin imported into vLLM as vllm._spark_memory_profile that records phase-by-phase native heap, CUDA memory, and model/KV inventory during worker startup; also runnable as standalone sampler.",
+          "importance": 8.5,
+          "key_functions": [
+            "phase memory instrumentation",
+            "CUDA and heap sampling",
+            "model/KV inventory capture"
+          ],
+          "name": "Startup Memory Probe"
+        },
+        {
+          "code_paths": [
+            "mods/memory-profile/collect.py",
+            "mods/memory-profile/profile_card.py"
+          ],
+          "description": "Collects per-rank event JSONL from run directories and merges them into a consolidated model/recipe YAML profile card.",
           "importance": 8.0,
           "key_functions": [
-            "Define multi-node cluster topology and parallelism",
-            "Bind model and quantization to hardware",
-            "Reference required mods"
+            "per-rank JSONL summarization",
+            "phase peak computation",
+            "YAML profile card emission"
           ],
-          "name": "Cluster Recipes"
+          "name": "Profile Collection & Card Generation"
         },
         {
           "code_paths": [
-            ".litho/tree/repo/recipes/deepseek-v4-flash.yaml",
-            ".litho/tree/repo/recipes/diffusion-gemma-nvfp4.yaml",
-            ".litho/tree/repo/recipes/qwen3.6-35b-a3b-nvfp4.yaml",
-            ".litho/tree/repo/recipes/step-3.7-flash-fp8.yaml",
-            ".litho/tree/repo/recipes/inkling-small-nvfp4.yaml"
+            "mods/memory-profile/capacity.py",
+            "mods/memory-profile/report.py",
+            "mods/memory-profile/host_probe.py"
           ],
-          "description": "Single-node and model-specific recipes covering DeepSeek, DiffusionGemma, Gemma4, GLM, MiniMax, Nemotron, Qwen and Step model families.",
-          "importance": 7.5,
+          "description": "Estimates startup RAM requirements, budgets KV cache, validates topology-aware host selection against available memory, and generates the human-readable report.",
+          "importance": 8.5,
           "key_functions": [
-            "Declare model serving configuration",
-            "Select quantization and attention backend",
-            "Drive mod application via recipe runner"
+            "KV-cache budgeting",
+            "peak host memory estimation",
+            "capacity utilization metrics",
+            "host topology validation"
           ],
-          "name": "Model Serving Recipes"
-        },
-        {
-          "code_paths": [
-            ".litho/tree/repo/launch-cluster.sh",
-            ".litho/tree/repo/hf-download.sh"
-          ],
-          "description": "Scripts that provision and launch multi-node inference clusters and download model artifacts.",
-          "importance": 7.0,
-          "key_functions": [
-            "Launch multi-node cluster",
-            "Download model weights from Hugging Face"
-          ],
-          "name": "Cluster Launch"
+          "name": "Capacity Analysis & Reporting"
         }
       ]
     },
     {
       "code_paths": [
-        ".litho/tree/repo/Dockerfile",
-        ".litho/tree/repo/Dockerfile.mxfp4",
-        ".litho/tree/repo/docker",
-        ".litho/tree/repo/build-and-copy.sh",
-        ".litho/tree/repo/fastsafetensors.patch",
-        ".litho/tree/repo/fastsafetensors_mxfp4.patch"
+        "mods/fes-weights",
+        "hf-download.sh"
       ],
-      "complexity": 6.5,
-      "description": "Containerization assets and build-time dependency pinning that produce the runtime image in which mods are applied, including Dockerfiles, CUTLASS DSL pinning and a suite of vLLM source patches applied at image build time.",
-      "domain_type": "Infrastructure Domain",
-      "importance": 7.0,
-      "name": "Container & Build Infrastructure",
-      "sub_modules": [
-        {
-          "code_paths": [
-            ".litho/tree/repo/Dockerfile",
-            ".litho/tree/repo/Dockerfile.mxfp4",
-            ".litho/tree/repo/docker/build_flashinfer_jit_providers.sh",
-            ".litho/tree/repo/build-and-copy.sh",
-            ".litho/tree/repo/fastsafetensors.patch"
-          ],
-          "description": "Dockerfiles and build scripts that assemble the runtime image, including FlashInfer JIT provider builds and fastsafetensors patches.",
-          "importance": 7.0,
-          "key_functions": [
-            "Build runtime container image",
-            "Build FlashInfer JIT providers",
-            "Apply fastsafetensors patches"
-          ],
-          "name": "Docker Build Assets"
-        },
-        {
-          "code_paths": [
-            ".litho/tree/repo/docker/patch_vllm_b12x_c128a_topk_alignment.py",
-            ".litho/tree/repo/docker/patch_vllm_diffusion_tensor_causal.py",
-            ".litho/tree/repo/docker/patch_vllm_gemma4_mtp_embedding_share.py",
-            ".litho/tree/repo/docker/patch_vllm_mrv2_speculator_cudagraph_pool.py",
-            ".litho/tree/repo/docker/patch_vllm_preserve_sm12x_target.py",
-            ".litho/tree/repo/docker/patch_vllm_routed_experts_weight_shape.py",
-            ".litho/tree/repo/docker/patch_vllm_spark_kv_cache_cleanup.py",
-            ".litho/tree/repo/docker/patch_vllm_swa_block_size.py",
-            ".litho/tree/repo/docker/patch_vllm_topk_softplus_sqrt_control_flow.py",
-            ".litho/tree/repo/docker/patch_vllm_wsl_cuda_uma.py",
-            ".litho/tree/repo/docker/patch_vllm_disable_minimax_qk_rmsnorm_ipc.py",
-            ".litho/tree/repo/docker/patch_vllm_flashinfer_b12x_swigluoai.py",
-            ".litho/tree/repo/docker/patch_vllm_autogptq_symmetric_moe_qzeros.py"
-          ],
-          "description": "A collection of vLLM source patches applied during image build to fix memory, schema enumeration, MoE tuning, attention and platform issues.",
-          "importance": 7.5,
-          "key_functions": [
-            "Patch vLLM memory and schema enumeration",
-            "Fix MoE tuning and routed-expert weight shapes",
-            "Preserve SM12x target and SWA block size",
-            "WSL CUDA UMA and Spark KV-cache cleanup fixes"
-          ],
-          "name": "Build-Time vLLM Patches"
-        },
-        {
-          "code_paths": [
-            ".litho/tree/repo/docker/pin_cutlass_dsl.py"
-          ],
-          "description": "Pins the CUTLASS DSL version required by the vendored kernel package to ensure reproducible kernel compilation.",
-          "importance": 6.5,
-          "key_functions": [
-            "Pin CUTLASS CuTe-DSL version"
-          ],
-          "name": "Dependency Pinning"
-        }
-      ]
-    },
-    {
-      "code_paths": [
-        ".litho/tree/repo/mods/instanttensor-zero-copy",
-        ".litho/tree/repo/mods/instanttensor-hybrid-draft-loader",
-        ".litho/tree/repo/mods/kv-cache-prealloc-cleanup",
-        ".litho/tree/repo/mods/gpu-mem-util-gb"
-      ],
-      "complexity": 6.5,
-      "description": "Mods that optimize model weight loading and GPU memory usage, including zero-copy tensor views, hybrid draft-model loading, KV-cache preallocation cleanup and GPU memory utilization tuning.",
+      "complexity": 4.0,
+      "description": "Prepares and verifies staged model weights so vLLM can serve fully offline from local storage rather than querying the Hugging Face hub — essential for air-gapped or network-constrained Spark clusters.",
       "domain_type": "Supporting Domain",
       "importance": 7.5,
-      "name": "Weight Loading & Memory Optimization",
+      "name": "Model Weights & Offline Serving Domain",
       "sub_modules": [
         {
           "code_paths": [
-            ".litho/tree/repo/mods/instanttensor-zero-copy/patch_weight_utils.py",
-            ".litho/tree/repo/mods/instanttensor-zero-copy/run.sh"
+            "mods/fes-weights/verify.py"
           ],
-          "description": "Patches vLLM's InstantTensor weights iterator to replace tensor copies with zero-copy views, reducing memory overhead during model loading.",
+          "description": "Validates staged shard files against safetensors index, checks total size parity, and enforces quantization config presence for NVFP4 checkpoints.",
+          "importance": 8.0,
+          "key_functions": [
+            "shard/index consistency check",
+            "size parity tolerance check",
+            "hf_quant_config.json validation"
+          ],
+          "name": "Weight Verification"
+        },
+        {
+          "code_paths": [
+            "mods/fes-weights/run.sh",
+            "hf-download.sh"
+          ],
+          "description": "Shell entrypoint that verifies mounted weights and lays out the HF hub-cache structure for offline vLLM resolution.",
           "importance": 7.5,
           "key_functions": [
-            "Rewrite copy=True tensor calls to zero-copy views",
-            "Insert ownership-explanation comments and mod markers",
-            "Guard against unsafe open() and double-patching"
+            "FES_WEIGHTS_DIR defaulting",
+            "HF hub-cache layout construction",
+            "weight download helper"
           ],
-          "name": "Zero-Copy Weight Loading"
+          "name": "Offline Hub Cache Setup"
+        }
+      ]
+    },
+    {
+      "code_paths": [
+        "Dockerfile",
+        "Dockerfile.mxfp4",
+        "docker",
+        "build-and-copy.sh"
+      ],
+      "complexity": 6.0,
+      "description": "Dockerfiles, build scripts, and build-time patch application that compose the custom vLLM container image — bundling FlashInfer JIT providers, vendored kernels, and all source patches into deployable images (including an MXFP4 variant).",
+      "domain_type": "Infrastructure Domain",
+      "importance": 7.5,
+      "name": "Container Build & Image Composition Domain",
+      "sub_modules": [
+        {
+          "code_paths": [
+            "Dockerfile",
+            "Dockerfile.mxfp4",
+            "build-and-copy.sh"
+          ],
+          "description": "Base and MXFP4 image definitions plus build-and-copy automation.",
+          "importance": 7.5,
+          "key_functions": [
+            "multi-stage vLLM image build",
+            "MXFP4 image variant"
+          ],
+          "name": "Image Definitions"
         },
         {
           "code_paths": [
-            ".litho/tree/repo/mods/instanttensor-hybrid-draft-loader/patch_model_loader.py",
-            ".litho/tree/repo/mods/instanttensor-hybrid-draft-loader/run.sh"
+            "docker/build_flashinfer_jit_providers.sh",
+            "docker/patch_vllm_flashinfer_b12x_swigluoai.py",
+            "docker/patch_b12x_cache_integrity.py",
+            "docker/validate_flashinfer_wheels.py",
+            "fastsafetensors.patch",
+            "fastsafetensors_mxfp4.patch"
           ],
-          "description": "Patches the model loader to support hybrid draft-model loading for speculative decoding setups.",
-          "importance": 7.0,
+          "description": "Patch scripts and shell tools executed during image build to modify installed vLLM/FlashInfer/B12X sources and produce FlashInfer JIT-cache provider wheels.",
+          "importance": 7.5,
           "key_functions": [
-            "Patch model loader for hybrid draft loading"
+            "JIT provider wheel build",
+            "idempotent source patching",
+            "wheel validation"
           ],
-          "name": "Hybrid Draft Loader"
+          "name": "Build-Time Patch & JIT Toolchain"
+        }
+      ]
+    },
+    {
+      "code_paths": [
+        "scripts"
+      ],
+      "complexity": 2.0,
+      "description": "Auxiliary scripts supporting developer workflows: evaluation runners and automated repository documentation generation via DeepWiki.",
+      "domain_type": "Tool Support Domain",
+      "importance": 3.5,
+      "name": "Developer Tooling Domain",
+      "sub_modules": [
+        {
+          "code_paths": [
+            "scripts/fes-eval.sh"
+          ],
+          "description": "Shell entrypoint that invokes FES evaluation weight tooling.",
+          "importance": 4.0,
+          "key_functions": [
+            "fes-weights evaluation invocation"
+          ],
+          "name": "Evaluation Runner"
         },
         {
           "code_paths": [
-            ".litho/tree/repo/mods/kv-cache-prealloc-cleanup/run.sh",
-            ".litho/tree/repo/mods/gpu-mem-util-gb/gpu_mem.patch",
-            ".litho/tree/repo/mods/gpu-mem-util-gb/run.sh"
+            "scripts/deepwiki/generate-deepwiki.sh",
+            "scripts/deepwiki/shadow-tree.py"
           ],
-          "description": "Mods that clean up KV-cache preallocation and tune GPU memory utilization in gigabytes.",
-          "importance": 7.0,
+          "description": "Generates a shadow documentation tree for the repository source using DeepWiki.",
+          "importance": 3.5,
           "key_functions": [
-            "Clean up KV-cache preallocation",
-            "Tune GPU memory utilization in GB units"
+            "shadow tree generation",
+            "DeepWiki page publishing"
           ],
-          "name": "KV Cache & GPU Memory Management"
+          "name": "Documentation Generator"
         }
       ]
     }
   ],
   "domain_relations": [
     {
-      "description": "The orchestration domain applies the model-support patches and chat templates defined by the Model Support domain to the installed vLLM package.",
-      "from_domain": "Mod Management & Patch Orchestration",
-      "relation_type": "Tool Support",
+      "description": "Recipes declare which fix/feature mods must be applied; the recipe runner sequences mods/fix-*/run.sh and mods/<feature>/run.sh before launching vLLM.",
+      "from_domain": "Deployment Recipes & Cluster Orchestration Domain",
+      "relation_type": "Configuration Dependency",
       "strength": 9.0,
-      "to_domain": "Model Support & Compatibility"
+      "to_domain": "Engine Patching & Model Compatibility Domain"
     },
     {
-      "description": "patch_inkling.py injects a capability check into vLLM's FA4 dispatch so SM12 devices route to the vendored inkling_sm120_fa4 paged-KV kernel.",
-      "from_domain": "Mod Management & Patch Orchestration",
-      "relation_type": "Tool Support",
+      "description": "fes-weights mod runs before launch to verify mounted weights and build the offline HF hub-cache consumed by the serving process.",
+      "from_domain": "Deployment Recipes & Cluster Orchestration Domain",
+      "relation_type": "Data Dependency",
+      "strength": 7.0,
+      "to_domain": "Model Weights & Offline Serving Domain"
+    },
+    {
+      "description": "docker/ patch scripts are executed during image build to mutate installed vLLM/FlashInfer/B12X sources; runtime mods patch the same installed tree at container start.",
+      "from_domain": "Engine Patching & Model Compatibility Domain",
+      "relation_type": "Build-Time Composition",
+      "strength": 8.0,
+      "to_domain": "Container Build & Image Composition Domain"
+    },
+    {
+      "description": "The inkling-sm12-paged-kv mod patches vLLM's FA4 dispatch to route SM12.x devices to the vendored kernel package, composing the custom kernels into the engine.",
+      "from_domain": "Attention Kernel Domain",
+      "relation_type": "Module Composition",
       "strength": 8.5,
-      "to_domain": "FlashAttention Kernel Domain"
+      "to_domain": "Engine Patching & Model Compatibility Domain"
     },
     {
-      "description": "The orchestration domain applies the AST-based weight-loading and memory-optimization patches to vLLM source.",
-      "from_domain": "Mod Management & Patch Orchestration",
+      "description": "The vendored kernel sources are copied into the image; related B12X cache-integrity and CUTLASS DSL pinning patches are applied at build time.",
+      "from_domain": "Attention Kernel Domain",
+      "relation_type": "Build-Time Composition",
+      "strength": 7.0,
+      "to_domain": "Container Build & Image Composition Domain"
+    },
+    {
+      "description": "memory-profile probe.py installs itself into vLLM as vllm._spark_memory_profile via its patch mechanism, observing worker startup inside the engine.",
+      "from_domain": "Memory Profiling & Capacity Domain",
+      "relation_type": "Instrumentation Dependency",
+      "strength": 7.5,
+      "to_domain": "Engine Patching & Model Compatibility Domain"
+    },
+    {
+      "description": "Probe output is collected per run directory, merged into a profile card keyed by model/recipe, and used for topology-aware host selection for cluster deployments.",
+      "from_domain": "Memory Profiling & Capacity Domain",
+      "relation_type": "Data Dependency",
+      "strength": 7.0,
+      "to_domain": "Deployment Recipes & Cluster Orchestration Domain"
+    },
+    {
+      "description": "The docker/ patch library is shared build infrastructure used to apply both engine-level and kernel-level fixes into the installed package.",
+      "from_domain": "Container Build & Image Composition Domain",
       "relation_type": "Tool Support",
       "strength": 8.0,
-      "to_domain": "Weight Loading & Memory Optimization"
+      "to_domain": "Engine Patching & Model Compatibility Domain"
     },
     {
-      "description": "Recipes declare which mods must be applied; the recipe runner consumes these declarations to sequence mod application and server launch.",
-      "from_domain": "Deployment Recipes & Cluster Orchestration",
+      "description": "Recipes for SM12-class hardware (e.g., inkling-small-nvfp4) implicitly enable the vendored paged-KV attention kernel mod.",
+      "from_domain": "Deployment Recipes & Cluster Orchestration Domain",
       "relation_type": "Configuration Dependency",
-      "strength": 8.5,
-      "to_domain": "Mod Management & Patch Orchestration"
+      "strength": 6.0,
+      "to_domain": "Attention Kernel Domain"
     },
     {
-      "description": "Recipes bind specific models to their required model-support mods and quantization settings.",
-      "from_domain": "Deployment Recipes & Cluster Orchestration",
-      "relation_type": "Configuration Dependency",
-      "strength": 7.5,
-      "to_domain": "Model Support & Compatibility"
+      "description": "scripts/fes-eval.sh invokes the fes-weights evaluation entrypoint to score staged weight directories.",
+      "from_domain": "Developer Tooling Domain",
+      "relation_type": "Function Call",
+      "strength": 4.0,
+      "to_domain": "Model Weights & Offline Serving Domain"
     },
     {
-      "description": "The container image provides the installed vLLM site-packages that mods patch at deployment time; build-time patches pre-condition the same source tree.",
-      "from_domain": "Container & Build Infrastructure",
-      "relation_type": "Data Dependency",
-      "strength": 7.0,
-      "to_domain": "Mod Management & Patch Orchestration"
+      "description": "DeepWiki documentation generation walks the repository source tree, including patch and mod sources, to produce reference documentation.",
+      "from_domain": "Developer Tooling Domain",
+      "relation_type": "Documentation Dependency",
+      "strength": 3.0,
+      "to_domain": "Engine Patching & Model Compatibility Domain"
     },
     {
-      "description": "pin_cutlass_dsl.py pins the CUTLASS CuTe-DSL version required to compile the vendored attention kernels.",
-      "from_domain": "Container & Build Infrastructure",
-      "relation_type": "Configuration Dependency",
-      "strength": 7.0,
-      "to_domain": "FlashAttention Kernel Domain"
-    },
-    {
-      "description": "Paged-KV attention kernels consume KV-cache memory managed by the memory-optimization mods, sharing GPU memory budget constraints.",
-      "from_domain": "FlashAttention Kernel Domain",
-      "relation_type": "Data Dependency",
-      "strength": 5.0,
-      "to_domain": "Weight Loading & Memory Optimization"
-    },
-    {
-      "description": "Model architectures (e.g., DiffusionGemma, Qwen) rely on the attention kernels for their forward computation, with attention backend patches selecting the appropriate kernel path.",
-      "from_domain": "Model Support & Compatibility",
-      "relation_type": "Service Call",
-      "strength": 6.5,
-      "to_domain": "FlashAttention Kernel Domain"
+      "description": "Verified weights and hub-cache layout are the runtime model input resolved by the recipe-launched vLLM server.",
+      "from_domain": "Model Weights & Offline Serving Domain",
+      "relation_type": "Runtime Input",
+      "strength": 6.0,
+      "to_domain": "Deployment Recipes & Cluster Orchestration Domain"
     }
   ]
 }
@@ -904,7 +824,7 @@ Provides high-level domain division, module relationships, and core business pro
 Contains static analysis results of the codebase and business process analysis.
 
 ```json
-"# System Workflow Analysis\n\n## Overview\n\n`spark-vllm-docker` is a patch-and-mod management repository that customizes an externally installed vLLM inference stack without forking it. Its functional workflows span two very different layers:\n\n1. **The orchestration layer** — fail-fast Bash entry scripts, AST/diff-based patchers, and recipe runners that mutate an installed vLLM package and launch patched servers.\n2. **The compute layer** — a vendored CUTLASS CuTe-DSL FlashAttention kernel package (`inkling_sm120_fa4`) that executes the actual attention math on NVIDIA SM90/SM100/SM120 GPUs.\n\nThe workflows below trace both layers, from the moment an operator runs a mod to the moment a tensor-core kernel produces attention output.\n\n---\n\n## 1. Main Workflow\n\n- **Workflow Name**: Apply Mod and Launch Patched vLLM Server\n- **Importance**: 9.5 (primary end-to-end flow)\n\n- **Description**:\n  This is the dominant business flow of the repository and the reason the project exists. A self-contained mod executes its `run.sh`, which resolves the installed vLLM `site-packages` root, applies the mod's patches (AST rewrites and/or unified diffs) with main/legacy fallback ordering, installs any customized assets (such as a corrected Jinja2 chat template), and finally launches the vLLM server bound to the patched package. The entire sequence runs under `set -euo pipefail` so any failure aborts the deployment rather than producing a silently half-patched server.\n\n- **Flow Diagram**:\n\n```mermaid\ngraph TD\n    Start[Operator executes mod run.sh] --> ResolveRoot[Resolve Python site-packages root]\n    ResolveRoot --> FailFast[Enable fail-fast: set -euo pipefail]\n    FailFast --> ApplyCore[Apply core support patch e.g. diffusiongemma-support.patch]\n    ApplyCore --> ApplyMain[Apply attention patch - main variant]\n    ApplyMain --> MainOK{Main patch applies cleanly?}\n    MainOK -->|Yes| ApplySanitizer[Apply content-channel sanitizer patch]\n    MainOK -->|No| ApplyLegacy[Fall back to legacy patch variant]\n    ApplyLegacy --> ApplySanitizer\n    ApplySanitizer --> ApplyStreaming[Apply streaming-reasoning and docs patches]\n    ApplyStreaming --> InstallTemplate[Install corrected Jinja chat template]\n    InstallTemplate --> LaunchServer[Launch vLLM server with custom chat template]\n    LaunchServer --> Serve[Server serves the patched model]\n    Serve --> End[Serving complete]\n```\n\n- **Key Steps**:\n  1. **Resolve site-packages root** — locate the installed vLLM package so upstream source patches target the correct files.\n  2. **Set fail-fast behavior** — `set -euo pipefail` guarantees deterministic, all-or-nothing deployment.\n  3. **Apply core support patch** — registers the target model architecture (e.g., `DiffusionGemmaForBlockDiffusion`) and its config-parsing logic.\n  4. **Apply attention patch with fallback** — tries the main-branch attention patch, falling back to the legacy variant if the installed vLLM differs.\n  5. **Apply sanitizer / streaming patches** — additional behavioral fixes (content-channel sanitizer, streaming reasoning, docs).\n  6. **Install chat template** — place the corrected Jinja template used by the server for prompt serialization.\n  7. **Launch server** — start vLLM against the now-patched package with the custom template.\n\n---\n\n## 2. Other Important Workflows\n\n### 2.1 FlashAttention Forward Pass with Paged KV\n\n- **Importance**: 9.0\n- **Description**:\n  The runtime attention computation path executed during inference. The PyTorch-facing API validates inputs and selects tile sizes, the paged-KV manager loads KV blocks from non-contiguous paged memory, and the architecture-specific forward kernel computes attention using tiled MMA with online softmax. If the forward pass is split across KV chunks (split-K / varlen), a combine kernel merges the partial outputs.\n\n- **Flow Diagram**:\n\n```mermaid\ngraph TD\n    Entry[Model forward call invokes interface.py] --> Validate[Validate inputs and parse device architecture]\n    Validate --> Heuristics[Compute tile sizes and split-KV heuristics]\n    Heuristics --> ResolveMask[Resolve causal / local-window masking]\n    ResolveMask --> PageTable[PagedKVManager load_page_table]\n    PageTable --> ComputePtr[compute_X_ptr for K and V blocks]\n    ComputePtr --> LoadKV[load_KV block-wise tile loading]\n    LoadKV --> FwdKernel[Run architecture-specific forward kernel SM90 / SM100 / SM120 / MLA]\n    FwdKernel --> Softmax[Online softmax: row max tracking and output rescaling]\n    Softmax --> SplitCheck{Split-K work distributed?}\n    SplitCheck -->|Yes| Combine[flash_fwd_combine: log-sum-exp weighted merge]\n    SplitCheck -->|No| Output[Emit final attention output]\n    Combine --> Output\n    Output --> Done[Attention result returned to model]\n```\n\n- **Key Steps**:\n  1. **Input validation and architecture parsing** — `FwdConfig` dataclasses and tile-size heuristics gate the call.\n  2. **Page-table and pointer setup** — `PagedKVManager` translates logical KV positions into physical block pointers.\n  3. **Tiled MMA forward kernel** — SM90 (Hopper), SM100 (Blackwell datacenter), SM120 (CpAsync/TMA variants), or the MLA kernel for paged-KV inference.\n  4. **Online softmax** — streaming row-max updates and output rescaling keep memory footprint bounded.\n  5. **Split-K combine** — `FlashAttentionForwardCombine` merges numerically-corrected partial outputs.\n\n---\n\n### 2.2 Recipe-Driven Cluster Deployment\n\n- **Importance**: 8.5\n- **Description**:\n  A higher-level orchestration flow where a YAML recipe declares the model, quantization, hardware topology, and required mods. The recipe runner parses this declaration, sequences the required mods, applies them, and launches a multi-node inference cluster on DGX Spark hardware.\n\n- **Flow Diagram**:\n\n```mermaid\ngraph TD\n    Start[run-recipe.sh with recipe path] --> LoadRecipe[Load recipe YAML: model, quantization, topology]\n    LoadRecipe --> Parse[run-recipe.py parses recipe]\n    Parse --> ResolveMods[Resolve ordered list of required mods]\n    ResolveMods --> InvokeMods[Invoke each mod run.sh to patch installed vLLM]\n    InvokeMods --> ApplyModel[Apply model-specific patches e.g. nemotron-super]\n    ApplyModel --> LaunchCluster[launch-cluster.sh starts multi-node cluster]\n    LaunchCluster --> Serve[Target model served with mods active]\n```\n\n- **Key Steps**:\n  1. **Recipe load** — YAML binds model + quantization + cluster topology (3x/4x/8x).\n  2. **Mod resolution** — the runner determines which mods are required for the combination.\n  3. **Mod application** — each required mod's `run.sh` patches the installed vLLM.\n  4. **Cluster launch** — the multi-node inference cluster starts with all patches active.\n\n---\n\n### 2.3 FlashAttention Backward Pass (Training)\n\n- **Importance**: 8.0\n- **Description**:\n  The gradient computation path used during training/fine-tuning. A preprocess kernel extracts per-row statistics, the architecture-specific backward kernel computes dQ, dK, and dV gradients through tiled MMA pipelines, softmax statistics are recomputed for gradient accumulation, and a postprocess kernel finalizes the gradients.\n\n- **Flow Diagram**:\n\n```mermaid\ngraph TD\n    Start[Training step needs attention gradients] --> Pre[flash_bwd_preprocess: extract per-row statistics]\n    Pre --> Scatter[Scatter statistics and intermediate buffers]\n    Scatter --> BwdKernel[Architecture-specific backward kernel SM90 / SM100 / SM120]\n    BwdKernel --> DQ[Compute dQ gradient]\n    BwdKernel --> DK[Compute dK gradient]\n    BwdKernel --> DV[Compute dV gradient]\n    DQ --> Recompute[Recompute softmax statistics via softmax.py]\n    DK --> Recompute\n    DV --> Recompute\n    Recompute --> Post[flash_bwd_postprocess: finalize gradients]\n    Post --> End[Gradients returned to autograd]\n```\n\n- **Key Steps**:\n  1. **Preprocess** — compute the statistics needed to reconstruct softmax probabilities.\n  2. **Backward kernel** — a tiled MMA mainloop accumulates dQ, dK, and dV (SM120 reuses the SM80-era `mma.sync` path with an SMEM budget override).\n  3. **Softmax recomputation** — statistics-based recomputation is used instead of storing the full attention matrix.\n  4. **Postprocess** — final gradient assembly for `FlashAttnFunc`/`FlashAttnVarlenFunc`.\n\n---\n\n### 2.4 Zero-Copy Weight Loading Optimization\n\n- **Importance**: 7.0\n- **Description**:\n  A memory-optimization flow in which an AST patcher rewrites vLLM's InstantTensor weights iterator so that tensor copies are replaced by zero-copy views, reducing GPU memory overhead during model loading.\n\n- **Flow Diagram**:\n\n```mermaid\ngraph TD\n    Start[Execute instanttensor-zero-copy run.sh] --> Parse[Parse vLLM weight utility source with ast]\n    Parse --> Locate[Locate copy=True tensor calls in weights iterator]\n    Locate --> SafeCheck{Safe to patch? no unsafe open, not already patched}\n    SafeCheck -->|No| Abort[Abort with diagnostic]\n    SafeCheck -->|Yes| Rewrite[Rewrite copy calls to zero-copy views]\n    Rewrite --> Comment[Insert ownership-explanation comments and mod marker]\n    Comment --> Launch[Launch server with patched weight loader]\n    Launch --> Serve[Model loads with reduced memory overhead]\n```\n\n- **Key Steps**:\n  1. **Parse** — use the `ast` module to safely analyze the source.\n  2. **Locate** — find `copy=True` tensor calls in the InstantTensor iterator.\n  3. **Guard** — refuse to patch if an unsafe `open()` is detected or if the mod marker is already present.\n  4. **Rewrite** — replace copies with zero-copy views and annotate for traceability.\n  5. **Launch** — start the server using the patched loader.\n\n---\n\n## 3. Workflow Insights\n\n### Operational Patterns\n\n- **Patch-first, launch-second is universal.** Every mod follows the same shape: resolve the environment, mutate installed vLLM source, then start the server. This consistency makes mods composable and their behavior predictable.\n\n- **Idempotency and traceability are built into the patchers.** AST-based patchers (`patch_inkling.py`, `patch_weight_utils.py`) inject a mod marker so patches can be re-applied safely and audited later. Diff patches use main/legacy fallbacks to tolerate installed-vLLM version drift.\n\n- **Layered orchestration.** Modeling a deployment as a recipe over mods (Workflow 2.2) lets a single YAML file bind a model, quantization scheme, cluster topology, and the exact set of patches needed — turning deployment into a declarative operation.\n\n- **Architecture specialization cascades.** The kernel package uses subclassing aggressively: SM120 forward and backward kernels reuse SM80-era `mma.sync` code and only override the SMEM capacity check (99 KB vs 163 KB), while SM100 kernels introduce `tcgen05` MMA. This keeps new-hardware bring-up minimal.\n\n- **Numerical correctness drives the split-K design.** The presence of a dedicated combine kernel (`flash_fwd_combine.py`) and statistics-based backward recomputation shows the system prioritizes numerically stable, memory-bounded computation through log-sum-exp merging and online softmax.\n\n### Dependencies Between Workflows\n\n- **Orchestration → Compute.** `patch_inkling.py` (Workflow 1) injects a cached capability check into vLLM's FA4 dispatch so SM12 devices route to the vendored paged-KV kernel. Without this patch, the forward-pass workflow (2.1) never executes on the target hardware.\n\n- **Recipe → Mods → Model Support.** Recipes (2.2) declare which mods run; the main mod workflow (1) applies them; the model-support patches determine which architectures (DiffusionGemma, Qwen, Nemotron, GLM) can be served.\n\n- **Build infrastructure → Runtime.** The container image pre-conditions the same vLLM source tree that mods mutate at deploy time, and `pin_cutlass_dsl.py` pins the CuTe-DSL version required to compile the vendored kernels. Reproducible kernel compilation therefore depends on build-time configuration.\n\n- **Memory optimization ↔ Kernel domain.** Paged-KV attention kernels and zero-copy weight loading (2.4) compete for the same GPU memory budget; they share the constraint that KV-cache and weight residency must fit alongside kernel workspace.\n\n### Potential Optimization Opportunities\n\n- **Parallelize independent patch stages.** The main workflow applies patches strictly sequentially under fail-fast; a dependency graph of patches could allow independent patches to run concurrently while preserving ordering where it matters.\n- **Formalize a patch compatibility matrix.** The main/legacy fallback logic is currently embedded in each `run.sh`; a declarative version compatibility manifest would make fallback selection explicit and testable.\n- **Unify the two scheduling layers.** The internal `tile_scheduler.py` (CLC-based work distribution) and the external recipe/mod orchestration both perform work distribution; documenting the boundary clearly would help kernel engineers reason about persistent-kernel launch configuration.\n- **Automate end-to-end validation.** Because every mod ends in a server launch, an automated smoke test that exercises the forward pass with a paged-KV cache after patching would catch dispatch-routing regressions early.\n\n### Documentation Consistency Notes\n\nThe implementation aligns closely with the documented business processes: the mod entry scripts, AST patchers, recipe runner, and kernel API all appear at the entry points described in the domain research. Two areas where the documentation is broader than the observed source and worth verifying against the live tree are (a) the exact fallback ordering used by attention patches in `run.sh`, and (b) the presence of dedicated `flash_bwd_preprocess.py`/`flash_bwd_postprocess.py` files referenced in the backward workflow, which were not in the top-ranked source inventory but are consistent with the documented pipeline."
+"# System Workflow Analysis\n\n**Project**: `spark-vllm-docker`\n**Scope**: Patch-and-orchestration layer that optimizes the vLLM serving engine for Spark clusters with NVIDIA Blackwell GPUs (SM90/SM100/SM120).\n\n---\n\n## 1. Main Workflow\n\n- **Workflow Name**: Recipe-Driven Cluster Model Deployment Flow\n- **Description**: This is the system's primary end-to-end workflow. It begins when an operator selects a declarative YAML recipe (defining model, quantization, mods, and cluster size) and ends with a running vLLM service on a Spark cluster. The flow validates staged model weights for offline serving, applies the required model-specific fix/feature mods to the installed vLLM package via idempotent AST/text patches, launches head and worker nodes, and finally routes attention compute on SM12.x devices to the vendored paged-KV FlashAttention kernel.\n\n- **Flow Diagram**:\n```mermaid\ngraph TD\n    Start[Select model recipe YAML] --> Parse[Parse recipe: mods, parallelism, quantization]\n    Parse --> WeightSetup[Setup offline HF hub-cache layout]\n    WeightSetup --> Verify{Weight verification}\n    Verify -->|Pass| ApplyMods[Apply model-specific fix mods]\n    Verify -->|Fail| Abort[Fail fast with reason]\n    ApplyMods --> FeatureMods[Apply feature enablement mods]\n    FeatureMods --> Launch[Launch head and worker nodes]\n    Launch --> DispatchPatch[Patch FA4 dispatch for SM12.x devices]\n    DispatchPatch --> Kernels[Route to vendored paged-KV kernels]\n    Kernels --> Serve[Serve inference requests]\n```\n\n- **Key Steps**:\n  1. **Recipe selection and parsing** (`run-recipe.sh` / `run-recipe.py`) — Reads a recipe YAML from `recipes/3x|4x|8x-spark-cluster/` to determine which mods to apply, parallelism layout, and quantization scheme.\n  2. **Offline hub-cache setup** (`mods/fes-weights/run.sh`) — Verifies mounted weight directories and constructs the Hugging Face hub-cache layout so vLLM resolves models locally in air-gapped clusters.\n  3. **Weight verification** (`mods/fes-weights/validate`) — Compares shard files against `model.safetensors.index.json`, checks size parity (1.02 tolerance), and enforces `hf_quant_config.json` for NVFP4 checkpoints; fails fast on mismatch.\n  4. **Model-specific fix mods** (e.g., `mods/fix-qwen3-next-autoround/`) — Applies AST-based rewrites and patches that restore correct quantization, chat templates, and architecture support.\n  5. **Feature enablement mods** (e.g., `mods/diffusiongemma/`) — Applies feature patches with legacy/main fallbacks, then optionally launches the server with a custom Jinja chat template.\n  6. **Cluster launch** (`launch-cluster.sh`) — Starts head and worker nodes across the Spark cluster using the patched container image.\n  7. **Attention kernel dispatch** (`mods/inkling-sm12-paged-kv/patch_inkling.py`) — Injects a cached `_use_sm12_paged_kv` capability check into vLLM's NVIDIA FA4 dispatch so compute-capability 12.x devices route to the vendored kernel package.\n\n---\n\n## 2. Other Important Workflows\n\n### 2.1 Custom Container Image Build Flow\n\n- **Description**: Builds the custom vLLM Docker image (base or MXFP4 variant) by installing vLLM and FlashInfer, applying the shared build-time patch library, building FlashInfer JIT-cache provider wheels, vendoring the SM120 FlashAttention kernel package, and validating wheels for reproducibility.\n\n- **Flow Diagram**:\n```mermaid\ngraph TD\n    BuildStart[Invoke Dockerfile build] --> JIT[Build FlashInfer JIT provider wheels]\n    JIT --> CorePatches[Apply vLLM core patch set]\n    CorePatches --> Vendor[Vendor SM120 FlashAttention package]\n    Vendor --> Validate[Validate wheels and pin CUTLASS DSL]\n    Validate --> Image[Produce base or MXFP4 image]\n```\n\n- **Key Steps**:\n  1. `build-and-copy.sh` triggers the Dockerfile build (base or MXFP4 variant).\n  2. `docker/build_flashinfer_jit_providers.sh` builds FlashInfer JIT-cache provider wheels for target CUDA architectures.\n  3. `docker/patch_vllm_flashinfer_b12x_swigluoai.py` applies idempotent patches (SwiGLU-OAI plumbing, cache integrity, memory trims, top-k controls) — fails on unknown source shapes to avoid corrupting builds.\n  4. The vendored `inkling_sm120_fa4` kernel package is copied into the image.\n  5. `docker/validate_flashinfer_wheels.py` validates built wheels and pins CUTLASS DSL versions.\n\n---\n\n### 2.2 Memory Profiling & Capacity Validation Flow\n\n- **Description**: Profiles a model's startup memory on the target cluster, consolidates per-rank events into a profile card, and validates that the deployment fits available host memory — enabling topology-aware host selection before cluster launch.\n\n- **Flow Diagram**:\n```mermaid\ngraph TD\n    Probe[Install startup probe in vLLM] --> Record[Record per-phase memory events]\n    Record --> Collect[Collect per-rank JSONL]\n    Collect --> Card[Generate YAML profile card]\n    Card --> Capacity[Estimate RAM and KV-cache budget]\n    Capacity --> Report[Generate capacity report]\n    Report --> HostSelect[Select topology-appropriate hosts]\n    HostSelect --> Deploy[Proceed with cluster deployment]\n```\n\n- **Key Steps**:\n  1. **Startup probe** (`mods/memory-profile/probe.py`) — Installed as `vllm._spark_memory_profile`; records phase-by-phase native heap, CUDA memory, and model/KV inventory during worker startup.\n  2. **Profile collection** (`profile_card.py`) — Merges per-rank event JSONL files into a consolidated model/recipe YAML profile card.\n  3. **Capacity analysis** (`capacity.py`) — Estimates startup RAM, budgets KV cache, and validates deployment against available host memory per topology.\n  4. **Reporting** (`report.py`) — Generates the human-readable capacity report.\n  5. **Host selection** — Capacity findings inform topology-appropriate host choices when launching cluster deployments via `run-recipe.sh`.\n\n---\n\n### 2.3 Attention Kernel Dispatch on Blackwell Flow\n\n- **Description**: At inference startup, vLLM's FlashAttention 4 dispatch is patched so compute-capability 12.x devices route attention work to the vendored paged-KV kernel. The kernel interface validates inputs, computes tile heuristics, schedules persistent work tiles, and executes architecture-specific forward/MLA/backward kernels.\n\n- **Flow Diagram**:\n```mermaid\ngraph TD\n    Patch[Patch FA4 dispatch source] --> Check[Inject _use_sm12_paged_kv check]\n    Check --> Interface[Validate inputs and compute tile heuristics]\n    Interface --> Schedule[Schedule persistent work tiles]\n    Schedule --> Select[Select arch-specific kernel]\n    Select --> Fwd[SM90/SM100/SM120 forward kernel]\n    Select --> MLA[MLA forward kernel]\n    Select --> Bwd[Backward gradient kernel]\n    Fwd --> Split{Split-KV needed?}\n    Split -->|Yes| Combine[Split-K combine kernel]\n    Split -->|No| Output[Produce attention output]\n    Combine --> Output\n```\n\n- **Key Steps**:\n  1. **Dispatch patching** (`patch_inkling.py`) — AST-based validation and idempotent single-occurrence text replacement injects the capability check, guarded by a mod marker.\n  2. **Kernel interface** (`interface.py`) — Parses device architecture, validates head dims, computes tile sizes and split-KV heuristics, resolves causal/local window parameters, and wraps kernels in `FlashAttnFunc` / `FlashAttnVarlenFunc` autograd Functions.\n  3. **Tile scheduling** (`tile_scheduler.py`) — Distributes work across persistent kernel tiles using CLC-based scheduling modes.\n  4. **Kernel execution** — Architecture-selected forward (SM90/SM100/SM120/MLA), backward, or split-K combine kernels execute the attention computation.\n\n---\n\n### 2.4 Model Support Enablement Flow\n\n- **Description**: The workflow for onboarding a new or emerging model architecture. A developer authors a fix or feature mod (patch, diff, or chat template), registers it in a recipe, and the recipe runner applies it before the vLLM server starts.\n\n- **Flow Diagram**:\n```mermaid\ngraph TD\n    Author[Author patch, diff, or chat template] --> Orchestrator[Write run.sh orchestrator with fallbacks]\n    Orchestrator --> Register[Register mod in recipe YAML]\n    Register --> Run[Run recipe]\n    Run --> Apply[Apply mods in order]\n    Apply --> Server[Start vLLM server with corrected config]\n```\n\n- **Key Steps**:\n  1. Author model-support patches (e.g., `diffusiongemma-support.patch`) and a `run.sh` orchestrator with legacy/main fallbacks.\n  2. Provide corrected chat templates (e.g., `chat_template.jinja` for Qwen3.5 with multimodal validation) or AST-based rewrites.\n  3. Reference the mod from a recipe YAML describing model, quantization, and cluster size.\n  4. Run the recipe so mods apply in order and the server starts with the custom template.\n\n---\n\n## 3. Workflow Insights\n\n### Operational Patterns\n- **Non-invasive source patching as the dominant interaction style**: Nearly all customization is achieved through idempotent AST/text rewrites of the installed vLLM package, each guarded by a mod marker for traceability and double-patch prevention. This keeps the upstream dependency unmodified in version control while allowing deep behavioral changes.\n- **Recipes as the composition root**: YAML recipes are the single user-facing artifact that binds mods, weights, kernels, and cluster launch together. All supporting workflows (weight verification, memory profiling, kernel dispatch) are orchestrated through recipe execution.\n- **Two-phase patching**: Engine fixes are split by execution time — build-time patches under `docker/` are baked into the image, while runtime mods under `mods/fix-*` are applied at container start. This is a conceptual \"Engine Compatibility\" concern physically separated by when they execute.\n- **Fail-fast validation gates**: Both weight verification and build-time patch scripts fail fast on unexpected input (unknown source shapes, shard mismatches) to prevent corrupted builds and unsafe serving states.\n\n### Workflow Dependencies\n- **Deployment depends on Image Build**: The container image must be built with all build-time patches and vendored kernels before any recipe can run.\n- **Deployment depends on Weight Verification**: Recipe execution halts if staged weights fail integrity checks — a hard data dependency.\n- **Deployment informs and is informed by Capacity Profiling**: Capacity findings guide host topology selection; profiling itself requires running a recipe-modified vLLM instance.\n- **Kernel Dispatch is a runtime sub-flow of Deployment**: The FA4 dispatch patch is applied during engine startup as part of the deployment sequence.\n\n### Potential Optimization Opportunities\n- **Unify the split Engine Compatibility concern**: Build-time (`docker/`) and runtime (`mods/fix-*`) patches target the same installed vLLM tree. Consolidating them into a single patch manifest with execution-phase annotations would reduce drift and simplify auditing.\n- **Profile-card reuse across recipes**: Capacity profile cards are keyed by model/recipe; caching and auto-retrieving existing cards before re-profiling could save significant cluster time for repeated deployments.\n- **Patch validation standardization**: Patch scripts use varying validation strategies (AST vs. text replacement vs. git apply). Standardizing on AST-based validation with mod markers across all patchers would improve robustness against upstream vLLM changes.\n\n### Gaps and Observations\n- The system context documentation lists \"Spark cluster orchestration and management\" as out of scope, yet `launch-cluster.sh` and `autodiscover.sh` handle node bootstrap — this is a thin orchestration layer consistent with the boundary but worth noting for clarity.\n- The vendored kernel package spans SM80/SM90/SM100/SM120 architectures, while the project scope emphasizes Blackwell (SM100/SM120) — the SM80/SM90 kernels serve as fallbacks and training-support paths, extending the documented hardware target.\n- No explicit rollback workflow is documented for failed mod application at runtime; idempotent patching mitigates this, but a formal revert path would strengthen operational safety."
 ```
 
 ### Code Insights Data
@@ -914,54 +834,113 @@ Code analysis results from preprocessing phase, including definitions of functio
 {
   "directory_insights": [
     {
-      "file_count": 19,
+      "file_count": 23,
       "file_insights": [
+        {
+          "code_purpose": "config",
+          "dependencies": [],
+          "detailed_description": "This is a patch file (not directly executable) that modifies B12X source code to add cache integrity checks and durable publication of CuTe cache artifacts. It introduces a new cache_integrity.py module and reuses existing locked compilation paths for repair, and adds fsync for temporary files.",
+          "file_path": ".litho/tree/repo/docker/b12x-cache-integrity.patch",
+          "importance_score": 0.7,
+          "interfaces": [],
+          "name": "b12x-cache-integrity.patch",
+          "responsibilities": [
+            "Validate cache artifacts integrity",
+            "Prevent incomplete cache artifacts from being used",
+            "Ensure durable publication via fsync",
+            "Integrate repair through locked compilation"
+          ],
+          "source_summary": "The patch adds a new file b12x/_lib/cache_integrity.py (content shown truncated) that implements validation and repair logic for CuTe cache artifacts, and modifies existing compilation paths to use locked mode for repair and add durability guarantees via fsync.",
+          "summary": "A patch file that validates and durably publishes CuTe cache artifacts in B12X, ensuring incomplete artifacts are repaired and properly synced."
+        },
+        {
+          "code_purpose": "config",
+          "dependencies": [],
+          "detailed_description": "This shell script builds the FlashInfer JIT-cache provider wheels for the specified CUDA architectures. It is designed to run from a FlashInfer checkout, checks for the legacy monolithic wheel path, and uses the provided Python interpreter and output directory to build the providers.",
+          "file_path": ".litho/tree/repo/docker/build_flashinfer_jit_providers.sh",
+          "importance_score": 0.9,
+          "interfaces": [],
+          "name": "build_flashinfer_jit_providers.sh",
+          "responsibilities": [
+            "Build FlashInfer JIT cache provider wheels",
+            "Handle legacy monolithic wheel case",
+            "Support architecture-specific building"
+          ],
+          "source_summary": "The script checks for the presence of flashinfer-jit-cache-provider directory, requires FLASHINFER_JIT_CACHE_PROVIDER_ARCHS environment variable and takes prepared python and wheel dir as arguments, then builds in that directory.",
+          "summary": "Builds FlashInfer JIT-cache provider wheels for specified CUDA architectures."
+        },
         {
           "code_purpose": "tool",
           "dependencies": [
             {
-              "dependency_type": "use",
+              "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "flashinfer-jit-cache-provider",
+              "name": "argparse",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "importlib.util",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "pathlib",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "subprocess",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "Invoked from a FlashInfer checkout prior to building its JIT-cache shim. It exits early for older refs that build a monolithic JIT-cache wheel, otherwise builds the flashinfer-jit-cache-provider subproject for the CUDA architectures specified via FLASHINFER_JIT_CACHE_PROVIDER_ARCHS.",
-          "file_path": ".litho/tree/repo/docker/build_flashinfer_jit_providers.sh",
-          "importance_score": 0.55,
+          "detailed_description": "This Python script applies the temporary upstream CuTe cache-integrity fix to installed B12X. It uses git apply to apply the patch file, checks for existing application to allow idempotent reapply, and raises errors if the patch cannot be applied safely.",
+          "file_path": ".litho/tree/repo/docker/patch_b12x_cache_integrity.py",
+          "importance_score": 0.8,
           "interfaces": [
             {
               "description": null,
-              "interface_type": "script",
-              "name": "main (script entry)",
+              "interface_type": "function",
+              "name": "apply_patch",
               "parameters": [
                 {
                   "description": null,
                   "is_optional": false,
-                  "name": "build_python",
-                  "param_type": "string (argv[1])"
-                },
-                {
-                  "description": null,
-                  "is_optional": false,
-                  "name": "wheel_dir",
-                  "param_type": "string (argv[2])"
+                  "name": "root",
+                  "param_type": "Path"
                 }
               ],
-              "return_type": "int (exit code)",
+              "return_type": "bool",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "main",
+              "parameters": [],
+              "return_type": "None",
               "visibility": ""
             }
           ],
-          "name": "build_flashinfer_jit_providers.sh",
+          "name": "patch_b12x_cache_integrity.py",
           "responsibilities": [
-            "Gate on presence of flashinfer-jit-cache-provider directory",
-            "Validate required environment variables and arguments",
-            "Build JIT-cache provider wheels for target CUDA architectures"
+            "Apply cache-integrity patch",
+            "Check patch applicability",
+            "Support idempotent reapplication"
           ],
-          "source_summary": "A bash script with 'set -euo pipefail' that requires FLASHINFER_JIT_CACHE_PROVIDER_ARCHS, a build Python path, and a wheel output directory as inputs. It changes into the flashinfer-jit-cache-provider directory and builds provider wheels matching the shim's whitespace-separated arch list.",
-          "summary": "Shell script that builds FlashInfer JIT-cache provider wheels before the JIT-cache shim build."
+          "source_summary": "The script defines apply_patch(root) that checks for the existence of 'b12x/_lib/compile_plan.py' to detect PyPI version, then executes git apply with the patch file. It handles idempotency and returns boolean success, and main() parses arguments and calls apply_patch.",
+          "summary": "Applies the b12x-cache-integrity.patch to an installed B12X source tree, with idempotent apply and reapply support."
         },
         {
           "code_purpose": "tool",
@@ -994,14 +973,14 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "pathlib.Path",
+              "name": "pathlib",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "Replaces a raw torch.cuda.mem_get_info-based free-memory computation with vLLM's MemorySnapshot-based accounting, sharing UMA accounting and CUDA-on-WSL policy. Implemented as an AST-based source patcher with a CLI entry point.",
+          "detailed_description": "This script modifies InstantTensor source code to replace direct torch.cuda.mem_get_info() calls with vLLM's MemorySnapshot utility, which accounts for UMA memory and CUDA-on-WSL policies. It performs an AST-based exact match replacement on the target source.",
           "file_path": ".litho/tree/repo/docker/patch_instanttensor_vllm_memory.py",
-          "importance_score": 0.5,
+          "importance_score": 0.75,
           "interfaces": [
             {
               "description": null,
@@ -1029,12 +1008,12 @@ Code analysis results from preprocessing phase, including definitions of functio
           ],
           "name": "patch_instanttensor_vllm_memory.py",
           "responsibilities": [
-            "Locate InstantTensor memory query code",
-            "Rewrite free-memory computation to use vLLM MemorySnapshot",
-            "Provide CLI entry point for applying the patch"
+            "Replace memory query logic",
+            "Integrate vLLM memory utilities",
+            "Apply patch to source file"
           ],
-          "source_summary": "Defines ORIGINAL and PATCHED source snippets and functions patch_memory_query(source) and main(). It locates the mem_get_info usage in InstantTensor source and rewrites it to import vllm.utils.mem_utils.MemorySnapshot for budget computation.",
-          "summary": "Patches InstantTensor source to use vLLM's platform-aware free-memory accounting for its memory budget."
+          "source_summary": "The script defines patch_memory_query(source) that replaces the original memory query block with a new block using MemorySnapshot from vllm.utils.mem_utils, and main() applies this to a target file.",
+          "summary": "Patches InstantTensor to use vLLM's platform-aware memory accounting for memory budget calculation."
         },
         {
           "code_purpose": "tool",
@@ -1067,14 +1046,14 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "pathlib.Path",
+              "name": "pathlib",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "Adapted from the blackwell-llm-docker recipe, it rewrites the indexed loop over schema.arguments in PyTorch's fill_defaults into a direct iteration to reduce lookup overhead. Uses AST parsing to locate and validate the target code shape.",
+          "detailed_description": "This patch script optimizes a PyTorch source code loop in fill_defaults to avoid repeated lookups of schema.arguments, improving performance. It uses AST matching to find the original pattern and replace it with an optimized version using enumerate.",
           "file_path": ".litho/tree/repo/docker/patch_torch_schema_enumeration.py",
-          "importance_score": 0.45,
+          "importance_score": 0.7,
           "interfaces": [
             {
               "description": null,
@@ -1102,12 +1081,12 @@ Code analysis results from preprocessing phase, including definitions of functio
           ],
           "name": "patch_torch_schema_enumeration.py",
           "responsibilities": [
-            "Locate PyTorch fill_defaults loop",
-            "Rewrite indexed schema.arguments access to direct iteration",
-            "CLI entry point for patch application"
+            "Optimize PyTorch source",
+            "Replace loop construct",
+            "Apply patch"
           ],
-          "source_summary": "Defines ORIGINAL and PATCHED code snippets for the schema.arguments loop, with functions patch_fill_defaults(source), a helper, and main(). The patch replaces range-based indexing with enumerate over schema.arguments.",
-          "summary": "Patches PyTorch's fill_defaults to avoid repeated schema.arguments lookups via enumerate-style iteration."
+          "source_summary": "The script defines patch_fill_defaults that replaces a for loop over schema.arguments with a for loop over enumerate(schema.arguments), and main() applies it to the target file.",
+          "summary": "Optimizes PyTorch's fill_defaults by caching schema.arguments enumeration."
         },
         {
           "code_purpose": "tool",
@@ -1124,23 +1103,23 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "pathlib.Path",
+              "name": "pathlib",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "A simple string-replacement patcher targeting vllm/model_executor/layers/quantization/auto_gptq.py. It conditionally drops w1_zp/w2_zp zero-point arguments when the quant config is symmetric, avoiding incorrect zero-point passing.",
+          "detailed_description": "This script fixes a bug in vLLM where AutoGPTQ MoE layers incorrectly pass zero-points even for symmetric quantization. It replaces the bad code block with a conditional that only passes zero-points when not in symmetric mode.",
           "file_path": ".litho/tree/repo/docker/patch_vllm_autogptq_symmetric_moe_qzeros.py",
-          "importance_score": 0.4,
+          "importance_score": 0.6,
           "interfaces": [],
           "name": "patch_vllm_autogptq_symmetric_moe_qzeros.py",
           "responsibilities": [
-            "Locate AutoGPTQ MoE zero-point passing code",
-            "Make zero-point arguments conditional on symmetric quantization",
-            "Apply idempotent string replacement to target file"
+            "Fix AutoGPTQ quantization",
+            "Conditional zero-point passing",
+            "Apply patch to vLLM source"
           ],
-          "source_summary": "Takes a source root from argv[1] or cwd, reads auto_gptq.py, and replaces a 'bad' block passing w13_qzeros/w2_qzeros unconditionally with a 'fixed' block that conditionally omits them for symmetric quantization.",
-          "summary": "Script that removes zero-point arguments from AutoGPTQ MoE quantization calls when quantization is symmetric."
+          "source_summary": "The script reads the target file vllm/model_executor/layers/quantization/auto_gptq.py, replaces the hardcoded w1_zp/w2_zp assignments with a conditional based on self.quant_config.",
+          "summary": "Patches vLLM's AutoGPTQ quantization to omit zero-points for symmetric MoE quantization."
         },
         {
           "code_purpose": "tool",
@@ -1173,14 +1152,14 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "pathlib.Path",
+              "name": "pathlib",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "The local-inference-lab B12X branch references _C128A_TOPK_ALIGNMENT without importing it from compressor_utils; this script adds the import. It is gated by an environment flag, idempotent, and strict about the vulnerable source shape so regular vLLM builds remain untouched.",
+          "detailed_description": "This script patches vLLM to import the _C128A_TOPK_ALIGNMENT constant from compressor_utils in the B12X-specific path, ensuring correct top-k width for DeepSeek V4. It is opt-in via environment variable and strictly validates the source to avoid touching regular builds.",
           "file_path": ".litho/tree/repo/docker/patch_vllm_b12x_c128a_topk_alignment.py",
-          "importance_score": 0.5,
+          "importance_score": 0.8,
           "interfaces": [
             {
               "description": null,
@@ -1227,12 +1206,13 @@ Code analysis results from preprocessing phase, including definitions of functio
           ],
           "name": "patch_vllm_b12x_c128a_topk_alignment.py",
           "responsibilities": [
-            "Detect missing _C128A_TOPK_ALIGNMENT binding via AST",
-            "Insert the import from compressor_utils when needed",
-            "Remain opt-in via environment flag and idempotent"
+            "Add missing constant import",
+            "Support C128A alignment",
+            "Opt-in via environment flag",
+            "Idempotent and strict source validation"
           ],
-          "source_summary": "Uses AST analysis with helper predicates module_binds_name and module_constant_is_128 to detect whether the target module already binds the constant. Controlled by a VLLM_* flag; only patches when the constant is missing and equals 128 in compressor_utils.",
-          "summary": "Opt-in patch that imports the missing _C128A_TOPK_ALIGNMENT constant used by the B12X DeepSeek V4 top-k path."
+          "source_summary": "Uses AST to find module-level binds and checks for constant value 128, then inserts an import statement into the module.__init__ or similar. It has logic to detect if the import already exists.",
+          "summary": "Adds missing import for C128A top-k alignment constant in vLLM B12X path."
         },
         {
           "code_purpose": "tool",
@@ -1257,14 +1237,14 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "pathlib.Path",
+              "name": "pathlib",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "Targets model_executor/layers/fused_moe/b12x.py and modifies the _PreparedMoECall class so MoE trial tensors are not retained in serving plans. Uses AST parsing to find class methods and applies a marked, idempotent transformation.",
+          "detailed_description": "This script modifies vLLM's fused_moe/b12x.py to ensure that MoE trial tensors are released after being used, preventing them from being retained in serving plans. It uses AST to find the _PreparedMoECall class and adds a marker to keep owners out of plans.",
           "file_path": ".litho/tree/repo/docker/patch_vllm_b12x_moe_tuning_memory.py",
-          "importance_score": 0.5,
+          "importance_score": 0.8,
           "interfaces": [
             {
               "description": null,
@@ -1292,12 +1272,12 @@ Code analysis results from preprocessing phase, including definitions of functio
           ],
           "name": "patch_vllm_b12x_moe_tuning_memory.py",
           "responsibilities": [
-            "Locate _PreparedMoECall class in b12x.py",
-            "Restrict MoE trial tensor lifetime to call scope",
-            "Mark and keep the patch idempotent"
+            "Reduce MoE tuning memory",
+            "Release trial tensors",
+            "Apply AST-based patch"
           ],
-          "source_summary": "Defines TARGET_REL and a 'spark-vllm-docker' MARKER, with patch_source(source) parsing the AST to locate _PreparedMoECall methods and rewriting tensor ownership, plus a main() CLI entry.",
-          "summary": "Patches b12x fused-MoE code so trial tensors are kept alive only for the lifetime of their calls, reducing memory retention."
+          "source_summary": "The patch_source function parses the target file, finds _PreparedMoECall class, and likely adds cleanup code or modifies ownership to release tensors after call.",
+          "summary": "Patches B12X MoE tuning to keep trial tensors alive only for the call lifetime, reducing memory usage."
         },
         {
           "code_purpose": "tool",
@@ -1314,23 +1294,23 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "pathlib.Path",
+              "name": "pathlib",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "Targets vllm/v1/worker/gpu/attn_utils.py and widens the causal parameter type from bool | Mapping[int, bool] to also accept torch.Tensor, updating the group-causal handling accordingly. A simple string-replacement patcher.",
+          "detailed_description": "This script modifies vLLM's attention utilities to accept torch.Tensor as a valid causal mask type, and adjusts the group_causal determination accordingly. It fixes a bug introduced by a vLLM PR.",
           "file_path": ".litho/tree/repo/docker/patch_vllm_diffusion_tensor_causal.py",
-          "importance_score": 0.4,
+          "importance_score": 0.6,
           "interfaces": [],
           "name": "patch_vllm_diffusion_tensor_causal.py",
           "responsibilities": [
-            "Widen causal mask parameter type to include torch.Tensor",
-            "Update group_causal handling for tensor masks",
-            "Apply targeted string replacement to attn_utils.py"
+            "Allow Tensor causal masks",
+            "Update type signatures",
+            "Apply patch"
           ],
-          "source_summary": "Takes a source root argument, reads attn_utils.py, and replaces the bad causal signature and group_causal computation with versions supporting torch.Tensor masks for DiffusionGemma.",
-          "summary": "Allows DiffusionGemma Tensor causal masks in vLLM's attention utilities after upstream PR #47914."
+          "source_summary": "Replaces function signature and group_causal condition to include torch.Tensor, allowing Tensor causal masks.",
+          "summary": "Patches vLLM to allow Tensor-type causal masks for DiffusionGemma."
         },
         {
           "code_purpose": "tool",
@@ -1347,23 +1327,22 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "pathlib.Path",
+              "name": "pathlib",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "Targets vllm/model_executor/layers/minimax_rms_norm/rms_norm_tp.py and replaces the _MINIMAX_FUSED_AR_RMS_QK operator lookup with None, effectively disabling the fused allreduce RMS QK path that misbehaves on multi-node Spark.",
+          "detailed_description": "This script sets the _MINIMAX_FUSED_AR_RMS_QK to None to disable the fused operation, likely due to incompatibility with multi-node setups.",
           "file_path": ".litho/tree/repo/docker/patch_vllm_disable_minimax_qk_rmsnorm_ipc.py",
-          "importance_score": 0.35,
+          "importance_score": 0.5,
           "interfaces": [],
           "name": "patch_vllm_disable_minimax_qk_rmsnorm_ipc.py",
           "responsibilities": [
-            "Neutralize MiniMax fused AR RMS QK operator lookup",
-            "Target multi-node DGX Spark incompatibility",
-            "Apply simple string replacement to rms_norm_tp.py"
+            "Disable CUDA IPC fusion",
+            "Modify runtime setting"
           ],
-          "source_summary": "Reads rms_norm_tp.py from the given source root and replaces the getattr(torch.ops._C, 'minimax_allreduce_rms_qk', None) lookup with a None assignment annotated as disabled for DGX Spark multi-node.",
-          "summary": "Disables the MiniMax QK RMSNorm CUDA IPC fusion on multi-node DGX Spark setups."
+          "source_summary": "Replaces the assignment of _MINIMAX_FUSED_AR_RMS_QK with None, adding a comment about disabling for DGX Spark.",
+          "summary": "Disables MiniMax QK RMSNorm CUDA IPC fusion for multi-node DGX Spark."
         },
         {
           "code_purpose": "tool",
@@ -1372,7 +1351,7 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "argparse",
+              "name": "ast",
               "path": null,
               "version": null
             },
@@ -1380,21 +1359,29 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "pathlib.Path",
+              "name": "sys",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "pathlib",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "The largest and most complex patch script in the directory (349 lines, complexity 49). It teaches the production backend to pass SwiGLU-OAI parameters through to FlashInfer and lets the NVFP4 oracle select it when the FlashInfer API exists. It is idempotent, skips refs predating FlashInfer B12x, and fails on unknown source shapes rather than best-effort rewriting.",
+          "detailed_description": "This is the most complex and critical patch script in the directory. It modifies multiple vLLM files to pass SwiGLU-OAI parameters to FlashInfer and allows the NVFP4 oracle to select it. It is idempotent and fails on unknown source shapes to avoid corrupting regular builds.",
           "file_path": ".litho/tree/repo/docker/patch_vllm_flashinfer_b12x_swigluoai.py",
-          "importance_score": 0.65,
+          "importance_score": 1.0,
           "interfaces": [
             {
               "description": null,
               "interface_type": "class",
               "name": "PatchError",
               "parameters": [],
-              "return_type": null,
+              "return_type": "class",
               "visibility": ""
             },
             {
@@ -1486,13 +1473,13 @@ Code analysis results from preprocessing phase, including definitions of functio
           ],
           "name": "patch_vllm_flashinfer_b12x_swigluoai.py",
           "responsibilities": [
-            "Patch FlashInfer utility code for SwiGLU-OAI parameter passing",
-            "Patch expert and NVFP4 oracle selection logic",
-            "Enforce strict, single-match, idempotent replacements with PatchError",
-            "Skip inapplicable refs and fail loudly on unknown shapes"
+            "Apply FlashInfer compatibility patch",
+            "Pass SwiGLU-OAI parameters",
+            "Enable NVFP4 oracle selection",
+            "Maintain idempotency and strictness"
           ],
-          "source_summary": "Defines a PatchError class, a replace_once helper enforcing single-match replacement, and three patch functions (patch_flashinfer_util, patch_expert, patch_oracle) that each transform a different vLLM source area, orchestrated by main().",
-          "summary": "Applies the runtime subset of vLLM PR #47392 needed for FlashInfer B12x SwiGLU-OAI support."
+          "source_summary": "Defines PatchError class, replace_once helper, patch_flashinfer_util, patch_expert, patch_oracle, and main. Uses exact string replacement with validation to apply the patch.",
+          "summary": "Applies the runtime subset of vLLM PR #47392 to teach FlashInfer B12x to pass SwiGLU-OAI parameters."
         },
         {
           "code_purpose": "tool",
@@ -1509,23 +1496,23 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "pathlib.Path",
+              "name": "pathlib",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "Targets vllm/v1/spec_decode/llm_base_proposer.py and modifies the share_embeddings guard that assigns draft_embed from embed_tokens, allowing Gemma4 MTP to proceed despite differing embedding widths. A simple string-replacement patcher.",
+          "detailed_description": "This script modifies vLLM's llm_base_proposer.py to make the embedding-sharing guard more flexible, preventing type-check failures when the embedding tensors are not standard tensors (e.g., in Gemma4 MTP).",
           "file_path": ".litho/tree/repo/docker/patch_vllm_gemma4_mtp_embedding_share.py",
-          "importance_score": 0.4,
+          "importance_score": 0.6,
           "interfaces": [],
           "name": "patch_vllm_gemma4_mtp_embedding_share.py",
           "responsibilities": [
-            "Locate EAGLE embedding sharing guard",
-            "Relax width check for Gemma4 MTP compatibility",
-            "Apply targeted replacement to llm_base_proposer.py"
+            "Fix embedding sharing guard",
+            "Support non-Tensor embeddings",
+            "Apply patch to spec decode"
           ],
-          "source_summary": "Reads llm_base_proposer.py from the source root and replaces the strict embedding-width sharing guard block with a relaxed version compatible with Gemma4 MTP.",
-          "summary": "Relaxes the EAGLE embedding-width guard so it does not break Gemma4 MTP embedding sharing."
+          "source_summary": "Replaces the code that assumes embed_tokens is a torch.Tensor with a more permissive guard.",
+          "summary": "Fixes EAGLE embedding-width guard that breaks Gemma4 MTP."
         },
         {
           "code_purpose": "tool",
@@ -1542,21 +1529,21 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "pathlib.Path",
+              "name": "pathlib",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "Targets vllm/v1/worker/gpu/cudagraph_utils.py and modifies the profiling flow to isolate speculator graph pools, saving and restoring original pools around profiling. Uses anchored, marked, idempotent replacements with a PatchError for unexpected shapes.",
+          "detailed_description": "This script patches vLLM's cudagraph_utils.py to isolate speculator graphs by capturing and restoring the original memory pools during profiling. It adds a marker comment and modifies the profiling context.",
           "file_path": ".litho/tree/repo/docker/patch_vllm_mrv2_speculator_cudagraph_pool.py",
-          "importance_score": 0.55,
+          "importance_score": 0.75,
           "interfaces": [
             {
               "description": null,
               "interface_type": "class",
               "name": "PatchError",
               "parameters": [],
-              "return_type": null,
+              "return_type": "class",
               "visibility": ""
             },
             {
@@ -1648,13 +1635,12 @@ Code analysis results from preprocessing phase, including definitions of functio
           ],
           "name": "patch_vllm_mrv2_speculator_cudagraph_pool.py",
           "responsibilities": [
-            "Detect affected profiler code shapes",
-            "Isolate speculator CUDA-graph pools during profiling",
-            "Restore original pools after profiling",
-            "Keep the patch marked and idempotent"
+            "Isolate speculator CUDA graphs",
+            "Preserve memory pools",
+            "Apply patch to cudagraph utils"
           ],
-          "source_summary": "Defines declaration/replacement anchors around the all_wrappers/original_pools block, helper predicates is_fixed and is_affected_profiler, a replace_once helper, patch_source returning (patched, description), and a main() CLI entry.",
-          "summary": "Isolates MRV2 speculator CUDA graphs during memory profiling so they do not share pools with the main model."
+          "source_summary": "Defines is_fixed, is_affected_profiler, replace_once, patch_source, and main. The patch inserts code to preserve original pools and restore them after profiling.",
+          "summary": "Isolates MRV2 speculator graphs during CUDA-graph memory profiling to prevent interference."
         },
         {
           "code_purpose": "tool",
@@ -1679,23 +1665,23 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "pathlib.Path",
+              "name": "pathlib",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "Opt-in via the VLLM_PRESERVE_SM12X_TARGET environment variable; when unset it exits cleanly. When enabled, it patches the top-level CMakeLists.txt so user-selected CUDA 13 Blackwell subarchitecture targets are not overridden by defaults.",
+          "detailed_description": "This script conditionally patches CMakeLists.txt to preserve user-selected SM12x targets (like sm_121) when building with CUDA 13, as default CMake logic may strip them. It is activated by an environment variable.",
           "file_path": ".litho/tree/repo/docker/patch_vllm_preserve_sm12x_target.py",
-          "importance_score": 0.45,
+          "importance_score": 0.6,
           "interfaces": [],
           "name": "patch_vllm_preserve_sm12x_target.py",
           "responsibilities": [
-            "Gate patch execution on VLLM_PRESERVE_SM12X_TARGET env var",
-            "Modify CMakeLists.txt CUDA 13 architecture defaults",
-            "Preserve user-selected Blackwell subarchitecture targets"
+            "Preserve SM12x architecture targets",
+            "Conditional patch based on env var",
+            "Modify CMake configuration"
           ],
-          "source_summary": "Checks the VLLM_PRESERVE_SM12X_TARGET env var against accepted truthy values, then reads CMakeLists.txt and replaces the CUDA 13 default architecture setting to preserve explicit SM12x targets.",
-          "summary": "Preserves explicitly selected CUDA 13 Blackwell subarchitecture (SM12x) build targets in vLLM's CMake configuration."
+          "source_summary": "If VLLM_PRESERVE_SM12X_TARGET is set, it modifies CMakeLists to adjust the default architecture list. Reads and replaces a specific CUDA 13 default set.",
+          "summary": "Prevents vLLM's CMake from overriding explicit CUDA 13 Blackwell subarchitecture targets."
         },
         {
           "code_purpose": "tool",
@@ -1712,23 +1698,23 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "pathlib.Path",
+              "name": "pathlib",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "Targets vllm/model_executor/layers/fused_moe/routed_experts.py and modifies _load_single_value so vector-shaped weight metadata is not collapsed during weight loading. A small string-replacement patcher.",
+          "detailed_description": "This patch fixes a regression in RoutedExperts parameter loading that dropped weight_shape metadata when loading per-expert parameters, important for certain models.",
           "file_path": ".litho/tree/repo/docker/patch_vllm_routed_experts_weight_shape.py",
-          "importance_score": 0.4,
+          "importance_score": 0.6,
           "interfaces": [],
           "name": "patch_vllm_routed_experts_weight_shape.py",
           "responsibilities": [
-            "Locate _load_single_value in routed_experts.py",
-            "Preserve vector weight_shape metadata during loading",
-            "Apply targeted string replacement"
+            "Preserve weight shape metadata",
+            "Fix expert loading",
+            "Apply patch"
           ],
-          "source_summary": "Reads routed_experts.py from the source root and replaces the _load_single_value implementation that directly loads param data, preserving vector weight_shape handling for loaded weights.",
-          "summary": "Preserves vector weight_shape metadata when loading RoutedExperts weights in vLLM's fused MoE layer."
+          "source_summary": "Replaces the _load_single_value method in routed_experts.py to preserve weight_shape when loading weights.",
+          "summary": "Preserves vector weight_shape metadata in vLLM's RoutedExperts loading."
         },
         {
           "code_purpose": "tool",
@@ -1745,23 +1731,23 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "pathlib.Path",
+              "name": "pathlib",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "Targets vllm/model_executor/layers/sparse_attn_indexer.py and modifies the use_cooperative_topk condition to require SM90, preventing the cooperative path from being selected on SM120 hardware where it is unsupported.",
+          "detailed_description": "This script adds a check to the top-k selection logic to only use cooperative top-k on SM90 GPUs, preventing potential errors on newer Blackwell architectures like SM120.",
           "file_path": ".litho/tree/repo/docker/patch_vllm_sm120_cooperative_topk.py",
-          "importance_score": 0.4,
+          "importance_score": 0.6,
           "interfaces": [],
           "name": "patch_vllm_sm120_cooperative_topk.py",
           "responsibilities": [
-            "Locate cooperative top-k enablement condition",
-            "Add SM90-only restriction to the condition",
-            "Apply targeted replacement to sparse_attn_indexer.py"
+            "Restrict cooperative top-k to SM90",
+            "Improve compatibility",
+            "Apply patch to sparse attention"
           ],
-          "source_summary": "Reads sparse_attn_indexer.py from the source root and rewrites the use_cooperative_topk boolean condition, adding a current-platform architecture check limiting it to SM90.",
-          "summary": "Restricts vLLM's cooperative sparse-attention top-k path to SM90 so it is not used on SM120."
+          "source_summary": "Modifies sparse_attn_indexer.py to add a condition that only enables cooperative top-k when the platform is not SM120.",
+          "summary": "Restricts vLLM's cooperative sparse-attention top-k path to SM90 only, avoiding SM120 issues."
         },
         {
           "code_purpose": "tool",
@@ -1786,14 +1772,14 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "pathlib.Path",
+              "name": "pathlib",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "A line/regex-based patcher for vllm/v1/worker/gpu_worker.py that inserts cleanup blocks before KV cache profiling and creation. It is idempotent (checks for existing markers) and one of the larger scripts in the directory (200 lines, complexity 39).",
+          "detailed_description": "This patch adds cleanup of profiling allocations in vLLM's GPU worker before cache creation, improving memory efficiency on DGX Spark. It inserts code to free profiling memory after warmup.",
           "file_path": ".litho/tree/repo/docker/patch_vllm_spark_kv_cache_cleanup.py",
-          "importance_score": 0.6,
+          "importance_score": 0.8,
           "interfaces": [
             {
               "description": null,
@@ -1819,7 +1805,7 @@ Code analysis results from preprocessing phase, including definitions of functio
                   "description": null,
                   "is_optional": false,
                   "name": "patterns",
-                  "param_type": "tuple[str, ...]"
+                  "param_type": "tuple[str, ...]: Any"
                 }
               ],
               "return_type": "tuple[int, re.Match[str]]",
@@ -1855,13 +1841,106 @@ Code analysis results from preprocessing phase, including definitions of functio
           ],
           "name": "patch_vllm_spark_kv_cache_cleanup.py",
           "responsibilities": [
-            "Locate KV cache profiling and creation code in gpu_worker.py",
-            "Insert allocation cleanup before KV cache sizing",
-            "Ensure idempotency via marker detection",
-            "Report patch success/failure"
+            "Clean profiling allocations",
+            "Insert cleanup before KV cache creation",
+            "Patch GPU worker"
           ],
-          "source_summary": "Uses regex helpers find_line, find_first_line, and a closure-based insert_after_docstring to locate functions in gpu_worker.py and inject profiling-allocation cleanup code, tracking changes via a 'changed' flag.",
-          "summary": "Cleans profiling allocations before vLLM sizes and creates the KV cache, improving memory availability on Spark."
+          "source_summary": "Uses regex and line manipulation to find the appropriate location and insert a cleanup block. Defines find_line, find_first_line, insert_after_docstring, and main.",
+          "summary": "Cleans profiling allocations before vLLM sizes and creates the KV cache to reduce memory pressure."
+        },
+        {
+          "code_purpose": "tool",
+          "dependencies": [
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "argparse",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "ast",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "pathlib",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "textwrap",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "This script adds a call to malloc_trim after vLLM's startup GC to return unused heap pages to the OS, reducing memory footprint. It uses AST to insert the trim block into gc_utils.py.",
+          "file_path": ".litho/tree/repo/docker/patch_vllm_startup_heap_trim.py",
+          "importance_score": 0.6,
+          "interfaces": [
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "is_gc_call",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "node",
+                  "param_type": "ast.stmt"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "method",
+                  "param_type": "str"
+                }
+              ],
+              "return_type": "bool",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "patch_source",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "source",
+                  "param_type": "str"
+                }
+              ],
+              "return_type": "str",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "main",
+              "parameters": [],
+              "return_type": "None",
+              "visibility": ""
+            }
+          ],
+          "name": "patch_vllm_startup_heap_trim.py",
+          "responsibilities": [
+            "Trim CPU heap after GC",
+            "Reduce memory footprint",
+            "Apply AST-based patch"
+          ],
+          "source_summary": "Defines is_gc_call, patch_source, and main. The patch inserts a try block with malloc_trim after GC calls in the startup sequence.",
+          "summary": "Trims unused CPU heap pages after vLLM startup garbage collection."
         },
         {
           "code_purpose": "tool",
@@ -1886,21 +1965,21 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "pathlib.Path",
+              "name": "pathlib",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "Targets vllm/model_executor/layers/attention/attention.py and reinstates fallback behavior for sliding-window attention block sizing when the primary backend is unsupported. Uses AST parsing with a marked, idempotent transformation and PatchError for unexpected shapes.",
+          "detailed_description": "This script patches vLLM's attention layer to preserve the fallback for unsupported primary SWA block sizes, ensuring compatibility with certain models. It uses AST to modify the attention backend selection.",
           "file_path": ".litho/tree/repo/docker/patch_vllm_swa_block_size.py",
-          "importance_score": 0.5,
+          "importance_score": 0.7,
           "interfaces": [
             {
               "description": null,
               "interface_type": "class",
               "name": "PatchError",
               "parameters": [],
-              "return_type": null,
+              "return_type": "class",
               "visibility": ""
             },
             {
@@ -1929,13 +2008,12 @@ Code analysis results from preprocessing phase, including definitions of functio
           ],
           "name": "patch_vllm_swa_block_size.py",
           "responsibilities": [
-            "Locate SWA block-size computation in attention.py",
-            "Restore unsupported-primary fallback behavior",
-            "Keep the patch marked and idempotent",
-            "Fail loudly on unexpected source shapes"
+            "Preserve SWA fallback",
+            "Maintain attention compatibility",
+            "Apply AST-based patch"
           ],
-          "source_summary": "Defines TARGET_REL, a 'spark-vllm-docker' MARKER, and an ANCHOR around the page_budget/sw_block_size computation. patch_source parses the AST to locate and rewrite the block-size selection logic; main() drives the CLI.",
-          "summary": "Restores the unsupported-primary SWA block fallback removed by vLLM PR #53007."
+          "source_summary": "Defines PatchError class, patch_source, and main. The patch adds a fallback block size calculation when the primary block size is unsupported.",
+          "summary": "Restores the unsupported-primary SWA block size fallback removed by vLLM PR #53007."
         },
         {
           "code_purpose": "tool",
@@ -1952,23 +2030,22 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "pathlib.Path",
+              "name": "pathlib",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "Targets vllm/_custom_ops.py and corrects the indentation of a return statement inside topk_hash_softplus_sqrt so the torch.ops._moe_C call is not incorrectly skipped or misplaced. A small, focused string-replacement patcher.",
+          "detailed_description": "This script corrects control flow in vLLM's _custom_ops.py to ensure that the XPU-specific branch returns correctly without bypassing fallback logic. It moves a return statement.",
           "file_path": ".litho/tree/repo/docker/patch_vllm_topk_softplus_sqrt_control_flow.py",
-          "importance_score": 0.4,
+          "importance_score": 0.5,
           "interfaces": [],
           "name": "patch_vllm_topk_softplus_sqrt_control_flow.py",
           "responsibilities": [
-            "Locate topk_hash_softplus_sqrt in _custom_ops.py",
-            "Fix misplaced XPU-only return control flow",
-            "Apply targeted string replacement"
+            "Fix control flow",
+            "Apply patch to custom ops"
           ],
-          "source_summary": "Reads _custom_ops.py, locates the topk_hash_softplus_sqrt function via a marker, and replaces the misplaced 'return' + direct-call pattern with a properly indented return followed by the call.",
-          "summary": "Fixes a misplaced XPU-only return statement in vLLM's topk_hash_softplus_sqrt custom op introduced by PR #49408."
+          "source_summary": "Finds the function marker and replaces a misplaced return with a correct one that returns from the XPU block.",
+          "summary": "Fixes a misplaced XPU-only return in vLLM's topk_softplus_sqrt function."
         },
         {
           "code_purpose": "tool",
@@ -2001,14 +2078,14 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "pathlib.Path",
+              "name": "pathlib",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "Targets vLLM's mem_utils and modifies the UMA/integrated-GPU free-memory condition so that on WSL the CUDA memory budget is used rather than host RAM. Uses AST parsing to locate the relevant methods and applies a marked transformation.",
+          "detailed_description": "This script modifies vLLM's memory utilities to exclude WSL environments from UMA memory detection, because CUDA on WSL should use its own memory budget rather than the guest OS's RAM. It patches the condition that enables integrated GPU memory sharing.",
           "file_path": ".litho/tree/repo/docker/patch_vllm_wsl_cuda_uma.py",
-          "importance_score": 0.5,
+          "importance_score": 0.7,
           "interfaces": [
             {
               "description": null,
@@ -2036,13 +2113,12 @@ Code analysis results from preprocessing phase, including definitions of functio
           ],
           "name": "patch_vllm_wsl_cuda_uma.py",
           "responsibilities": [
-            "Locate memory measure methods in vLLM mem_utils",
-            "Exclude WSL from integrated-GPU UMA accounting",
-            "Keep CUDA memory budget on WSL environments",
-            "Provide CLI entry point"
+            "Adjust memory detection for WSL",
+            "Patch UMA conditions",
+            "Apply to vLLM memory utils"
           ],
-          "source_summary": "Defines UMA_CONDITION and WSL_CONDITION expression strings and patch_mem_utils(source), which parses the AST to find memory-measure methods and rewrites the integrated-GPU condition to exclude CUDA-on-WSL; main() drives the CLI.",
-          "summary": "Keeps CUDA's memory budget based on device memory on WSL instead of guest RAM availability in vLLM's memory utilities."
+          "source_summary": "Defines patch_mem_utils that adds a WSL check to the UMA_CONDITION, and main() applies it to the target file.",
+          "summary": "Keeps CUDA's memory budget on WSL instead of using guest RAM availability."
         },
         {
           "code_purpose": "tool",
@@ -2067,14 +2143,14 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "import",
               "is_external": true,
               "line_number": null,
-              "name": "pathlib.Path",
+              "name": "pathlib",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "Regular and B12X vLLM refs carry older exact pins for nvidia-cutlass-dsl; this script rewrites wheel metadata requirement lines so they align with the CUTLASS DSL version installed in the Docker image. It uses a regex over requirement strings and reports the number of replacements.",
+          "detailed_description": "This script updates pinned versions of nvidia-cutlass-dsl packages in vLLM's metadata files (setup.py, pyproject.toml, etc.) to match the version installed in the Docker image, ensuring consistency.",
           "file_path": ".litho/tree/repo/docker/pin_cutlass_dsl.py",
-          "importance_score": 0.45,
+          "importance_score": 0.65,
           "interfaces": [
             {
               "description": null,
@@ -2114,6 +2190,21 @@ Code analysis results from preprocessing phase, including definitions of functio
             },
             {
               "description": null,
+              "interface_type": "method",
+              "name": "replace",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "match",
+                  "param_type": "re.Match[str]"
+                }
+              ],
+              "return_type": "str",
+              "visibility": ""
+            },
+            {
+              "description": null,
               "interface_type": "function",
               "name": "main",
               "parameters": [],
@@ -2123,27 +2214,167 @@ Code analysis results from preprocessing phase, including definitions of functio
           ],
           "name": "pin_cutlass_dsl.py",
           "responsibilities": [
-            "Match nvidia-cutlass-dsl requirement lines in metadata",
-            "Rewrite pins to the installed CUTLASS DSL version",
-            "Report replacement counts and exit status"
+            "Align CUTLASS DSL versions",
+            "Regex-based replacement",
+            "Pin wheel metadata"
           ],
-          "source_summary": "Defines a REQUIREMENT regex matching nvidia-cutlass-dsl variants (including -libs-base/core/cu12/cu13 and [cu13] extras), with pin_text(text, version) performing replacements via a replace() match callback, and main() returning an exit code.",
-          "summary": "Pins nvidia-cutlass-dsl requirement versions in checked-out source metadata to match the image's installed CUTLASS DSL."
+          "source_summary": "Uses regex to find and replace version pins for cutlass DSL packages in requirement strings, with support for optional extras.",
+          "summary": "Pins CUTLASS DSL requirements in vLLM source metadata to match the installed image version."
+        },
+        {
+          "code_purpose": "tool",
+          "dependencies": [
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "argparse",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "email.parser.BytesParser",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "pathlib",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "re",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "sys",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "zipfile",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "This script validates that built FlashInfer JIT-cache provider wheels have correct metadata and architecture tags. It uses only the standard library to avoid heavy dependencies during Docker build.",
+          "file_path": ".litho/tree/repo/docker/validate_flashinfer_wheels.py",
+          "importance_score": 0.7,
+          "interfaces": [
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "normalize_name",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "name",
+                  "param_type": "str"
+                }
+              ],
+              "return_type": "str",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "read_metadata",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "wheel",
+                  "param_type": "Path"
+                }
+              ],
+              "return_type": "object",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "provider_tag",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "architecture",
+                  "param_type": "str"
+                }
+              ],
+              "return_type": "str",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "validate_providers",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "jit_wheel",
+                  "param_type": "Path"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "architectures",
+                  "param_type": "str"
+                }
+              ],
+              "return_type": "list[Path]",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "main",
+              "parameters": [],
+              "return_type": "int",
+              "visibility": ""
+            }
+          ],
+          "name": "validate_flashinfer_wheels.py",
+          "responsibilities": [
+            "Validate wheel metadata",
+            "Check provider tags",
+            "Support build verification"
+          ],
+          "source_summary": "Defines normalize_name, read_metadata, provider_tag, validate_providers, and main. It reads wheel zip metadata and checks provider requirements.",
+          "summary": "Validates FlashInfer JIT-cache provider wheels against expected metadata."
         }
       ],
-      "importance_score": 0.62,
+      "importance_score": 0.9,
       "key_files": [
         "patch_vllm_flashinfer_b12x_swigluoai.py",
+        "build_flashinfer_jit_providers.sh",
+        "patch_vllm_b12x_c128a_topk_alignment.py",
         "patch_vllm_spark_kv_cache_cleanup.py",
-        "patch_vllm_mrv2_speculator_cudagraph_pool.py",
-        "patch_vllm_wsl_cuda_uma.py",
-        "build_flashinfer_jit_providers.sh"
+        "patch_b12x_cache_integrity.py"
       ],
       "name": "docker",
       "path": ".litho/tree/repo/docker",
       "purpose": "other",
       "subdirectory_count": 0,
-      "summary": "The 'docker' directory contains a collection of build-time patch scripts (mostly Python, plus one shell script) used to modify vLLM, FlashInfer, PyTorch, and CUTLASS source code during Docker image construction for a DGX Spark / Blackwell-oriented inference stack. Each script applies a targeted, often idempotent source transformation (via string replacement or AST analysis) to fix upstream bugs, adapt behavior to specific hardware (SM120/SM12x, WSL, multi-node Spark), or enable experimental features (B12X, FlashInfer SwiGLU-OAI, Gemma4 MTP). The files work together as a patch pipeline invoked by the Docker build to produce a customized vLLM runtime."
+      "summary": "This directory contains a comprehensive collection of Python patch scripts for modifying vLLM, B12X, FlashInfer, and PyTorch source code, primarily for Docker container builds on Blackwell GPU (SM12x) and DGX Spark systems. This patches address cache integrity, MoE tuning, CUDA memory management, FlashInfer JIT cache providers, and various vLLM compatibility fixes required for specific model architectures and NVIDIA hardware. The patch scripts work together with the included .patch file and utility scripts to automate source-tree modifications during the Docker build process."
     },
     {
       "file_count": 3,
@@ -3102,6 +3333,136 @@ Code analysis results from preprocessing phase, including definitions of functio
       "file_count": 2,
       "file_insights": [
         {
+          "code_purpose": "entry",
+          "dependencies": [
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "verify.py",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": true,
+              "line_number": null,
+              "name": "bash",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "This bash script runs on every head and worker node before the launch script. It defaults FES_WEIGHTS_DIR to /model, handles optional FES_DRAFT_DIR weights, and invokes verification so vLLM can resolve a model locally rather than querying the Hugging Face hub.",
+          "file_path": ".litho/tree/repo/mods/fes-weights/run.sh",
+          "importance_score": 0.84,
+          "interfaces": [],
+          "name": "run.sh",
+          "responsibilities": [
+            "Verify FES-staged model weights are mounted inside the container",
+            "Create HF hub-cache layout so vllm serve resolves offline",
+            "Support optional draft-model weights via FES_DRAFT_DIR",
+            "Run on head and worker nodes before the launch script executes"
+          ],
+          "source_summary": "The script header documents its purpose and environment variables, then verifies the staged FES weights mount and, when FES_HUB_MODEL is set, reorganizes or links weights into the HF hub-cache layout. The full body is truncated, but the available content confirms it is the mod's node-level activation script.",
+          "summary": "Shell entrypoint for the fes-weights mod; verifies mounted weights and sets up HF hub-cache layout for offline vLLM serving when FES_HUB_MODEL is set."
+        },
+        {
+          "code_purpose": "tool",
+          "dependencies": [
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "json",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "os",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "sys",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "This module ports the FES verify_location checks into Python: it compares actual shard files against model.safetensors.index.json, verifies total size parity within a 1.02 tolerance, and requires hf_quant_config.json for nvfp4 checkpoints. It is intended to be called before model serving and is the core validation logic used by run.sh.",
+          "file_path": ".litho/tree/repo/mods/fes-weights/verify.py",
+          "importance_score": 0.81,
+          "interfaces": [
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "fail",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "reason",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "NoReturn",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "verify",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "path",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "dict",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "main",
+              "parameters": [],
+              "return_type": "None",
+              "visibility": ""
+            }
+          ],
+          "name": "verify.py",
+          "responsibilities": [
+            "Validate shard count against model.safetensors.index.json",
+            "Check total on-disk size against index metadata within tolerance",
+            "Ensure hf_quant_config.json exists for nvfp4 checkpoints",
+            "Print JSON summary on success or a single failure reason on stderr"
+          ],
+          "source_summary": "The file defines fail(), verify(), and main(). fail() writes a reason to stderr and exits with status 1; verify() inspects shard counts, sizes, and quantization config; main() emits a JSON summary on success. Metrics show 77 lines, 3 functions, and complexity 16.0, reflecting multiple validation branches.",
+          "summary": "Standalone Python verifier for a staged model weights directory, reporting success as JSON or failing with a single reason line."
+        }
+      ],
+      "importance_score": 0.76,
+      "key_files": [
+        "run.sh",
+        "verify.py"
+      ],
+      "name": "fes-weights",
+      "path": ".litho/tree/repo/mods/fes-weights",
+      "purpose": "other",
+      "subdirectory_count": 0,
+      "summary": "The `fes-weights` directory is a Litho mod that validates staged model weight directories and prepares them for offline Hugging Face hub resolution. `run.sh` acts as the node-level entrypoint that orchestrates weight verification and hub-cache layout setup, while `verify.py` performs shard, size, and quantization-config checks. These files work together to make `vllm serve <org/model>` work on head and worker nodes without contacting the HF hub."
+    },
+    {
+      "file_count": 2,
+      "file_insights": [
+        {
           "code_purpose": "plugin",
           "dependencies": [
             {
@@ -3743,8 +4104,97 @@ Code analysis results from preprocessing phase, including definitions of functio
       "summary": "This directory is a deployment-time patch kit for running the Qwen3-Coder-Next model on vLLM, containing a startup shell script, two unified diff patches (one fixing a startup crash in the KV cache manager, one reverting a PR that caused MoE slowness), and a Python monkeypatch module that redirects Triton's NullAllocator to PyTorch's CUDA caching allocator. The run.sh entry point applies the patches to the installed vLLM package in site-packages, while the .pth file ensures the allocator monkeypatch is auto-imported at Python startup."
     },
     {
-      "file_count": 1,
+      "file_count": 2,
       "file_insights": [
+        {
+          "code_purpose": "specificfeature",
+          "dependencies": [
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "ast",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "argparse",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "sys",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "Path",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "This script is the core of the fix, using Python's ast module to programmatically locate the Qwen3NextSparseMoeBlock class definition and replace the gate call to use checkpoint-configured quantization. It defines three main functions: gate_call to find the relevant call, patched_text to produce the modified source code, and main for CLI execution.",
+          "file_path": ".litho/tree/repo/mods/fix-qwen3-next-autoround/patch_qwen3_next.py",
+          "importance_score": 0.9,
+          "interfaces": [
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "gate_call",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "source",
+                  "param_type": "str"
+                }
+              ],
+              "return_type": "ast.Call",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "patched_text",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "source",
+                  "param_type": "str"
+                }
+              ],
+              "return_type": "str",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "main",
+              "parameters": [],
+              "return_type": "int",
+              "visibility": ""
+            }
+          ],
+          "name": "patch_qwen3_next.py",
+          "responsibilities": [
+            "Locate and identify the Qwen3NextSparseMoeBlock class in source code",
+            "Detect and replace the gate call to use checkpoint-configured quantization",
+            "Provide command-line interface for applying the patch",
+            "Output patched source code for further use"
+          ],
+          "source_summary": "The script parses the source code to find the Qwen3NextSparseMoeBlock class, locates the gate call, and replaces it with a version that respects the checkpoint's quantization settings. It provides a CLI interface for applying the patch to a vLLM installation.",
+          "summary": "AST-based patch script that modifies the Qwen3NextSparseMoeBlock class to restore checkpoint-configured quantization for the MoE router."
+        },
         {
           "code_purpose": "tool",
           "dependencies": [
@@ -3752,60 +4202,44 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "use",
               "is_external": true,
               "line_number": null,
-              "name": "curl",
+              "name": "python3",
               "path": null,
               "version": null
             },
             {
               "dependency_type": "use",
-              "is_external": true,
+              "is_external": false,
               "line_number": null,
-              "name": "patch",
-              "path": null,
-              "version": null
-            },
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "vllm (installed in /usr/local/lib/python3.12/dist-packages)",
+              "name": "patch_qwen3_next.py",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "This script serves as a runtime hotfix/patch utility for a containerized or deployed vLLM environment. It uses curl to download the patch diff for PR #35156 from the vLLM GitHub repository and applies it in reverse (-R flag) with patch -p1 targeting the installed dist-packages directory. Error handling via set -e and an if/else block ensures the script exits cleanly even if the patch has already been applied or cannot be reversed.",
+          "detailed_description": "This script automates the patching process by finding the active Python interpreter's vLLM package location without importing vLLM (to avoid CUDA initialization). It supports an environment variable override for offline fixture tests and executes the patch script to modify the vLLM source files.",
           "file_path": ".litho/tree/repo/mods/fix-qwen3-next-autoround/run.sh",
-          "importance_score": 0.5,
-          "interfaces": [
-            {
-              "description": null,
-              "interface_type": "script",
-              "name": "main (script execution)",
-              "parameters": [],
-              "return_type": "int (exit code, 0 on success)",
-              "visibility": ""
-            }
-          ],
+          "importance_score": 0.6,
+          "interfaces": [],
           "name": "run.sh",
           "responsibilities": [
-            "Download the diff for vLLM PR #35156 from GitHub",
-            "Reverse-apply the patch to the installed vLLM package in /usr/local/lib/python3.12/dist-packages",
-            "Provide graceful fallback behavior when the patch cannot be reversed",
-            "Report patch application status via console output"
+            "Locate vLLM package path without importing vLLM",
+            "Support environment variable override for test fixtures",
+            "Invoke the patch script to modify vLLM source",
+            "Ensure robust error handling via bash strict mode"
           ],
-          "source_summary": "The script begins with a bash shebang and 'set -e' for fail-fast behavior. It echoes a status message, then uses curl -L to fetch the PR #35156 diff from patch-diff.githubusercontent.com and pipes it to 'patch -p1 -R -d /usr/local/lib/python3.12/dist-packages'. On success it prints 'OK'; on failure it prints a skip message and continues, preventing the script from aborting due to the set -e directive.",
-          "summary": "A bash script that reverts vLLM PR #35156 in the system-installed Python packages to fix Qwen3-Next AutoRound issues. It fetches the PR diff from GitHub and applies it in reverse to /usr/local/lib/python3.12/dist-packages."
+          "source_summary": "The script determines the vLLM package root, validates its existence, and then invokes patch_qwen3_next.py to apply the patch. It uses set -euo pipefail for robust error handling and provides a fallback for test environments.",
+          "summary": "Shell script that locates the vLLM package and applies the patch_qwen3_next.py script to it, with support for offline testing."
         }
       ],
-      "importance_score": 0.45,
+      "importance_score": 0.7,
       "key_files": [
+        "patch_qwen3_next.py",
         "run.sh"
       ],
       "name": "fix-qwen3-next-autoround",
       "path": ".litho/tree/repo/mods/fix-qwen3-next-autoround",
       "purpose": "other",
       "subdirectory_count": 0,
-      "summary": "This directory contains a single operational fix script for a vLLM deployment environment, specifically addressing issues with Qwen3-Next model support when using AutoRound quantization. The run.sh script downloads and reverse-applies the diff of vLLM PR #35156 against the installed Python 3.12 dist-packages, effectively reverting a change that presumably broke Qwen3-Next AutoRound functionality, with graceful handling if the patch cannot be reversed."
+      "summary": "This directory contains a patch script and a runner script that restore checkpoint-configured quantization for the Qwen3-Next MoE router in vLLM. The patch script uses AST analysis to locate and modify the Qwen3NextSparseMoeBlock class, while the runner script sets up the environment and applies the patch to the vLLM package."
     },
     {
       "file_count": 2,
@@ -9871,6 +10305,1607 @@ Code analysis results from preprocessing phase, including definitions of functio
       "summary": "This directory contains a single Bash utility script that patches an installed vLLM installation, specifically targeting gpu_worker.py and cache.py to clean up or modify KV cache pre-allocation behavior. It acts as a deployment/maintenance tool rather than core application logic, validating the presence of target files and a Python interpreter before applying modifications."
     },
     {
+      "file_count": 8,
+      "file_insights": [
+        {
+          "code_purpose": "service",
+          "dependencies": [
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "yaml",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": false,
+              "line_number": null,
+              "name": "report",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "argparse",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "json",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "pathlib",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "This is the analytical heart of the memory-profile subsystem. It provides KV-cache budgeting, peak-host-memory estimation, and topology-aware host selection checks, and emits capacity utilization metrics.",
+          "file_path": ".litho/tree/repo/mods/memory-profile/capacity.py",
+          "importance_score": 0.95,
+          "interfaces": [
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "positive",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "value",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "config",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "rank",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "kv_breakdown",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "model",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "context",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "sequences",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "shared_kv_budget",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "models",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "demands",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "peak_requirement",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "host",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "old_kv",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "new_kv",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "analyze",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "card",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "context",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "reserve",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "select_hosts",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "count",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "config_path",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "explicit",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "probe_host",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "host",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "timeout",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "check_cluster",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "card",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "analysis",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "inventories",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "aggregate",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "key",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "method",
+              "name": "aggregate",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "key",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            }
+          ],
+          "name": "capacity.py",
+          "responsibilities": [
+            "Estimate startup RAM and KV-cache requirements",
+            "Validate Spark deployment host memory capacity",
+            "Compute shared KV budgets and host peak requirements",
+            "Provide CLI-driven host selection and cluster probing"
+          ],
+          "source_summary": "Defines ~23 functions for positive validation, config loading, KV cache breakdown, shared-budget computation, utilization estimation, and cluster analysis. It also includes a TopologyError class and an aggregate helper with a method variant.",
+          "summary": "Core capacity-analysis module that estimates startup RAM requirements and validates a profiled Spark deployment against available host memory."
+        },
+        {
+          "code_purpose": "tool",
+          "dependencies": [
+            {
+              "dependency_type": "import",
+              "is_external": false,
+              "line_number": null,
+              "name": "profile_card",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "tarfile",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "shutil",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "argparse",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "pathlib",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "This utility extracts Docker-copied tar streams from remote/local containers, filters profile files, and invokes profile_card.write_card to consolidate a run.",
+          "file_path": ".litho/tree/repo/mods/memory-profile/collect.py",
+          "importance_score": 0.55,
+          "interfaces": [
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "extract",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "archive",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "destination",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "main",
+              "parameters": [],
+              "return_type": "Any",
+              "visibility": ""
+            }
+          ],
+          "name": "collect.py",
+          "responsibilities": [
+            "Extract memory-profile archives from Docker/SSH",
+            "Filter to directories and regular profile files",
+            "Write consolidated profile card via profile_card.write_card"
+          ],
+          "source_summary": "Implements extract(archive, destination) that unpacks tar streams while ignoring links/devices/owners, and a main() CLI that drives collection and card writing.",
+          "summary": "Collects one memory-profile run from local/SSH containers and writes its profile card."
+        },
+        {
+          "code_purpose": "tool",
+          "dependencies": [
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "ctypes",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "json",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "platform",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "socket",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "Collects host memory, GPU inventory, and system identifiers without initializing CUDA or Torch, enabling lightweight remote capacity checks.",
+          "file_path": ".litho/tree/repo/mods/memory-profile/host_probe.py",
+          "importance_score": 0.6,
+          "interfaces": [
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "inventory",
+              "parameters": [],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "call",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "name",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "args",
+                  "param_type": "tuple"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "method",
+              "name": "call",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "name",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "args",
+                  "param_type": "tuple"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            }
+          ],
+          "name": "host_probe.py",
+          "responsibilities": [
+            "Gather memory and host identifiers",
+            "Collect CUDA device/driver metadata",
+            "Provide JSON inventory for remote SSH usage"
+          ],
+          "source_summary": "Reads /proc/meminfo, gathers CUDA driver/device info via ctypes, and returns a JSON inventory; includes a call wrapper for SSH invocation.",
+          "summary": "Read-only Linux/CUDA inventory probe executable over SSH stdin."
+        },
+        {
+          "code_purpose": "plugin",
+          "dependencies": [
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "ast",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "hashlib",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "json",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "pathlib",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "This script patches the vLLM source tree to insert memory-profile instrumentation markers and worker hooks, enabling runtime memory sampling.",
+          "file_path": ".litho/tree/repo/mods/memory-profile/patch.py",
+          "importance_score": 0.7,
+          "interfaces": [
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "identifier",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "value",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "patched",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "source",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "kind",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "install",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "root",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            }
+          ],
+          "name": "patch.py",
+          "responsibilities": [
+            "Patch vLLM source tree with instrumentation",
+            "Avoid importing vLLM or CUDA during install",
+            "Apply idempotent marker-based modifications"
+          ],
+          "source_summary": "Uses AST-based source rewriting and marker strings to inject the profiler, with functions identifier(), patched(), and install() that handle idempotent installation.",
+          "summary": "Installs the opt-in memory profiler into an existing vLLM package without importing vLLM or initializing CUDA."
+        },
+        {
+          "code_purpose": "plugin",
+          "dependencies": [
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "ctypes",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "functools",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "hashlib",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "json",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "weakref",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "Imported inside vLLM as vllm._spark_memory_profile, it records phase-by-phase memory, native heap, CUDA memory, and model/KV inventory during worker startup. It can also run as a standalone sampler.",
+          "file_path": ".litho/tree/repo/mods/memory-profile/probe.py",
+          "importance_score": 0.9,
+          "interfaces": [
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "scalar",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "value",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "host_memory",
+              "parameters": [],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "process_memory",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "pid",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "native_heap",
+              "parameters": [],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "observe",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "function",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "args",
+                  "param_type": "tuple"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "kwargs",
+                  "param_type": "dict"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "cuda_memory",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "device",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "metadata",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "worker",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "install_worker",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "namespace",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            }
+          ],
+          "name": "probe.py",
+          "responsibilities": [
+            "Instrument vLLM worker startup memory phases",
+            "Sample process, native heap, and CUDA memory",
+            "Record model and KV-cache inventory",
+            "Expose install_worker hook for vLLM namespace"
+          ],
+          "source_summary": "Defines many functions for memory/proc counters, CUDA memory queries, manifest generation, observer context, and worker installation. Includes a Mallinfo2 class and visitor methods for inventorying model/storage objects.",
+          "summary": "Startup instrumentation and standalone CPU-only host sampler that observes vLLM worker memory and CUDA usage."
+        },
+        {
+          "code_purpose": "service",
+          "dependencies": [
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "yaml",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "json",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "Counter",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "pathlib",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "tempfile",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "This module reads per-rank event JSONL, summarizes CUDA and KV memory, computes phase peaks, and writes a consolidated YAML card consumed by capacity analysis and report generation.",
+          "file_path": ".litho/tree/repo/mods/memory-profile/profile_card.py",
+          "importance_score": 0.85,
+          "interfaces": [
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "jsonl",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "path",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "host_directories",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "inputs",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "last",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "rows",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "phase",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "cuda_summary",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "cuda",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "checkpoint",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "row",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "kv_summary",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "kv",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "rank_card",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "events",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "build_card",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "inputs",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "session",
+                  "param_type": "tuple"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "local",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "phase_peak",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "before",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "method",
+              "name": "phase_peak",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "before",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "write_card",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "inputs",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "output",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "session",
+                  "param_type": "tuple"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "local",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "main",
+              "parameters": [],
+              "return_type": "Any",
+              "visibility": ""
+            }
+          ],
+          "name": "profile_card.py",
+          "responsibilities": [
+            "Parse per-rank JSONL event rows",
+            "Compute CUDA and KV-cache summaries",
+            "Build consolidated YAML profile cards",
+            "Provide CLI entry point for card creation"
+          ],
+          "source_summary": "Contains JSONL readers, host-directory discovery, summary builders, rank-card assembly, phase-peak computation, and write_card/main CLI functions for card generation.",
+          "summary": "Merges memory-profile run directories into a model/recipe YAML profile card."
+        },
+        {
+          "code_purpose": "tool",
+          "dependencies": [
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "yaml",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": false,
+              "line_number": null,
+              "name": "profile_card",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "math",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "pathlib",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "urllib",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "This reporting utility converts profile-card data into human-readable Markdown tables and Matplotlib-based charts of CPU and CUDA memory over startup phases.",
+          "file_path": ".litho/tree/repo/mods/memory-profile/report.py",
+          "importance_score": 0.8,
+          "interfaces": [
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "number",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "value",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "amount",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "value",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "divisor",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "unit",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "difference",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "value",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "baseline",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "cell",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "value",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "table",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "headers",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "rows",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "load_card",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "path",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "process_label",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "process",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "api",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "startup_points",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "process",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "host",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "series",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "points",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "field",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "session",
+                  "param_type": "tuple"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "relative",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "baseline",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "host_points",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "card",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "host",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "cpu_stack_series",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "processes",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "host",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "plot_cpu_stack",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "ax",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "processes",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "host",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "rank_count",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "colors",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "markdown_report",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "card",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "graph",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "session",
+                  "param_type": "tuple"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "relative",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "plot_card",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "card",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "output",
+                  "param_type": "Any"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "session",
+                  "param_type": "tuple"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "relative",
+                  "param_type": "Any"
+                }
+              ],
+              "return_type": "Any",
+              "visibility": ""
+            },
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "main",
+              "parameters": [],
+              "return_type": "Any",
+              "visibility": ""
+            }
+          ],
+          "name": "report.py",
+          "responsibilities": [
+            "Render Markdown memory reports",
+            "Plot CPU/CUDA startup memory charts",
+            "Load profile cards and extract series",
+            "Support CLI report generation"
+          ],
+          "source_summary": "Provides number/amount/cell/table helpers, card loading, process/host point extraction, CPU stack series, plot_cpu_stack, markdown_report, and plot_card; main runs report generation.",
+          "summary": "Renders a memory profile card as Markdown and a CPU/CUDA startup chart."
+        },
+        {
+          "code_purpose": "entry",
+          "dependencies": [
+            {
+              "dependency_type": "use",
+              "is_external": true,
+              "line_number": null,
+              "name": "python3",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "patch.py",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": true,
+              "line_number": null,
+              "name": "vllm",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "Bash entry point that sets the vLLM package root, calls patch.py to install instrumentation, and initiates profile collection.",
+          "file_path": ".litho/tree/repo/mods/memory-profile/run.sh",
+          "importance_score": 0.65,
+          "interfaces": [],
+          "name": "run.sh",
+          "responsibilities": [
+            "Locate installed vLLM package root",
+            "Invoke patch.py to install profiler",
+            "Run memory-profile collection pipeline"
+          ],
+          "source_summary": "Uses set -euo pipefail, resolves the module directory and vLLM root via Python importlib, then executes patch.py and the profiler.",
+          "summary": "Shell orchestrator that locates the vLLM package, patches it, and runs the memory profiler."
+        }
+      ],
+      "importance_score": 0.75,
+      "key_files": [
+        "capacity.py",
+        "probe.py",
+        "profile_card.py",
+        "report.py",
+        "patch.py"
+      ],
+      "name": "memory-profile",
+      "path": ".litho/tree/repo/mods/memory-profile",
+      "purpose": "other",
+      "subdirectory_count": 0,
+      "summary": "This directory contains a memory profiling and capacity-planning subsystem for vLLM-on-Spark deployments. It instruments vLLM worker processes to capture CPU/CUDA memory traces, merges collected runs into YAML profile cards, and analyzes those cards to estimate startup RAM requirements and validate cluster capacity. The files form a pipeline: patch/install instrumentation, probe/collect data, build cards, analyze capacity, and render reports."
+    },
+    {
+      "file_count": 1,
+      "file_insights": [
+        {
+          "code_purpose": "tool",
+          "dependencies": [
+            {
+              "dependency_type": "use",
+              "is_external": true,
+              "line_number": null,
+              "name": "bash",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": true,
+              "line_number": null,
+              "name": "vllm",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "This bash script is the only file in the directory and acts as a one-step enabler for fp8 KV cache in MiMo-V2. It documents two upstream vLLM bugs and likely contains a diff or sed/patch commands to modify mimo_v2.py accordingly.",
+          "file_path": ".litho/tree/repo/mods/mimo-diffkv-fp8-kv/run.sh",
+          "importance_score": 0.72,
+          "interfaces": [],
+          "name": "run.sh",
+          "responsibilities": [
+            "Patch vLLM MiMo-V2 to support fp8 KV cache",
+            "Propagate cache_config to Attention()",
+            "Prevent sliding_window fallback on full-attention layers",
+            "Provide runnable mod script for deployment/integration"
+          ],
+          "source_summary": "The script sets strict shell options (set -euo pipefail) and begins with a detailed comment explaining the two verified upstream gaps: (1) mimo_v2.py never passes cache_config to Attention(), so fp8 is ignored; (2) passing cache_config causes Attention() to fall back to sliding_window=128 for full-attention layers, which must be avoided. The remainder of the script presumably applies the required source modifications.",
+          "summary": "Applies a patch/configuration mod to vLLM's MiMo-V2 code to make --kv-cache-dtype fp8 effective by propagating cache_config to Attention() and preventing an unwanted sliding_window fallback."
+        }
+      ],
+      "importance_score": 0.62,
+      "key_files": [
+        "run.sh"
+      ],
+      "name": "mimo-diffkv-fp8-kv",
+      "path": ".litho/tree/repo/mods/mimo-diffkv-fp8-kv",
+      "purpose": "other",
+      "subdirectory_count": 0,
+      "summary": "This directory contains run.sh, a targeted shell script that enables fp8 KV cache support for MiMo-V2 in vLLM by patching how cache_config is passed to Attention(). It addresses two specific upstream gaps and serves as a configuration/patch utility for the inference engine."
+    },
+    {
+      "file_count": 1,
+      "file_insights": [
+        {
+          "code_purpose": "tool",
+          "dependencies": [
+            {
+              "dependency_type": "use",
+              "is_external": true,
+              "line_number": null,
+              "name": "bash",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": true,
+              "line_number": null,
+              "name": "vLLM",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": true,
+              "line_number": null,
+              "name": "transformers",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "This is the only file in the directory and serves as an operational enablement script. It addresses compatibility issues by symlinking weight files into a flat staged directory and generating a corrected config.json.",
+          "file_path": ".litho/tree/repo/mods/mimo-v2.6-flash/run.sh",
+          "importance_score": 0.5,
+          "interfaces": [],
+          "name": "run.sh",
+          "responsibilities": [
+            "Create a loadable staging directory for the DFlash drafter",
+            "Symlink original model weight files into the staged directory",
+            "Generate a sanitized config.json without trailing commas",
+            "Enable vLLM to use the drafter as a draft model"
+          ],
+          "source_summary": "The script begins with strict shell options and a comment explaining the need to stage a DFlash drafter copy. It creates /workspace/MiMo-V2.6-Flash-RL-dflash, symlinks original weight files, and writes a sanitized config to avoid the trailing comma that transformers rejects.",
+          "summary": "Bash script that stages a loadable copy of the MiMo-V2.6-Flash-RL DFlash drafter at /workspace/MiMo-V2.6-Flash-RL-dflash for use with vLLM."
+        }
+      ],
+      "importance_score": 0.45,
+      "key_files": [
+        "run.sh"
+      ],
+      "name": "mimo-v2.6-flash",
+      "path": ".litho/tree/repo/mods/mimo-v2.6-flash",
+      "purpose": "other",
+      "subdirectory_count": 0,
+      "summary": "This directory contains a single deployment helper script that prepares the MiMo-V2.6-Flash-RL DFlash drafter checkpoint for vLLM inference. It stages a loadable copy by symlinking original weight files and writing a sanitized config, working around vLLM's inability to use Hub subdirectories and transformers' strict JSON parsing."
+    },
+    {
       "file_count": 1,
       "file_insights": [
         {
@@ -10367,16 +12402,16 @@ Code analysis results from preprocessing phase, including definitions of functio
       "summary": "The 'use-official-vllm' directory contains a single environment-setup script that adapts official vLLM Docker containers for use with the surrounding cluster infrastructure. run.sh installs missing system packages (git, earlyoom, InstantTensor, SciPy) while preserving the pre-built Torch installation, and fixes NCCL library soname mismatches on DGX Spark hardware. It serves as a compatibility/bootstrap layer rather than containing core business logic."
     },
     {
-      "file_count": 34,
+      "file_count": 36,
       "file_insights": [
         {
           "code_purpose": "config",
           "dependencies": [
             {
               "dependency_type": "use",
-              "is_external": true,
+              "is_external": false,
               "line_number": null,
-              "name": "deepseek-ai/DeepSeek-V4-Flash-0731",
+              "name": "vllm-node-b12x",
               "path": null,
               "version": null
             },
@@ -10384,33 +12419,33 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "use",
               "is_external": false,
               "line_number": null,
-              "name": "vllm-node-b12x",
+              "name": "--exp-b12x",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "Defines a cluster-only serving recipe for the DeepSeek-V4-Flash-0731 model using the vllm-node-b12x container with the --exp-b12x build argument. It specifies default serving parameters such as port 8000 and tensor parallelism settings.",
+          "detailed_description": "This YAML recipe specifies the DeepSeek-V4-Flash-0731 model, the vllm-node-b12x container, and the --exp-b12x build argument for cluster-only deployment. It includes default serving parameters such as port, host, and tensor parallelism, and leaves mods empty with commented-out alternatives.",
           "file_path": ".litho/tree/repo/recipes/deepseek-v4-flash-0731.yaml",
-          "importance_score": 0.6,
+          "importance_score": 0.61,
           "interfaces": [],
           "name": "deepseek-v4-flash-0731.yaml",
           "responsibilities": [
-            "Declare model and container for DeepSeek-V4-Flash-0731 serving",
-            "Enable B12X experimental build flag",
-            "Restrict execution to cluster mode",
-            "Provide default serving parameters"
+            "Declare serving configuration for DeepSeek-V4-Flash-0731",
+            "Enable B12X-optimized build",
+            "Restrict to cluster execution",
+            "Provide default server and parallelism settings"
           ],
-          "source_summary": "Sets recipe metadata (name, description, version 1), model deepseek-ai/DeepSeek-V4-Flash-0731, container vllm-node-b12x, build_args --exp-b12x, cluster_only: true, empty mods list, and defaults including port 8000, host 0.0.0.0, and tensor parallel settings.",
-          "summary": "Recipe for serving DeepSeek-V4-Flash-0731 via vLLM using the B12X-optimized stack on a dual-Spark cluster."
+          "source_summary": "Contains recipe_version, model, container, build_args, cluster_only flag, mods list, and defaults for port, host, and tensor settings.",
+          "summary": "Defines a recipe for serving DeepSeek-V4-Flash-0731 on a dual Spark cluster using the B12X-optimized vLLM container."
         },
         {
           "code_purpose": "config",
           "dependencies": [
             {
               "dependency_type": "use",
-              "is_external": true,
+              "is_external": false,
               "line_number": null,
-              "name": "deepseek-ai/DeepSeek-V4-Flash-Vision-Exp",
+              "name": "vllm-node-b12x",
               "path": null,
               "version": null
             },
@@ -10418,36 +12453,28 @@ Code analysis results from preprocessing phase, including definitions of functio
               "dependency_type": "use",
               "is_external": false,
               "line_number": null,
-              "name": "vllm-node-b12x",
+              "name": "--exp-b12x",
               "path": null,
               "version": null
             }
           ],
-          "detailed_description": "Cluster-only recipe enabling the experimental vision-capable DeepSeek-V4-Flash variant on the B12X-optimized vLLM container. Structure mirrors the base DeepSeek Flash recipe with vision-specific model weights.",
+          "detailed_description": "This recipe configures the vision-capable variant of DeepSeek V4 Flash for cluster-only deployment with the B12X container and build args. It mirrors the standard flash recipe with defaults for port, host, and parallelization.",
           "file_path": ".litho/tree/repo/recipes/deepseek-v4-flash-vision-exp.yaml",
           "importance_score": 0.55,
           "interfaces": [],
           "name": "deepseek-v4-flash-vision-exp.yaml",
           "responsibilities": [
-            "Declare vision-enabled DeepSeek model recipe",
-            "Enable B12X experimental build flag",
+            "Declare serving configuration for the vision variant",
+            "Enable B12X-optimized build",
             "Restrict to cluster execution",
-            "Provide default serving parameters"
+            "Provide default server settings"
           ],
-          "source_summary": "Declares model deepseek-ai/DeepSeek-V4-Flash-Vision-Exp, container vllm-node-b12x, build_args --exp-b12x, cluster_only: true, empty mods, and default port/host/parallelism settings.",
-          "summary": "Recipe for serving DeepSeek-V4-Flash-Vision-Exp with vision support via the B12X stack on a dual-Spark cluster."
+          "source_summary": "Specifies recipe metadata, model ID, container, build args, cluster_only flag, empty mods, and default serving options.",
+          "summary": "Defines a recipe for serving DeepSeek-V4-Flash-Vision-Exp on a dual Spark cluster using the B12X-optimized vLLM container."
         },
         {
           "code_purpose": "config",
           "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "deepseek-ai/DeepSeek-V4-Flash",
-              "path": null,
-              "version": null
-            },
             {
               "dependency_type": "use",
               "is_external": false,
@@ -10457,28 +12484,28 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Cluster-only recipe serving the standard DeepSeek-V4-Flash model on the standard vllm-node container with no mods required. Provides downloadable model support via --download-model and CLI-overridable defaults.",
+          "detailed_description": "This recipe is the base configuration for the DeepSeek-V4-Flash model on a DGX Spark cluster using the standard vllm-node container. It represents the flagship DeepSeek V4 deployment and includes defaults for port, host, and tensor parallelism.",
           "file_path": ".litho/tree/repo/recipes/deepseek-v4-flash.yaml",
-          "importance_score": 0.65,
+          "importance_score": 0.6,
           "interfaces": [],
           "name": "deepseek-v4-flash.yaml",
           "responsibilities": [
-            "Declare base DeepSeek-V4-Flash serving recipe",
-            "Support model download via --download-model",
-            "Restrict to cluster mode",
+            "Declare DeepSeek-V4-Flash model serving",
+            "Use standard vllm-node container",
+            "Restrict to cluster execution",
             "Provide default serving parameters"
           ],
-          "source_summary": "Declares model deepseek-ai/DeepSeek-V4-Flash, container vllm-node, cluster_only: true, empty mods, and default serving settings (port 8000, host, tensor parallelism).",
-          "summary": "Base recipe for serving DeepSeek-V4-Flash with sparse MLA/DeepGEMM experimental SM120 support on a DGX Spark cluster."
+          "source_summary": "Includes recipe_version, name, description, model ID, container, cluster_only flag, empty mods list, and defaults section.",
+          "summary": "Defines a recipe for serving DeepSeek-V4-Flash with sparse MLA/DeepGEMM experimental SM120 support."
         },
         {
           "code_purpose": "config",
           "dependencies": [
             {
               "dependency_type": "use",
-              "is_external": true,
+              "is_external": false,
               "line_number": null,
-              "name": "google/diffusiongemma-26B-A4B-it",
+              "name": "vllm-node",
               "path": null,
               "version": null
             },
@@ -10491,28 +12518,28 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Solo-only recipe serving google/diffusiongemma-26B-A4B-it in BF16 with thinking mode enabled, requiring the mods/diffusiongemma mod. Runs on the standard vllm-node container on a single node.",
+          "detailed_description": "This recipe configures the DiffusionGemma BF16 thinking variant using the diffusiongemma mod and solo-only execution. It enables thinking behavior for the model on a single node.",
           "file_path": ".litho/tree/repo/recipes/diffusion-gemma-bf16-thinking.yaml",
           "importance_score": 0.5,
           "interfaces": [],
           "name": "diffusion-gemma-bf16-thinking.yaml",
           "responsibilities": [
-            "Declare DiffusionGemma BF16 thinking recipe",
-            "Require diffusiongemma mod",
-            "Restrict to solo mode",
-            "Provide default serving parameters"
+            "Configure DiffusionGemma BF16 serving",
+            "Enable Gemma4 thinking",
+            "Restrict to solo node execution",
+            "Apply diffusiongemma mod"
           ],
-          "source_summary": "Declares model google/diffusiongemma-26B-A4B-it, container vllm-node, solo_only: true, and mods including mods/diff (diffusiongemma patch) for thinking/reasoning support.",
-          "summary": "Recipe for serving DiffusionGemma BF16 with Gemma4 thinking enabled on a single node."
+          "source_summary": "Specifies model, container, solo_only flag, and a mods list containing mods/diffusiongemma (truncated in provided content).",
+          "summary": "Defines a recipe for serving DiffusionGemma-4-26B-A4B-IT in BF16 with Gemma4 thinking enabled on a single node."
         },
         {
           "code_purpose": "config",
           "dependencies": [
             {
               "dependency_type": "use",
-              "is_external": true,
+              "is_external": false,
               "line_number": null,
-              "name": "google/diffusiongemma-26B-A4B-it",
+              "name": "vllm-node",
               "path": null,
               "version": null
             },
@@ -10525,28 +12552,28 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Solo-only recipe serving google/diffusiongemma-26B-A4B-it in BF16 with the reasoning parser configured through the mods/diffusiongemma mod. Standard vllm-node container on a single node.",
+          "detailed_description": "This recipe is the non-thinking BF16 variant for DiffusionGemma, applying the diffusiongemma mod for reasoning parsing. It is solo-only and uses the standard vllm-node container.",
           "file_path": ".litho/tree/repo/recipes/diffusion-gemma-bf16.yaml",
           "importance_score": 0.5,
           "interfaces": [],
           "name": "diffusion-gemma-bf16.yaml",
           "responsibilities": [
-            "Declare DiffusionGemma BF16 recipe",
-            "Require diffusiongemma reasoning parser mod",
-            "Restrict to solo mode",
-            "Provide default serving parameters"
+            "Configure DiffusionGemma BF16 serving",
+            "Apply Gemma4 reasoning parser mod",
+            "Restrict to solo node execution",
+            "Provide default settings"
           ],
-          "source_summary": "Declares model google/diffusiongemma-26B-A4B-it, container vllm-node, solo_only: true, and the mods/diffusiongemma mod for reasoning parser support.",
-          "summary": "Recipe for serving DiffusionGemma BF16 with Gemma4 reasoning parser on a single node."
+          "source_summary": "Includes model, container, solo_only flag, mods list with mods/diffusiongemma, and default settings.",
+          "summary": "Defines a recipe for serving DiffusionGemma-4-26B-A4B-IT in BF16 on a single node with a Gemma4 reasoning parser."
         },
         {
           "code_purpose": "config",
           "dependencies": [
             {
               "dependency_type": "use",
-              "is_external": true,
+              "is_external": false,
               "line_number": null,
-              "name": "nvidia/diffusiongemma-26B-A4B-it-NVFP4",
+              "name": "vllm-node",
               "path": null,
               "version": null
             },
@@ -10559,28 +12586,28 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Solo-only recipe serving nvidia/diffusiongemma-26B-A4B-it-NVFP4 with thinking enabled, using the diffusiongemma mod. Runs on the standard vllm-node container.",
+          "detailed_description": "This recipe configures the NVFP4 quantized DiffusionGemma model with thinking enabled, using solo-only execution and the diffusiongemma mod. It targets the nvidia-hosted model repository.",
           "file_path": ".litho/tree/repo/recipes/diffusion-gemma-nvfp4-thinking.yaml",
           "importance_score": 0.5,
           "interfaces": [],
           "name": "diffusion-gemma-nvfp4-thinking.yaml",
           "responsibilities": [
-            "Declare DiffusionGemma NVFP4 thinking recipe",
-            "Require diffusiongemma mod",
-            "Restrict to solo mode",
-            "Provide default serving parameters"
+            "Configure NVFP4 DiffusionGemma serving",
+            "Enable thinking mode",
+            "Restrict to solo execution",
+            "Apply diffusiongemma mod"
           ],
-          "source_summary": "Declares model nvidia/diffusiongemma-26B-A4B-it-NVFP4, container vllm-node, solo_only: true, and mods including the diffusiongemma patch for thinking support.",
-          "summary": "Recipe for serving the NVFP4-quantized DiffusionGemma with thinking enabled on a single node."
+          "source_summary": "Specifies nvidia model ID, vllm-node container, solo_only flag, and mods for diffusiongemma.",
+          "summary": "Defines a recipe for serving DiffusionGemma-26B-A4B-IT-NVFP4 with thinking enabled on a single node."
         },
         {
           "code_purpose": "config",
           "dependencies": [
             {
               "dependency_type": "use",
-              "is_external": true,
+              "is_external": false,
               "line_number": null,
-              "name": "nvidia/diffusiongemma-26B-A4B-it-NVFP4",
+              "name": "vllm-node",
               "path": null,
               "version": null
             },
@@ -10593,31 +12620,23 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Solo-only recipe serving nvidia/diffusiongemma-26B-A4B-it-NVFP4 with the reasoning parser via the mods/diffusiongemma mod. Standard vllm-node container on a single node.",
+          "detailed_description": "This recipe is the non-thinking NVFP4 variant of DiffusionGemma, applying the diffusiongemma mod for reasoning parsing. It is solo-only and uses the standard vllm-node container.",
           "file_path": ".litho/tree/repo/recipes/diffusion-gemma-nvfp4.yaml",
           "importance_score": 0.5,
           "interfaces": [],
           "name": "diffusion-gemma-nvfp4.yaml",
           "responsibilities": [
-            "Declare DiffusionGemma NVFP4 recipe",
-            "Require diffusiongemma reasoning parser mod",
-            "Restrict to solo mode",
-            "Provide default serving parameters"
+            "Configure NVFP4 DiffusionGemma serving",
+            "Apply reasoning parser mod",
+            "Restrict to solo execution",
+            "Provide default settings"
           ],
-          "source_summary": "Declares model nvidia/diffusiongemma-26B-A4B-it-NVFP4, container vllm-node, solo_only: true, and the mods/diffusiongemma mod.",
-          "summary": "Recipe for serving the NVFP4-quantized DiffusionGemma with Gemma4 reasoning parser on a single node."
+          "source_summary": "Includes nvidia model ID, container, solo_only flag, mods list, and default settings for the serving process.",
+          "summary": "Defines a recipe for serving DiffusionGemma-26B-A4B-IT-NVFP4 with a Gemma4 reasoning parser on a single node."
         },
         {
           "code_purpose": "config",
           "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "nvidia/Gemma-4-26B-A4B-NVFP4",
-              "path": null,
-              "version": null
-            },
             {
               "dependency_type": "use",
               "is_external": false,
@@ -10627,31 +12646,23 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Solo-only recipe serving nvidia/Gemma-4-26B-A4B-NVFP4 on the standard vllm-node container. Notes that no legacy TF5 build args are needed since vLLM uses Transformers v5 by default; the tool-parser mod is commented out.",
+          "detailed_description": "This recipe provides the NVFP4 quantized version of Gemma4-26B-A4B, supporting solo-only execution. It notes that vLLM uses Transformers v5 by default, eliminating legacy TF5 build args, and comments out an optional tool parser fix mod.",
           "file_path": ".litho/tree/repo/recipes/gemma4-26b-a4b-nvfp4.yaml",
-          "importance_score": 0.5,
+          "importance_score": 0.58,
           "interfaces": [],
           "name": "gemma4-26b-a4b-nvfp4.yaml",
           "responsibilities": [
-            "Declare Gemma4 NVFP4 serving recipe",
-            "Restrict to solo mode",
+            "Configure NVFP4 Gemma4 serving",
+            "Restrict to solo execution",
             "Document Transformers v5 compatibility",
-            "Provide default serving parameters"
+            "Provide defaults for serving"
           ],
-          "source_summary": "Declares model nvidia/Gemma-4-26B-A4B-NVFP4, container vllm-node, cluster_only: false, solo_only: true, and commented-out mods/fix-gemma4-tool-parser entry.",
-          "summary": "Recipe for serving Gemma4-26B-A4B in NVFP4 quantization on a single node."
+          "source_summary": "Specifies nvidia model ID, vllm-node container, solo_only true, cluster_only false, and commented-out mods.",
+          "summary": "Defines a recipe for serving Gemma4-26B-A4B-NVFP4 in NVFP4 quantization."
         },
         {
           "code_purpose": "config",
           "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "google/gemma-4-26B-A4B-it",
-              "path": null,
-              "version": null
-            },
             {
               "dependency_type": "use",
               "is_external": false,
@@ -10661,30 +12672,22 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Flexible recipe serving google/gemma-4-26B-A4B-it with online FP8 quantization on the standard vllm-node container. Supports both solo and cluster execution with CLI-overridable defaults.",
+          "detailed_description": "This recipe configures the base Gemma4-26B-A4B model using Google's repository, with no execution mode restrictions. It includes default settings for port, host, and tensor parallelism.",
           "file_path": ".litho/tree/repo/recipes/gemma4-26b-a4b.yaml",
-          "importance_score": 0.5,
+          "importance_score": 0.57,
           "interfaces": [],
           "name": "gemma4-26b-a4b.yaml",
           "responsibilities": [
-            "Declare Gemma4 FP8 serving recipe",
-            "Allow both solo and cluster execution",
+            "Configure FP8 Gemma4 serving",
+            "Support both solo and cluster modes",
             "Provide default serving parameters"
           ],
-          "source_summary": "Declares model google/gemma-4-26B-A4B-it, container vllm-node, cluster_only: false, solo_only: false, commented-out tool-parser mod, and defaults including port 8000 and host 0.0.0.0.",
-          "summary": "Recipe for serving Gemma4-26B-A4B with online FP8 quantization, supporting both solo and cluster modes."
+          "source_summary": "Specifies google model ID, vllm-node container, cluster_only false, solo_only false, and defaults section.",
+          "summary": "Defines a recipe for serving Gemma4-26B-A4B in online FP8 quantization."
         },
         {
           "code_purpose": "config",
           "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "cyankiwi GLM-4.7-Flash AWQ model",
-              "path": null,
-              "version": null
-            },
             {
               "dependency_type": "use",
               "is_external": false,
@@ -10694,31 +12697,23 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Recipe for the AWQ-quantized GLM-4.7-Flash model that requires a patch for inference speed optimization. Documentation notes vLLM performance is suboptimal (~40 t/s generation) in both single-node and cluster modes despite the patch.",
+          "detailed_description": "This recipe serves the GLM-4.7-Flash-AWQ-4bit model and requires an inference speed patch. It documents suboptimal vLLM implementation, noting ~40 t/s generation speed in both single node and cluster modes, with cluster only improving prompt processing.",
           "file_path": ".litho/tree/repo/recipes/glm-4.7-flash-awq.yaml",
-          "importance_score": 0.5,
+          "importance_score": 0.55,
           "interfaces": [],
           "name": "glm-4.7-flash-awq.yaml",
           "responsibilities": [
-            "Declare GLM-4.7-Flash AWQ recipe",
-            "Require inference speed patch mod",
-            "Document known performance limitations",
-            "Provide default serving parameters"
+            "Configure AWQ GLM-4.7 serving",
+            "Document performance expectations",
+            "Require inference speed patch",
+            "Provide defaults"
           ],
-          "source_summary": "Declares the cyankiwi AWQ GLM-4.7-Flash model with recipe metadata and a required speed-optimization patch mod; documents expected ~40 t/s generation performance and cluster benefits for prompt processing only.",
-          "summary": "Recipe for serving cyankiwi's AWQ 4-bit quantized GLM-4.7-Flash with a performance patch, noting known vLLM performance limitations."
+          "source_summary": "Contains model ID, recipe metadata, and extensive comments about performance limitations and the required patch.",
+          "summary": "Defines a recipe for serving cyankiwi's AWQ quantized GLM-4.7-Flash model with performance caveats."
         },
         {
           "code_purpose": "config",
           "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "local-inference-lab/GLM-5.3-Flash-NVFP4-Spark",
-              "path": null,
-              "version": null
-            },
             {
               "dependency_type": "use",
               "is_external": false,
@@ -10726,33 +12721,33 @@ Code analysis results from preprocessing phase, including definitions of functio
               "name": "vllm-node-b12x",
               "path": null,
               "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "--exp-b12x",
+              "path": null,
+              "version": null
             }
           ],
-          "detailed_description": "Cluster-only recipe serving local-inference-lab/GLM-5.3-Flash-NVFP4-Spark on the vllm-node-b12x container with the --exp-b12x build flag and tensor parallelism of 2 across the dual-node cluster.",
+          "detailed_description": "This recipe configures the GLM 5.3 Flash model for cluster-only deployment with the B12X-optimized container. It sets tensor_parallel to 2 and includes pipeline parallelism and decoding defaults.",
           "file_path": ".litho/tree/repo/recipes/glm-5.3-flash.yaml",
-          "importance_score": 0.55,
+          "importance_score": 0.6,
           "interfaces": [],
           "name": "glm-5.3-flash.yaml",
           "responsibilities": [
-            "Declare GLM-5.3-Flash NVFP4 cluster recipe",
-            "Enable B12X experimental build flag",
-            "Configure dual-node tensor parallelism",
-            "Provide default serving parameters"
+            "Declare GLM-5.3 Flash serving",
+            "Enable B12X-optimized stack",
+            "Restrict to cluster execution",
+            "Set TP/PP and decoding defaults"
           ],
-          "source_summary": "Declares model local-inference-lab/GLM-5.3-Flash-NVFP4-Spark, container vllm-node-b12x, build_args --exp-b12x, cluster_only: true, empty mods, and defaults with tensor_parallel: 2 and pipeline_parallel: 1.",
-          "summary": "Recipe for serving GLM-5.3-Flash-NVFP4 via the B12X-optimized stack on a dual DGX Spark cluster."
+          "source_summary": "Specifies local model ID, vllm-node-b12x container, --exp-b12x build arg, cluster_only flag, empty mods, and defaults.",
+          "summary": "Defines a recipe for serving GLM-5.3-Flash-NVFP4 on a dual DGX Spark cluster using the B12X stack."
         },
         {
           "code_purpose": "config",
           "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "thinkingmachines/Inkling-Small-NVFP4",
-              "path": null,
-              "version": null
-            },
             {
               "dependency_type": "use",
               "is_external": false,
@@ -10762,31 +12757,65 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Cluster-only recipe using tensor parallelism across two nodes for Inkling-Small-NVFP4 with MTP speculative decoding. Requires patches and memory-pressure mitigations via mods.",
+          "detailed_description": "This recipe configures the thinkingmachines Inkling-Small model with NVFP4 quantization, requiring cluster mode with tensor parallelism across two nodes. It includes patches and memory-pressure handling via mods.",
           "file_path": ".litho/tree/repo/recipes/inkling-small-nvfp4.yaml",
           "importance_score": 0.55,
           "interfaces": [],
           "name": "inkling-small-nvfp4.yaml",
           "responsibilities": [
-            "Declare Inkling-Small NVFP4 cluster recipe",
+            "Configure NVFP4 Inkling serving",
             "Enable MTP speculative decoding",
-            "Apply memory-pressure mitigation mods",
-            "Configure two-node tensor parallelism"
+            "Require two-node cluster",
+            "Apply patches and memory settings"
           ],
-          "source_summary": "Declares model thinkingmachines/Inkling-Small-NVFP4, container vllm-node, cluster_only: true, and mods for required patches and memory-pressure handling; launch command uses two-node tensor parallelism.",
-          "summary": "Recipe for serving thinkingmachines/Inkling-Small-NVFP4 with MTP speculative decoding on a two-node DGX Spark cluster."
+          "source_summary": "Specifies model, vllm-node container, cluster_only flag, and mods for required patches and memory pressure.",
+          "summary": "Defines a recipe for serving Inkling-Small-NVFP4 on a two-node DGX Spark cluster with MTP speculative decoding."
         },
         {
           "code_purpose": "config",
           "dependencies": [
             {
               "dependency_type": "use",
-              "is_external": true,
+              "is_external": false,
               "line_number": null,
-              "name": "QuantTrio/MiniMax-M2-AWQ",
+              "name": "vllm-node-b12x",
               "path": null,
               "version": null
             },
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "--exp-b12x",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "mods/fes-weights",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "This recipe scales the MiMo-V2.6-Flash model to four nodes, leveraging B12X attention (DiffKV + fp8 KV), b12x MoE (MXFP4), and async checkpoint loading. It is intended for FES evaluation and supports both FES-staged weights and plain launches.",
+          "file_path": ".litho/tree/repo/recipes/mimo-v2.6-flash-4x.yaml",
+          "importance_score": 0.58,
+          "interfaces": [],
+          "name": "mimo-v2.6-flash-4x.yaml",
+          "responsibilities": [
+            "Configure 4-node MiMo deployment",
+            "Enable b12x optimized kernels",
+            "Support FES evaluation weights",
+            "Set KV cache dtype strategies"
+          ],
+          "source_summary": "Specifies TP=4, b12x build flags, KV cache dtype skip layers for fp8 KV, and references fes-eval scripts and mods.",
+          "summary": "Defines a recipe for MiMo-V2.6-Flash-RL with TP=4 across four DGX Spark nodes using the b12x stack."
+        },
+        {
+          "code_purpose": "config",
+          "dependencies": [
             {
               "dependency_type": "use",
               "is_external": false,
@@ -10796,30 +12825,49 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Cluster-only recipe serving the AWQ-quantized MiniMax-M2 model on the standard vllm-node container with no mods required. Provides CLI-overridable defaults including tensor parallelism settings.",
+          "detailed_description": "This recipe configures the 309B parameter MoE model (15B active) with MXFP4 experts and fp8 attention, using TP=2 across two nodes. It enables DFlash block-diffusion speculative decoding.",
+          "file_path": ".litho/tree/repo/recipes/mimo-v2.6-flash.yaml",
+          "importance_score": 0.57,
+          "interfaces": [],
+          "name": "mimo-v2.6-flash.yaml",
+          "responsibilities": [
+            "Configure MiMo-V2.6 Flash serving",
+            "Enable MXFP4/fp8 quantization path",
+            "Enable DFlash speculative decoding",
+            "Set cluster tensor parallelism"
+          ],
+          "source_summary": "Specifies model, container, cluster configuration, and DFlash speculative decoding features.",
+          "summary": "Defines a recipe for serving Xiaomi MiMo-V2.6-Flash-RL on a dual DGX Spark cluster with DFlash speculative decoding."
+        },
+        {
+          "code_purpose": "config",
+          "dependencies": [
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "vllm-node",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "This recipe configures the AWQ quantized MiniMax M2 model for cluster-only execution using the standard vllm-node container, with no mods required.",
           "file_path": ".litho/tree/repo/recipes/minimax-m2-awq.yaml",
-          "importance_score": 0.5,
+          "importance_score": 0.56,
           "interfaces": [],
           "name": "minimax-m2-awq.yaml",
           "responsibilities": [
-            "Declare MiniMax-M2 AWQ cluster recipe",
-            "Restrict to cluster mode",
-            "Provide default serving parameters"
+            "Configure MiniMax-M2 AWQ serving",
+            "Restrict to cluster execution",
+            "Provide default server settings",
+            "Declare no mods required"
           ],
-          "source_summary": "Declares model QuantTrio/MiniMax-M2-AWQ, container vllm-node, cluster_only: true, empty mods, and defaults including port 8000, host 0.0.0.0, and tensor_parallel settings.",
-          "summary": "Recipe for serving QuantTrio/MiniMax-M2-AWQ on a multi-node cluster."
+          "source_summary": "Specifies QuantTrio model ID, container, cluster_only flag, empty mods, and defaults for port, host, and tensor parallelism.",
+          "summary": "Defines a recipe for serving MiniMax-M2-AWQ on a multi-node cluster."
         },
         {
           "code_purpose": "config",
           "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "cyankiwi/MiniMax-M2.5-AWQ-4bit",
-              "path": null,
-              "version": null
-            },
             {
               "dependency_type": "use",
               "is_external": false,
@@ -10829,30 +12877,22 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Cluster-only recipe serving the AWQ-quantized MiniMax-M2.5 model on the standard vllm-node container with no mods required. Follows the same structure as the M2 recipe with updated model weights.",
+          "detailed_description": "This recipe configures cyankiwi's AWQ quantized MiniMax M2.5 model for cluster-only execution with the standard vllm-node container and no mods.",
           "file_path": ".litho/tree/repo/recipes/minimax-m2.5-awq.yaml",
-          "importance_score": 0.5,
+          "importance_score": 0.56,
           "interfaces": [],
           "name": "minimax-m2.5-awq.yaml",
           "responsibilities": [
-            "Declare MiniMax-M2.5 AWQ cluster recipe",
-            "Restrict to cluster mode",
-            "Provide default serving parameters"
+            "Configure MiniMax-M2.5 AWQ serving",
+            "Restrict to cluster execution",
+            "Provide default serving settings"
           ],
-          "source_summary": "Declares model cyankiwi/MiniMax-M2.5-AWQ-4bit, container vllm-node, cluster_only: true, empty mods, and defaults including port 8000, host 0.0.0.0, and parallelism settings.",
-          "summary": "Recipe for serving cyankiwi's 4-bit AWQ MiniMax-M2.5 on a multi-node cluster."
+          "source_summary": "Specifies model ID, container, cluster_only flag, empty mods, and defaults for port, host, and parallelism.",
+          "summary": "Defines a recipe for serving MiniMax-M2.5-AWQ on a multi-node cluster."
         },
         {
           "code_purpose": "config",
           "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "cyankiwi/MiniMax-M2.7-AWQ-4bit",
-              "path": null,
-              "version": null
-            },
             {
               "dependency_type": "use",
               "is_external": false,
@@ -10862,30 +12902,22 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Cluster-only recipe serving the AWQ-quantized MiniMax-M2.7 model on the standard vllm-node container with no mods required. Same structure as prior MiniMax recipes with the newest model version.",
+          "detailed_description": "This recipe configures cyankiwi's AWQ quantized MiniMax M2.7 model for cluster-only execution with the standard vllm-node container and no mods.",
           "file_path": ".litho/tree/repo/recipes/minimax-m2.7-awq.yaml",
-          "importance_score": 0.5,
+          "importance_score": 0.56,
           "interfaces": [],
           "name": "minimax-m2.7-awq.yaml",
           "responsibilities": [
-            "Declare MiniMax-M2.7 AWQ cluster recipe",
-            "Restrict to cluster mode",
-            "Provide default serving parameters"
+            "Configure MiniMax-M2.7 AWQ serving",
+            "Restrict to cluster execution",
+            "Provide default serving settings"
           ],
-          "source_summary": "Declares model cyankiwi/MiniMax-M2.7-AWQ-4bit, container vllm-node, cluster_only: true, empty mods, and defaults including port 8000, host 0.0.0.0, and parallelism settings.",
-          "summary": "Recipe for serving cyankiwi's 4-bit AWQ MiniMax-M2.7 on a multi-node cluster."
+          "source_summary": "Specifies model ID, container, cluster_only flag, empty mods, and defaults for port, host, and parallelism.",
+          "summary": "Defines a recipe for serving MiniMax-M2.7-AWQ on a multi-node cluster."
         },
         {
           "code_purpose": "config",
           "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4",
-              "path": null,
-              "version": null
-            },
             {
               "dependency_type": "use",
               "is_external": false,
@@ -10895,30 +12927,22 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Solo-only recipe serving the NVFP4-quantized Nemotron-3-Nano on a single node only, since cluster mode currently fails with an error. Runs on the standard vllm-node container.",
+          "detailed_description": "This recipe configures the NVFP4 Nemotron-3 Nano model with solo-only execution, noting that cluster mode currently fails with an error.",
           "file_path": ".litho/tree/repo/recipes/nemotron-3-nano-nvfp4.yaml",
-          "importance_score": 0.5,
+          "importance_score": 0.55,
           "interfaces": [],
           "name": "nemotron-3-nano-nvfp4.yaml",
           "responsibilities": [
-            "Declare Nemotron-3-Nano NVFP4 recipe",
-            "Restrict to solo mode due to cluster bug",
-            "Provide default serving parameters"
+            "Configure Nemotron-3 Nano NVFP4 serving",
+            "Restrict to solo execution",
+            "Document cluster mode limitation"
           ],
-          "source_summary": "Declares model nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4, container vllm-node, solo_only: true, and documents the cluster-mode failure limitation in comments.",
-          "summary": "Recipe for serving NVIDIA Nemotron-3-Nano-30B-A3B-NVFP4, currently restricted to solo mode due to cluster failures."
+          "source_summary": "Specifies nvidia model ID, container, solo_only flag, and description warning about single-node restriction.",
+          "summary": "Defines a recipe for serving Nemotron-3-Nano-30B-A3B-NVFP4 on a single node only."
         },
         {
           "code_purpose": "config",
           "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
-              "path": null,
-              "version": null
-            },
             {
               "dependency_type": "use",
               "is_external": false,
@@ -10926,33 +12950,41 @@ Code analysis results from preprocessing phase, including definitions of functio
               "name": "vllm-node",
               "path": null,
               "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "VLLM_FLASHINFER_ALLREDUCE_BACKEND",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
+              "path": null,
+              "version": null
             }
           ],
-          "detailed_description": "Recipe serving nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4 using VLLM_CUTLASS for NVFP4 kernels, runnable in both solo and cluster modes. Sets FlashInfer allreduce backend environment variables and allows long max model length.",
+          "detailed_description": "This recipe enables VLLM_CUTLASS for NVFP4 on the Nemotron-3-Super-120B model and sets FlashInfer allreduce backend environment variables. It supports both solo and cluster modes with defaults including tensor parallelism.",
           "file_path": ".litho/tree/repo/recipes/nemotron-3-super-nvfp4.yaml",
-          "importance_score": 0.6,
+          "importance_score": 0.57,
           "interfaces": [],
           "name": "nemotron-3-super-nvfp4.yaml",
           "responsibilities": [
-            "Declare Nemotron-3-Super CUTLASS recipe",
-            "Configure FlashInfer allreduce backend env",
-            "Allow long max model length",
-            "Support both solo and cluster modes"
+            "Configure Nemotron-3 Super NVFP4 serving",
+            "Enable CUTLASS kernels",
+            "Set FlashInfer allreduce backend",
+            "Allow long max model length"
           ],
-          "source_summary": "Declares model nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4, container vllm-node, env vars VLLM_FLASHINFER_ALLREDUCE_BACKEND=trtllm and VLLM_ALLOW_LONG_MAX_MODEL_LEN=1, commented-out nemotron-super mod, and default serving settings.",
-          "summary": "Recipe for serving Nemotron-3-Super-120B with CUTLASS-optimized NVFP4 kernels, flexible across solo and cluster modes."
+          "source_summary": "Specifies model, container, env vars (VLLM_FLASHINFER_ALLREDUCE_BACKEND, VLLM_ALLOW_LONG_MAX_MODEL_LEN), and defaults.",
+          "summary": "Defines a recipe for serving Nemotron-3-Super-120B-A12B-NVFP4 using CUTLASS kernels with environment optimizations."
         },
         {
           "code_purpose": "config",
           "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4",
-              "path": null,
-              "version": null
-            },
             {
               "dependency_type": "use",
               "is_external": false,
@@ -10962,31 +12994,23 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Flexible recipe running Nemotron 3.5 Lightning with TP=1 on a solo DGX Spark and defaulting to TP=2 in cluster mode, using the DSpark speculative draft model for accelerated decoding.",
+          "detailed_description": "This recipe configures the Nemotron 3.5 Lightning model to run with TP=1 on solo DGX Spark and TP=2 in cluster mode, using NVFP4 quantization and the DSpark draft model for speculative decoding.",
           "file_path": ".litho/tree/repo/recipes/nemotron-3.5-lightning.yaml",
-          "importance_score": 0.55,
+          "importance_score": 0.58,
           "interfaces": [],
           "name": "nemotron-3.5-lightning.yaml",
           "responsibilities": [
-            "Declare Nemotron 3.5 Lightning recipe",
-            "Configure DSpark speculative decoding",
-            "Adapt tensor parallelism per deployment mode",
-            "Provide default serving parameters"
+            "Configure Nemotron 3.5 Lightning serving",
+            "Enable DSpark speculative decoding",
+            "Support both solo and cluster modes",
+            "Set TP and memory defaults"
           ],
-          "source_summary": "Declares model nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4, container vllm-node, cluster_only: false, solo_only: false, and defaults including tensor_parallel: 2 and gpu_memory_utilization settings.",
-          "summary": "Recipe for serving NVIDIA Nemotron 3.5 Lightning 30B-A3B NVFP4 with the DSpark speculative draft model."
+          "source_summary": "Specifies model, container, and defaults with tensor_parallel and gpu_memory_utilization settings.",
+          "summary": "Defines a recipe for serving NVIDIA Nemotron 3.5 Lightning 30B-A3B-NVFP4 with DSpark speculative draft model."
         },
         {
           "code_purpose": "config",
           "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "openai/gpt-oss-120b",
-              "path": null,
-              "version": null
-            },
             {
               "dependency_type": "use",
               "is_external": false,
@@ -10994,164 +13018,38 @@ Code analysis results from preprocessing phase, including definitions of functio
               "name": "vllm-node-mxfp4",
               "path": null,
               "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "--exp-mxfp4",
+              "path": null,
+              "version": null
             }
           ],
-          "detailed_description": "Solo-only recipe serving openai/gpt-oss-120b with MXFP4 quantization using the specialized vllm-node-mxfp4 container and the --exp-mxfp4 build argument. Currently restricted to solo execution.",
+          "detailed_description": "This recipe configures OpenAI's open source 120B MoE model on a solo node using the vllm-node-mxfp4 container with the --exp-mxfp4 build argument. It represents a notable open-weight model deployment.",
           "file_path": ".litho/tree/repo/recipes/openai-gpt-oss-120b.yaml",
-          "importance_score": 0.65,
+          "importance_score": 0.6,
           "interfaces": [],
           "name": "openai-gpt-oss-120b.yaml",
           "responsibilities": [
-            "Declare GPT-OSS 120B MXFP4 recipe",
-            "Enable MXFP4 experimental build flag",
-            "Restrict to solo mode",
-            "Provide default serving parameters"
+            "Configure GPT-OSS 120B serving",
+            "Enable MXFP4 quantization build",
+            "Restrict to solo execution",
+            "Use FlashInfer backend"
           ],
-          "source_summary": "Declares model openai/gpt-oss-120b, container vllm-node-mxfp4, build_args --exp-mxfp4, solo_only: true, and no required mods; includes default serving settings.",
-          "summary": "Recipe for serving OpenAI's open-source 120B MoE model with MXFP4 quantization and FlashInfer on a single node."
+          "source_summary": "Specifies openai model ID, mxfp4 container, solo_only flag, and build args for MXFP4 support.",
+          "summary": "Defines a recipe for serving OpenAI GPT-OSS 120B with MXFP4 quantization and FlashInfer."
         },
         {
           "code_purpose": "config",
           "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "Qwen/Qwen3-Coder-Next-FP8",
-              "path": null,
-              "version": null
-            },
             {
               "dependency_type": "use",
               "is_external": false,
               "line_number": null,
               "name": "vllm-node",
-              "path": null,
-              "version": null
-            }
-          ],
-          "detailed_description": "Recipe serving Qwen/Qwen3-Coder-Next-FP8 with a commented-out mod that fixes slowness and crashes in cluster mode (tracking vLLM issue #33857). Solo-only flag is commented out, allowing flexible deployment.",
-          "file_path": ".litho/tree/repo/recipes/qwen3-coder-next-fp8.yaml",
-          "importance_score": 0.55,
-          "interfaces": [],
-          "name": "qwen3-coder-next-fp8.yaml",
-          "responsibilities": [
-            "Declare Qwen3-Coder-Next FP8 recipe",
-            "Track known cluster slowness/crash issue",
-            "Provide default serving parameters"
-          ],
-          "source_summary": "Declares model Qwen/Qwen3-Coder-Next-FP8, container vllm-node, commented solo_only flag, commented mods/fix-qwen3-coder-next mod referencing vLLM issue #33857, and default serving settings.",
-          "summary": "Recipe for serving Qwen3-Coder-Next in native FP8 format on the standard vllm-node container."
-        },
-        {
-          "code_purpose": "config",
-          "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "Intel/Qwen3-Coder-Next-int4-AutoRound",
-              "path": null,
-              "version": null
-            },
-            {
-              "dependency_type": "use",
-              "is_external": false,
-              "line_number": null,
-              "name": "mods/fix-qwen3-next-autoround",
-              "path": null,
-              "version": null
-            }
-          ],
-          "detailed_description": "Solo-only recipe serving Intel/Qwen3-Coder-Next-int4-AutoRound with a required mod (mods/fix-qwen3-next-autoround) that fixes autoround weight loading issues.",
-          "file_path": ".litho/tree/repo/recipes/qwen3-coder-next-int4-autoround.yaml",
-          "importance_score": 0.5,
-          "interfaces": [],
-          "name": "qwen3-coder-next-int4-autoround.yaml",
-          "responsibilities": [
-            "Declare Qwen3-Coder-Next int4 AutoRound recipe",
-            "Require autoround weight-loading fix mod",
-            "Restrict to solo mode",
-            "Provide default serving parameters"
-          ],
-          "source_summary": "Declares model Intel/Qwen3-Coder-Next-int4-AutoRound, container vllm-node, solo_only: true, and the mods/fix-qwen3-next-autoround mod for weight loading fixes.",
-          "summary": "Recipe for serving the Intel int4-AutoRound quantized Qwen3-Coder-Next on a single node."
-        },
-        {
-          "code_purpose": "config",
-          "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "Qwen/Qwen3.5-122B-A10B-FP8",
-              "path": null,
-              "version": null
-            },
-            {
-              "dependency_type": "use",
-              "is_external": false,
-              "line_number": null,
-              "name": "mods/fix-qwen3.5-chat-template",
-              "path": null,
-              "version": null
-            }
-          ],
-          "detailed_description": "Cluster-only recipe serving Qwen/Qwen3.5-122B-A10B-FP8 on the standard vllm-node container, requiring the mods/fix-qwen3.5-chat-template mod for correct chat template handling.",
-          "file_path": ".litho/tree/repo/recipes/qwen3.5-122b-fp8.yaml",
-          "importance_score": 0.55,
-          "interfaces": [],
-          "name": "qwen3.5-122b-fp8.yaml",
-          "responsibilities": [
-            "Declare Qwen3.5-122B FP8 cluster recipe",
-            "Apply chat-template fix mod",
-            "Restrict to cluster mode",
-            "Provide default serving parameters"
-          ],
-          "source_summary": "Declares model Qwen/Qwen3.5-122B-A10B-FP8, container vllm-node, cluster_only: true, mods including mods/fix-qwen3.5-chat-template, and default serving settings.",
-          "summary": "Recipe for serving Qwen3.5-122B-A10B in native FP8 on a multi-node cluster with a chat-template fix mod."
-        },
-        {
-          "code_purpose": "config",
-          "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "Intel/Qwen3.5-122B-A10B-int4-AutoRound",
-              "path": null,
-              "version": null
-            },
-            {
-              "dependency_type": "use",
-              "is_external": false,
-              "line_number": null,
-              "name": "mods/fix-qwen3.5-chat-template",
-              "path": null,
-              "version": null
-            }
-          ],
-          "detailed_description": "Recipe serving Intel/Qwen3.5-122B-A10B-int4-AutoRound with mods fixing a ROPE syntax error and the chat template. The solo_only flag is commented out, allowing cluster deployment.",
-          "file_path": ".litho/tree/repo/recipes/qwen3.5-122b-int4-autoround.yaml",
-          "importance_score": 0.55,
-          "interfaces": [],
-          "name": "qwen3.5-122b-int4-autoround.yaml",
-          "responsibilities": [
-            "Declare Qwen3.5-122B INT4 AutoRound recipe",
-            "Apply ROPE and chat-template fix mods",
-            "Provide default serving parameters"
-          ],
-          "source_summary": "Declares model Intel/Qwen3.5-122B-A10B-int4-AutoRound, container vllm-node, commented solo_only flag, and mods including commented fix-qwen3.5-autoround and active fix-qwen3.5-chat-template.",
-          "summary": "Recipe for serving the Intel INT4-AutoRound quantized Qwen3.5-122B with ROPE and chat-template fix mods."
-        },
-        {
-          "code_purpose": "config",
-          "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "Qwen/Qwen3.5-35B-A3B-FP8",
               "path": null,
               "version": null
             },
@@ -11164,31 +13062,156 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Recipe serving Qwen/Qwen3.5-35B-A3B-FP8 with mods addressing slowness and crashes in cluster mode (tracking vLLM issue #33857). The solo_only flag is commented out for flexible deployment.",
-          "file_path": ".litho/tree/repo/recipes/qwen3.5-35b-a3b-fp8.yaml",
+          "detailed_description": "This recipe configures the Qwen3-Coder-Next-FP8 model with a commented-out fix mod referencing a vLLM GitHub issue for cluster performance problems. It includes default serving settings.",
+          "file_path": ".litho/tree/repo/recipes/qwen3-coder-next-fp8.yaml",
+          "importance_score": 0.57,
+          "interfaces": [],
+          "name": "qwen3-coder-next-fp8.yaml",
+          "responsibilities": [
+            "Configure Qwen3-Coder-Next FP8 serving",
+            "Document cluster fix mod requirement",
+            "Provide default settings"
+          ],
+          "source_summary": "Specifies model ID, container, commented solo_only flag, commented mods, and defaults.",
+          "summary": "Defines a recipe for serving Qwen3-Coder-Next-FP8 with a mod to fix cluster slowness and crashes."
+        },
+        {
+          "code_purpose": "config",
+          "dependencies": [
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "vllm-node",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "mods/fix-qwen3-next-autoround",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "This recipe configures Intel's int4-AutoRound quantized Qwen3-Coder-Next model for solo-only execution, applying the fix-qwen3-next-autoround mod to address weight loading issues.",
+          "file_path": ".litho/tree/repo/recipes/qwen3-coder-next-int4-autoround.yaml",
           "importance_score": 0.55,
+          "interfaces": [],
+          "name": "qwen3-coder-next-int4-autoround.yaml",
+          "responsibilities": [
+            "Configure int4 AutoRound serving",
+            "Restrict to solo execution",
+            "Apply autoround weight loading fix"
+          ],
+          "source_summary": "Specifies Intel model ID, vllm-node container, solo_only flag, and mods/fix-qwen3-next-autoround.",
+          "summary": "Defines a recipe for serving Qwen3-Coder-Next-int4-Autoround with a weight loading fix mod."
+        },
+        {
+          "code_purpose": "config",
+          "dependencies": [
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "vllm-node",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "mods/fix-qwen3.5-chat-template",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "This recipe configures Qwen3.5-122B in native FP8 quantization for cluster-only execution and applies the fix-qwen3.5-chat-template mod.",
+          "file_path": ".litho/tree/repo/recipes/qwen3.5-122b-fp8.yaml",
+          "importance_score": 0.57,
+          "interfaces": [],
+          "name": "qwen3.5-122b-fp8.yaml",
+          "responsibilities": [
+            "Configure Qwen3.5-122B FP8 serving",
+            "Restrict to cluster execution",
+            "Apply chat template fix mod",
+            "Provide default settings"
+          ],
+          "source_summary": "Specifies model ID, container, cluster_only flag, mods list, and defaults for serving parameters.",
+          "summary": "Defines a recipe for serving Qwen3.5-122B-A10B-FP8 with a chat template fix mod."
+        },
+        {
+          "code_purpose": "config",
+          "dependencies": [
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "vllm-node",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "mods/fix-qwen3.5-chat-template",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "This recipe configures Intel's INT4-AutoRound quantized Qwen3.5-122B model, applying the fix-qwen3.5-chat-template mod to address ROPE syntax errors. It represents a key quantization variant for the Qwen3.5 line.",
+          "file_path": ".litho/tree/repo/recipes/qwen3.5-122b-int4-autoround.yaml",
+          "importance_score": 0.58,
+          "interfaces": [],
+          "name": "qwen3.5-122b-int4-autoround.yaml",
+          "responsibilities": [
+            "Configure INT4 AutoRound serving",
+            "Apply ROPE/chat template fixes",
+            "Support cluster deployment",
+            "Provide default settings"
+          ],
+          "source_summary": "Specifies model ID, container, commented solo_only flag, and mods including chat template fix.",
+          "summary": "Defines a recipe for serving Qwen3.5-122B-A10B-INT4-Autoround with chat template and ROPE fixes."
+        },
+        {
+          "code_purpose": "config",
+          "dependencies": [
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "vllm-node",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "mods/fix-qwen3-coder-next",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "This recipe configures Qwen3.5-35B-A3B in native FP8 format, applying the fix-qwen3-coder-next mod to prevent cluster slowness and crashes tracked in a vLLM GitHub issue. It is a commonly used small MoE deployment.",
+          "file_path": ".litho/tree/repo/recipes/qwen3.5-35b-a3b-fp8.yaml",
+          "importance_score": 0.58,
           "interfaces": [],
           "name": "qwen3.5-35b-a3b-fp8.yaml",
           "responsibilities": [
-            "Declare Qwen3.5-35B FP8 recipe",
-            "Apply cluster stability fix mods",
-            "Track vLLM issue #33857",
-            "Provide default serving parameters"
+            "Configure Qwen3.5-35B FP8 serving",
+            "Apply cluster crash fix mod",
+            "Provide default settings"
           ],
-          "source_summary": "Declares model Qwen/Qwen3.5-35B-A3B-FP8, container vllm-node, mods including mods/fix-qwen3-coder-next and additional fix mods, and default serving settings.",
-          "summary": "Recipe for serving Qwen3.5-35B-A3B in native FP8 with cluster slowness/crash fix mods."
+          "source_summary": "Specifies model ID, container, commented solo_only flag, mods list with fix-qwen3-coder-next, and defaults.",
+          "summary": "Defines a recipe for serving Qwen3.5-35B-A3B-FP8 with cluster performance fix mods."
         },
         {
           "code_purpose": "config",
           "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "Intel Qwen3.5-397B INT4-AutoRound model",
-              "path": null,
-              "version": null
-            },
             {
               "dependency_type": "use",
               "is_external": false,
@@ -11198,28 +13221,28 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Experimental cluster recipe for the 397B-parameter Qwen3.5 model requiring memory utilization set in GB (not percentage) and --no-ray mode to fit full context on two Sparks. Includes operational guidance to limit GPU clocks via nvidia-smi if nodes shut down.",
+          "detailed_description": "This recipe configures the large 397B INT4-AutoRound quantized model with important operational notes, including requiring memory utilization in GB, --no-ray for full context, and GPU clock limiting to avoid node shutdown.",
           "file_path": ".litho/tree/repo/recipes/qwen3.5-397b-int4-autoround.yaml",
-          "importance_score": 0.6,
+          "importance_score": 0.52,
           "interfaces": [],
           "name": "qwen3.5-397b-int4-autoround.yaml",
           "responsibilities": [
-            "Declare experimental 397B model recipe",
-            "Configure GB-based memory utilization and --no-ray",
-            "Document GPU clock limiting for stability",
-            "Provide default serving parameters"
+            "Configure experimental 397B serving",
+            "Document memory utilization requirements",
+            "Recommend --no-ray mode",
+            "Provide GPU clock guidance"
           ],
-          "source_summary": "Declares the Intel INT4-AutoRound 397B model with comments on memory utilization in GB, --no-ray requirement, and GPU clock limiting instructions (sudo nvidia-smi -lgc 200,2150) for node stability.",
-          "summary": "Experimental recipe for serving the very large Qwen3.5-397B INT4-AutoRound model across two Sparks with careful memory tuning."
+          "source_summary": "Includes model ID, description, and extensive operational comments about memory and GPU clock settings.",
+          "summary": "Defines an experimental recipe for serving Qwen3.5-397B-INT4-Autoround with memory and GPU clock guidance."
         },
         {
           "code_purpose": "config",
           "dependencies": [
             {
               "dependency_type": "use",
-              "is_external": true,
+              "is_external": false,
               "line_number": null,
-              "name": "Qwen/Qwen3.6-35B-A3B-FP8",
+              "name": "vllm-node",
               "path": null,
               "version": null
             },
@@ -11232,27 +13255,28 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Recipe serving Qwen/Qwen3.6-35B-A3B-FP8 with the mods/fix-qwen3.6-chat-template mod applied. The solo_only flag is commented out, allowing flexible deployment.",
+          "detailed_description": "This recipe configures the Qwen3.6-35B-A3B model in FP8 with the fix-qwen3.6-chat-template mod and DFlash decoding features. It is the speculative-decoding variant of the standard Qwen3.6 recipe.",
           "file_path": ".litho/tree/repo/recipes/qwen3.6-35b-a3b-fp8-dflash.yaml",
-          "importance_score": 0.5,
+          "importance_score": 0.58,
           "interfaces": [],
           "name": "qwen3.6-35b-a3b-fp8-dflash.yaml",
           "responsibilities": [
-            "Declare Qwen3.6-35B FP8 recipe",
-            "Apply chat-template fix mod",
-            "Provide default serving parameters"
+            "Configure Qwen3.6-35B FP8 serving",
+            "Apply chat template fix",
+            "Enable DFlash speculative decoding",
+            "Provide default settings"
           ],
-          "source_summary": "Declares model Qwen/Qwen3.6-35B-A3B-FP8, container vllm-node, mods including mods/fix-qwen3.6-chat-template, and default serving settings.",
-          "summary": "Recipe for serving Qwen3.6-35B-A3B in native FP8 with a chat-template fix mod."
+          "source_summary": "Specifies model ID, container, mods list, and DFlash-related defaults.",
+          "summary": "Defines a recipe for serving Qwen3.6-35B-A3B-FP8 with DFlash speculative decoding."
         },
         {
           "code_purpose": "config",
           "dependencies": [
             {
               "dependency_type": "use",
-              "is_external": true,
+              "is_external": false,
               "line_number": null,
-              "name": "Qwen/Qwen3.6-35B-A3B-FP8",
+              "name": "vllm-node",
               "path": null,
               "version": null
             },
@@ -11265,30 +13289,23 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Recipe serving Qwen/Qwen3.6-35B-A3B-FP8 on the standard vllm-node container with the mods/fix-qwen3.6-chat-template mod. Provides CLI-overridable defaults including tensor parallelism of 2.",
+          "detailed_description": "This recipe is a commonly used deployment for the Qwen3.6-35B MoE model in FP8 format, applying the fix-qwen3.6-chat-template mod and setting TP=2 defaults. It represents a frequently referenced small MoE serving configuration.",
           "file_path": ".litho/tree/repo/recipes/qwen3.6-35b-a3b-fp8.yaml",
-          "importance_score": 0.55,
+          "importance_score": 0.59,
           "interfaces": [],
           "name": "qwen3.6-35b-a3b-fp8.yaml",
           "responsibilities": [
-            "Declare Qwen3.6-35B FP8 base recipe",
-            "Apply chat-template fix mod",
-            "Provide default serving parameters"
+            "Configure Qwen3.6-35B FP8 serving",
+            "Apply chat template fix",
+            "Set TP=2 and memory defaults",
+            "Support cluster deployment"
           ],
-          "source_summary": "Declares model Qwen/Qwen3.6-35B-A3B-FP8, container vllm-node, mods including mods/fix-qwen3.6-chat-template, and defaults with tensor_parallel: 2 and gpu_memory_utilization settings.",
-          "summary": "Base recipe for serving Qwen3.6-35B-A3B in native FP8 with a chat-template fix mod."
+          "source_summary": "Specifies model ID, container, mods list, and defaults including tensor_parallel and gpu_memory_utilization.",
+          "summary": "Defines a recipe for serving Qwen3.6-35B-A3B-FP8 with a chat template fix mod."
         },
         {
           "code_purpose": "config",
           "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "nvidia/Qwen3.6-35B-A3B-NVFP4",
-              "path": null,
-              "version": null
-            },
             {
               "dependency_type": "use",
               "is_external": false,
@@ -11298,30 +13315,23 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Variant recipe serving nvidia/Qwen3.6-35B-A3B-NVFP4 using the Marlin MoE backend without MTP speculative decoding, useful as a fallback when MTP causes issues.",
+          "detailed_description": "This recipe configures the NVFP4 quantized Qwen3.6-35B model with the Marlin MoE backend, explicitly disabling MTP speculative decoding in favor of the Marlin path.",
           "file_path": ".litho/tree/repo/recipes/qwen3.6-35b-a3b-nvfp4-no-mtp.yaml",
-          "importance_score": 0.5,
+          "importance_score": 0.55,
           "interfaces": [],
           "name": "qwen3.6-35b-a3b-nvfp4-no-mtp.yaml",
           "responsibilities": [
-            "Declare NVFP4 no-MTP variant recipe",
-            "Configure Marlin MoE backend",
-            "Provide default serving parameters"
+            "Configure NVFP4 Qwen3.6 serving",
+            "Enable Marlin MoE backend",
+            "Disable MTP speculative decoding",
+            "Provide default settings"
           ],
-          "source_summary": "Declares model nvidia/Qwen3.6-35B-A3B-NVFP4, container vllm-node, Marlin MoE backend configuration, and explicit no-MTP settings with default serving parameters.",
-          "summary": "Recipe for serving Qwen3.6-35B-A3B-NVFP4 with Marlin MoE backend and MTP speculative decoding disabled."
+          "source_summary": "Specifies nvidia model ID, container, and defaults for the Marlin-based serving configuration.",
+          "summary": "Defines a recipe for serving Qwen3.6-35B-A3B-NVFP4 with Marlin MoE backend and no MTP speculative decoding."
         },
         {
           "code_purpose": "config",
           "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "nvidia/Qwen3.6-35B-A3B-NVFP4",
-              "path": null,
-              "version": null
-            },
             {
               "dependency_type": "use",
               "is_external": false,
@@ -11331,30 +13341,22 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Recipe serving nvidia/Qwen3.6-35B-A3B-NVFP4 using the Marlin MoE backend on the standard vllm-node container, with CLI-overridable defaults including tensor parallelism.",
+          "detailed_description": "This recipe configures the NVFP4 quantized Qwen3.6-35B model using the Marlin MoE backend with tensor parallelism defaults.",
           "file_path": ".litho/tree/repo/recipes/qwen3.6-35b-a3b-nvfp4.yaml",
-          "importance_score": 0.55,
+          "importance_score": 0.56,
           "interfaces": [],
           "name": "qwen3.6-35b-a3b-nvfp4.yaml",
           "responsibilities": [
-            "Declare NVFP4 Marlin recipe",
-            "Configure Marlin MoE backend",
-            "Provide default serving parameters"
+            "Configure NVFP4 Qwen3.6 serving",
+            "Enable Marlin MoE backend",
+            "Provide TP and other defaults"
           ],
-          "source_summary": "Declares model nvidia/Qwen3.6-35B-A3B-NVFP4, container vllm-node, Marlin MoE backend configuration, and defaults including port 8000, host 0.0.0.0, and tensor_parallel settings.",
-          "summary": "Recipe for serving Qwen3.6-35B-A3B-NVFP4 with the Marlin MoE backend."
+          "source_summary": "Specifies nvidia model ID, container, and defaults including tensor_parallel settings.",
+          "summary": "Defines a recipe for serving Qwen3.6-35B-A3B-NVFP4 with Marlin MoE backend."
         },
         {
           "code_purpose": "config",
           "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "nvidia/Qwen3.8-27B-NVFP4",
-              "path": null,
-              "version": null
-            },
             {
               "dependency_type": "use",
               "is_external": false,
@@ -11364,31 +13366,23 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Flexible recipe using TP=1 on a solo DGX Spark and defaulting to TP=2 on a cluster, with the DFlash2 draft model for speculative decoding. Sets a large 262144 max model length with constrained max_num_seqs.",
+          "detailed_description": "This recipe configures the Qwen3.8-27B NVFP4 model with the z-lab DFlash2 draft model, supporting TP=1 on solo and TP=2 on cluster with long context defaults.",
           "file_path": ".litho/tree/repo/recipes/qwen3.8-27b-nvfp4-dflash2.yaml",
-          "importance_score": 0.55,
+          "importance_score": 0.57,
           "interfaces": [],
           "name": "qwen3.8-27b-nvfp4-dflash2.yaml",
           "responsibilities": [
-            "Declare Qwen3.8-27B DFlash2 recipe",
-            "Configure DFlash2 speculative decoding",
-            "Adapt tensor parallelism per deployment mode",
-            "Provide default serving parameters"
+            "Configure Qwen3.8-27B NVFP4 serving",
+            "Enable DFlash2 speculative decoding",
+            "Support both solo and cluster modes",
+            "Set long context and memory defaults"
           ],
-          "source_summary": "Declares model nvidia/Qwen3.8-27B-NVFP4, container vllm-node, cluster_only: false, solo_only: false, and defaults including tensor_parallel: 2, gpu_memory_utilization: 0.7, max_model_len: 262144, and max_num_seqs: 8.",
-          "summary": "Recipe for serving Qwen3.8-27B-NVFP4 with the z-lab DFlash2 speculative decoding draft model."
+          "source_summary": "Specifies model ID, container, cluster_only/solo_only false, and defaults for TP, memory, max_model_len, and max_num_seqs.",
+          "summary": "Defines a recipe for serving Qwen3.8-27B-NVFP4 with DFlash2 speculative decoding."
         },
         {
           "code_purpose": "config",
           "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "local-inference-lab/Qwen3.8-Flash-Next-NVFP4",
-              "path": null,
-              "version": null
-            },
             {
               "dependency_type": "use",
               "is_external": false,
@@ -11396,33 +13390,33 @@ Code analysis results from preprocessing phase, including definitions of functio
               "name": "vllm-node-b12x",
               "path": null,
               "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "--exp-b12x",
+              "path": null,
+              "version": null
             }
           ],
-          "detailed_description": "Cluster-only recipe serving local-inference-lab/Qwen3.8-Flash-Next-NVFP4 on a dual DGX Spark cluster via the vllm-node-b12x container with the --exp-b12x build flag and tensor parallelism of 2.",
+          "detailed_description": "This recipe configures the Qwen3.8-Flash-Next model for cluster-only deployment using the vllm-node-b12x container with --exp-b12x build args. It sets TP=2 with pipeline parallelism defaults.",
           "file_path": ".litho/tree/repo/recipes/qwen3.8-flash-next-nvfp4-cluster.yaml",
           "importance_score": 0.6,
           "interfaces": [],
           "name": "qwen3.8-flash-next-nvfp4-cluster.yaml",
           "responsibilities": [
-            "Declare Qwen3.8-Flash-Next cluster recipe",
-            "Enable B12X experimental build flag",
-            "Configure dual-node tensor parallelism",
-            "Provide default serving parameters"
+            "Configure Qwen3.8-Flash-Next cluster serving",
+            "Enable B12X-optimized stack",
+            "Set TP=2 and PP defaults",
+            "Restrict to cluster execution"
           ],
-          "source_summary": "Declares model local-inference-lab/Qwen3.8-Flash-Next-NVFP4, container vllm-node-b12x, build_args --exp-b12x, cluster_only: true, empty mods, and defaults with tensor_parallel: 2 and pipeline_parallel settings.",
-          "summary": "Two-node cluster recipe for Qwen3.8-Flash-Next-NVFP4 using the B12X-optimized serving stack."
+          "source_summary": "Specifies local model ID, container, build args, cluster_only flag, empty mods, and defaults.",
+          "summary": "Defines a recipe for serving Qwen3.8-Flash-Next-NVFP4 on a dual-node cluster with the B12X stack."
         },
         {
           "code_purpose": "config",
           "dependencies": [
-            {
-              "dependency_type": "use",
-              "is_external": true,
-              "line_number": null,
-              "name": "local-inference-lab/Qwen3.8-Flash-Next-NVFP4",
-              "path": null,
-              "version": null
-            },
             {
               "dependency_type": "use",
               "is_external": false,
@@ -11430,30 +13424,38 @@ Code analysis results from preprocessing phase, including definitions of functio
               "name": "vllm-node-b12x",
               "path": null,
               "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "--exp-b12x",
+              "path": null,
+              "version": null
             }
           ],
-          "detailed_description": "Solo-only recipe serving local-inference-lab/Qwen3.8-Flash-Next-NVFP4 on one DGX Spark via the B12X-optimized stack, with PLE tables offloaded to disk to fit within single-node memory constraints.",
+          "detailed_description": "This recipe configures the Qwen3.8-Flash-Next model for solo-only deployment using the B12X stack, offloading PLE (positional lookup embedding) tables to disk to fit the model on one node.",
           "file_path": ".litho/tree/repo/recipes/qwen3.8-flash-next-nvfp4-solo.yaml",
-          "importance_score": 0.6,
+          "importance_score": 0.56,
           "interfaces": [],
           "name": "qwen3.8-flash-next-nvfp4-solo.yaml",
           "responsibilities": [
-            "Declare Qwen3.8-Flash-Next solo recipe",
-            "Enable B12X experimental build flag",
-            "Configure PLE table disk offload",
-            "Provide default serving parameters"
+            "Configure Qwen3.8-Flash-Next solo serving",
+            "Enable PLE disk offload",
+            "Enable B12X-optimized stack",
+            "Restrict to solo execution"
           ],
-          "source_summary": "Declares model local-inference-lab/Qwen3.8-Flash-Next-NVFP4, container vllm-node-b12x, build_args --exp-b12x, solo_only: true, empty mods, and defaults with PLE disk offload configuration.",
-          "summary": "Single-node solo recipe for Qwen3.8-Flash-Next-NVFP4 using the B12X stack with PLE tables offloaded to disk."
+          "source_summary": "Specifies model ID, container, build args, solo_only flag, empty mods, and tensor_parallel defaults.",
+          "summary": "Defines a recipe for serving Qwen3.8-Flash-Next-NVFP4 on a single node with PLE disk offload."
         },
         {
           "code_purpose": "config",
           "dependencies": [
             {
               "dependency_type": "use",
-              "is_external": true,
+              "is_external": false,
               "line_number": null,
-              "name": "stepfun-ai/Step-3.7-Flash-FP8",
+              "name": "vllm-node",
               "path": null,
               "version": null
             },
@@ -11474,28 +13476,28 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Cluster-only recipe serving stepfun-ai/Step-3.7-Flash-FP8 on two Sparks, recommending no-Ray mode. Requires the step-3.7-flash mod and the gpu-mem-util-gb mod for memory configuration.",
+          "detailed_description": "This recipe configures the Step 3.7 Flash FP8 model for cluster-only deployment, applying the step-3.7-flash and gpu-mem-util-gb mods, with --no-ray mode recommended.",
           "file_path": ".litho/tree/repo/recipes/step-3.7-flash-fp8.yaml",
-          "importance_score": 0.55,
+          "importance_score": 0.57,
           "interfaces": [],
           "name": "step-3.7-flash-fp8.yaml",
           "responsibilities": [
-            "Declare Step-3.7-Flash FP8 cluster recipe",
-            "Apply step-3.7-flash and memory mods",
-            "Recommend no-Ray mode",
-            "Provide default serving parameters"
+            "Configure Step-3.7 Flash FP8 serving",
+            "Apply step-3.7 and memory mods",
+            "Restrict to cluster execution",
+            "Recommend --no-ray mode"
           ],
-          "source_summary": "Declares model stepfun-ai/Step-3.7-Flash-FP8, container vllm-node, cluster_only: true, mods including mods/step-3.7-flash and mods/gpu-mem-util-gb, and default serving settings.",
-          "summary": "Recipe for serving Step-3.7-Flash-FP8 on two or more Sparks with no-Ray mode recommended and multiple fix mods."
+          "source_summary": "Specifies stepfun-ai model ID, container, cluster_only flag, mods list, and defaults.",
+          "summary": "Defines a recipe for serving Step-3.7-Flash-FP8 on two or more Sparks with mods for memory management."
         },
         {
           "code_purpose": "config",
           "dependencies": [
             {
               "dependency_type": "use",
-              "is_external": true,
+              "is_external": false,
               "line_number": null,
-              "name": "stepfun-ai/Step-3.7-Flash-NVFP4",
+              "name": "vllm-node",
               "path": null,
               "version": null
             },
@@ -11508,34 +13510,34 @@ Code analysis results from preprocessing phase, including definitions of functio
               "version": null
             }
           ],
-          "detailed_description": "Cluster-only recipe serving stepfun-ai/Step-3.7-Flash-NVFP4 on two Sparks with the required mods/step-3.7-flash mod. Uses the standard vllm-node container with NVFP4 quantization.",
+          "detailed_description": "This recipe configures the Step 3.7 Flash NVFP4 model for cluster-only deployment, applying only the step-3.7-flash mod without the memory mod.",
           "file_path": ".litho/tree/repo/recipes/step-3.7-flash-nvfp4.yaml",
-          "importance_score": 0.55,
+          "importance_score": 0.56,
           "interfaces": [],
           "name": "step-3.7-flash-nvfp4.yaml",
           "responsibilities": [
-            "Declare Step-3.7-Flash NVFP4 cluster recipe",
-            "Apply step-3.7-flash fix mod",
-            "Restrict to cluster mode",
-            "Provide default serving parameters"
+            "Configure Step-3.7 Flash NVFP4 serving",
+            "Apply step-3.7 mod",
+            "Restrict to cluster execution",
+            "Provide default settings"
           ],
-          "source_summary": "Declares model stepfun-ai/Step-3.7-Flash-NVFP4, container vllm-node, cluster_only: true, mods including mods/step-3.7-flash, and default serving settings.",
-          "summary": "Recipe for serving Step-3.7-Flash-NVFP4 on two or more Sparks with the step-3.7-flash fix mod."
+          "source_summary": "Specifies stepfun-ai model ID, container, cluster_only flag, mods list, and defaults.",
+          "summary": "Defines a recipe for serving Step-3.7-Flash-NVFP4 on two or more Sparks."
         }
       ],
-      "importance_score": 0.72,
+      "importance_score": 0.8,
       "key_files": [
         "deepseek-v4-flash.yaml",
-        "openai-gpt-oss-120b.yaml",
-        "qwen3.8-flash-next-nvfp4-cluster.yaml",
-        "nemotron-3-super-nvfp4.yaml",
-        "qwen3.5-397b-int4-autoround.yaml"
+        "qwen3.5-122b-int4-autoround.yaml",
+        "qwen3.6-35b-a3b-fp8.yaml",
+        "gemma4-26b-a4b.yaml",
+        "glm-5.3-flash.yaml"
       ],
       "name": "recipes",
       "path": ".litho/tree/repo/recipes",
       "purpose": "other",
       "subdirectory_count": 3,
-      "summary": "The 'recipes' directory contains 34 YAML recipe definitions for serving large language models with vLLM on DGX Spark hardware (solo single-node and dual-node cluster configurations). Each recipe declaratively specifies a HuggingFace model, container image, build arguments, required mods (patches), and default serving parameters (tensor parallelism, GPU memory utilization, context length). The files work together as a configuration catalog consumed by a launcher tool, covering model families such as DeepSeek, Gemma/DiffusionGemma, GLM, MiniMax, Nemotron, GPT-OSS, Qwen, and Step, with various quantization formats (FP8, NVFP4, AWQ, INT4, MXFP4) and speculative decoding setups."
+      "summary": "This directory contains YAML recipe configuration files for serving various large language models (LLMs) on DGX Spark clusters using vLLM. Each recipe defines model selection, container images, build arguments, execution mode constraints (solo vs. cluster), mods/patches, and default serving parameters such as tensor parallelism, port, and memory utilization. The recipes work together as a declarative launch catalog, allowing different models and inference configurations to be consistently deployed via a common runner tool."
     },
     {
       "file_count": 1,
@@ -11925,6 +13927,242 @@ Code analysis results from preprocessing phase, including definitions of functio
       "purpose": "other",
       "subdirectory_count": 0,
       "summary": "The '8x-spark-cluster' directory contains deployment recipe configuration for serving large language models on a multi-node DGX Spark cluster. Its single file, glm-5.2-nvfp4.yaml, defines a vLLM serving recipe that runs the nvidia/GLM-5.2-NVFP4 model with tensor parallelism (TP=8) distributed across 8 DGX Spark nodes, including environment variable tuning for model length, sparse indexing, MLA attention, and AOT compilation targeting the sm_121a GPU architecture."
+    },
+    {
+      "file_count": 1,
+      "file_insights": [
+        {
+          "code_purpose": "command",
+          "dependencies": [
+            {
+              "dependency_type": "use",
+              "is_external": true,
+              "line_number": null,
+              "name": "bash",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "run-recipe.sh",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "mods/fes-weights",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "offline hub shim",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "fes-eval.sh is a Bash CLI entrypoint for FES evaluation runs. It accepts optional --weights-root and --hub-model flags, validates the staged weights, and delegates the recipe execution to run-recipe.sh with the correct FES-specific wiring. This keeps weight verification and mod/hub setup out of individual recipe scripts and centralizes them in one repeatable command.",
+          "file_path": ".litho/tree/repo/scripts/fes-eval.sh",
+          "importance_score": 0.74,
+          "interfaces": [
+            {
+              "description": null,
+              "interface_type": "command",
+              "name": "fes-eval.sh",
+              "parameters": [
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "--weights-root",
+                  "param_type": "string"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "--hub-model",
+                  "param_type": "string"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "recipe",
+                  "param_type": "string"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "fes-slug",
+                  "param_type": "string"
+                },
+                {
+                  "description": null,
+                  "is_optional": false,
+                  "name": "run-recipe args",
+                  "param_type": "string[]"
+                }
+              ],
+              "return_type": "exit code",
+              "visibility": ""
+            }
+          ],
+          "name": "fes-eval.sh",
+          "responsibilities": [
+            "Parse CLI arguments such as --weights-root, --hub-model, recipe, FES slug, and pass-through args",
+            "Pre-verify the FES-staged weight copy before launching evaluation",
+            "Wire the read-only weights mount, verification mod, and offline hub shim into the recipe run",
+            "Delegate final execution to run-recipe.sh with the remaining arguments"
+          ],
+          "source_summary": "The script contains a shebang, detailed usage/example comments, argument parsing for the weights root, hub model, recipe, FES slug, and pass-through run-recipe arguments, and logic to pre-verify the staged FES weights. It then assembles the read-only mount, verification mod, and offline hub shim before executing run-recipe.sh with any additional arguments.",
+          "summary": "Host-side companion script that pre-verifies FES-staged weight copies and launches recipes with the read-only weights mount, verify mod, and offline hub shim."
+        }
+      ],
+      "importance_score": 0.66,
+      "key_files": [
+        "fes-eval.sh"
+      ],
+      "name": "scripts",
+      "path": ".litho/tree/repo/scripts",
+      "purpose": "tool",
+      "subdirectory_count": 1,
+      "summary": "The scripts directory contains host-side orchestration tooling for FES weight evaluation, with fes-eval.sh as the primary launcher. The script pre-verifies staged FES weights and then delegates the actual evaluation run to run-recipe.sh while wiring read-only weights mounts, verification mods, and the offline hub shim. This is a thin operational layer that supports evaluation workflows rather than core business logic, and is complemented by a subdirectory holding additional script tooling."
+    },
+    {
+      "file_count": 2,
+      "file_insights": [
+        {
+          "code_purpose": "tool",
+          "dependencies": [
+            {
+              "dependency_type": "use",
+              "is_external": true,
+              "line_number": null,
+              "name": "deepwiki-rs",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": true,
+              "line_number": null,
+              "name": "LiteLLM proxy",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": true,
+              "line_number": null,
+              "name": "git",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "use",
+              "is_external": false,
+              "line_number": null,
+              "name": "shadow-tree.py",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "This script is the main entry point for generating deepwiki architecture docs. It accepts a target path and options, invokes deepwiki-rs, and writes the resulting markdown under deepwiki-rs-docs/ while keeping the .litho cache local-only and gitignored.",
+          "file_path": ".litho/tree/repo/scripts/deepwiki/generate-deepwiki.sh",
+          "importance_score": 0.55,
+          "interfaces": [],
+          "name": "generate-deepwiki.sh",
+          "responsibilities": [
+            "Parse path and options arguments",
+            "Invoke deepwiki-rs (Litho) with the LiteLLM proxy backend",
+            "Write generated docs into deepwiki-rs-docs/",
+            "Keep .litho cache local-only and gitignored"
+          ],
+          "source_summary": "The script sets up and executes deepwiki-rs against a target subtree (defaulting to the whole repository), backed by a local LiteLLM proxy. It manages the output documentation directory and ensures the local cache does not get committed.",
+          "summary": "Bash entry point that runs deepwiki-rs (Litho) to generate C4 architecture documentation, using a local LiteLLM proxy as the model backend."
+        },
+        {
+          "code_purpose": "util",
+          "dependencies": [
+            {
+              "dependency_type": "use",
+              "is_external": true,
+              "line_number": null,
+              "name": "git",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "os",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "shutil",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "subprocess",
+              "path": null,
+              "version": null
+            },
+            {
+              "dependency_type": "import",
+              "is_external": true,
+              "line_number": null,
+              "name": "argparse",
+              "path": null,
+              "version": null
+            }
+          ],
+          "detailed_description": "Because deepwiki-rs does not honor .gitignore, this script pre-filters the repository via git ls-files and creates hardlinks (or copies) of the tracked files into a temporary directory. The resulting shadow tree is a clean input for deepwiki-rs, ensuring documentation reflects only committed source code.",
+          "file_path": ".litho/tree/repo/scripts/deepwiki/shadow-tree.py",
+          "importance_score": 0.5,
+          "interfaces": [
+            {
+              "description": null,
+              "interface_type": "function",
+              "name": "main",
+              "parameters": [],
+              "return_type": "None",
+              "visibility": ""
+            }
+          ],
+          "name": "shadow-tree.py",
+          "responsibilities": [
+            "Identify git-tracked files via git ls-files",
+            "Create a scratch shadow-tree directory",
+            "Materialize files as hardlinks with fallback to copies",
+            "Provide a clean analysis input for deepwiki-rs"
+          ],
+          "source_summary": "main() computes the set of git-tracked files for a given subtree, creates a scratch directory, and populates it with hardlinks or copies of those files. It provides deepwiki-rs with a sanitized directory tree free of node_modules, coverage, and other gitignored output.",
+          "summary": "Python utility that materializes exactly the git-tracked files into a scratch shadow tree using git ls-files, so deepwiki-rs excludes .gitignore'd build artifacts from its analysis."
+        }
+      ],
+      "importance_score": 0.35,
+      "key_files": [
+        "generate-deepwiki.sh",
+        "shadow-tree.py"
+      ],
+      "name": "deepwiki",
+      "path": ".litho/tree/repo/scripts/deepwiki",
+      "purpose": "other",
+      "subdirectory_count": 0,
+      "summary": "The deepwiki directory contains tooling scripts that generate AI-assisted C4 architecture documentation using deepwiki-rs (Litho) and a local LiteLLM proxy. The generate-deepwiki.sh script orchestrates the documentation run, while shadow-tree.py prepares a git-tracked-only shadow tree so that gitignored build artifacts do not pollute the analysis. Together they form a small but focused infrastructure pipeline for producing and maintaining architecture docs from the repository source."
     }
   ],
   "file_insights": []
@@ -11933,24 +14171,25 @@ Code analysis results from preprocessing phase, including definitions of functio
 
 ## Memory Storage Statistics
 
-**Total Storage Size**: 831661 bytes
+**Total Storage Size**: 928899 bytes
 
-- **preprocess**: 394277 bytes (47.4%)
-- **timing**: 35 bytes (0.0%)
-- **documentation**: 248387 bytes (29.9%)
-- **studies_research**: 188962 bytes (22.7%)
+- **studies_research**: 124549 bytes (13.4%)
+- **timing**: 38 bytes (0.0%)
+- **preprocess**: 441856 bytes (47.6%)
+- **documentation**: 362456 bytes (39.0%)
 
 ## Generated Documents Statistics
 
-Number of Generated Documents: 10
+Number of Generated Documents: 11
 
-- Key Modules and Components Research Report_FlashAttention Kernel Domain
-- Key Modules and Components Research Report_Container & Build Infrastructure
 - Architecture Description
-- Core Workflows
-- Key Modules and Components Research Report_Deployment Recipes & Cluster Orchestration
-- Key Modules and Components Research Report_Model Support & Compatibility
 - Boundary Interfaces
+- Core Workflows
+- Key Modules and Components Research Report_Attention Kernel Domain
+- Key Modules and Components Research Report_Container Build & Image Composition Domain
+- Key Modules and Components Research Report_Deployment Recipes & Cluster Orchestration Domain
+- Key Modules and Components Research Report_Developer Tooling Domain
+- Key Modules and Components Research Report_Engine Patching & Model Compatibility Domain
+- Key Modules and Components Research Report_Memory Profiling & Capacity Domain
+- Key Modules and Components Research Report_Model Weights & Offline Serving Domain
 - Project Overview
-- Key Modules and Components Research Report_Mod Management & Patch Orchestration
-- Key Modules and Components Research Report_Weight Loading & Memory Optimization
