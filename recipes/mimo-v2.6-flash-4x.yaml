@@ -1,21 +1,28 @@
-# Recipe: MiMo-V2.6-Flash-RL 4x
-# Same model and serve args as mimo-v2.6-flash.yaml, but TP=4 across four DGX
-# Spark nodes (~43 GB of weights per rank at fp8 KV; 0.87 utilization leaves a
-# large KV budget for the 1M context). Intended for FES evaluation:
-# scripts/fes-eval.sh (cluster-config) launches it against FES-staged weights
-# via the fes-weights mod; a plain run-recipe.sh launch still works because
-# fes-weights is opt-in (inert without FES_WEIGHTS_ENABLED=1) and falls back to
-# the hub cache via .env HF_HOME.
+# Recipe: MiMo-V2.6-Flash-RL 4x (b12x)
+# TP=4 across four DGX Spark nodes using the b12x-optimized serving stack:
+# B12X attention (DiffKV + fp8 KV), b12x MoE (MXFP4), b12x linear, and b12x
+# async checkpoint loading. fp8 KV on the 9 full-attention layers via
+# --kv-cache-dtype-skip-layers; the 39 SWA layers stay bf16. Intended for FES
+# evaluation: scripts/fes-eval.sh (cluster-config) launches it against
+# FES-staged weights via the fes-weights mod; a plain run-recipe.sh launch
+# still works because fes-weights is opt-in (inert without
+# FES_WEIGHTS_ENABLED=1) and falls back to the hub cache via .env HF_HOME.
 
 recipe_version: "1"
 name: MiMo-V2.6-Flash-RL 4x
-description: vLLM serving XiaomiMiMo/MiMo-V2.6-Flash-RL with DFlash speculative decoding on a four-node DGX Spark cluster (TP=4)
+description: vLLM serving XiaomiMiMo/MiMo-V2.6-Flash-RL with DFlash speculative decoding on a four-node DGX Spark cluster (TP=4, b12x stack)
 
 # HuggingFace model to download (optional, for --download-model)
 model: XiaomiMiMo/MiMo-V2.6-Flash-RL
 
-# Container image to use (vLLM main from 2026-09-21 or newer)
-container: vllm-node
+# Container image: b12x fork (local-inference-lab/vllm@dev/karmic-kraken) with
+# B12X paged attention (DiffKV + fp8 KV + sinks + non-causal), b12x MoE (MXFP4
+# w4a8_mx), b12x linear, and b12x async checkpoint loader. Build with:
+#   ./build-and-copy.sh --exp-b12x -t vllm-node-b12x
+container: vllm-node-b12x
+
+build_args:
+  - --exp-b12x
 
 # ~173 GB of weights: needs all four Sparks
 cluster_only: true
@@ -24,9 +31,16 @@ cluster_only: true
 # hub-cache shim that lets both this recipe's `vllm serve <org/model>` and the
 # mimo drafter-staging mod's snapshot_download() resolve offline (see
 # docs/fes-weight-staging.md). In hub-cache mode it no-ops.
+# mimo-diffkv-fp8-kv runs LAST: on the b12x fork its cache_config wiring is a
+# no-op (the fork already passes it), but the sliding-window fix is still
+# required — Attention() falls back to cache_config.sliding_window (128) for
+# full-attention layers, capping them at 128 tokens and looping long
+# generations. The mod's copy-with-None prevents that. The Triton DiffKV fp8
+# patch is unused (B12X backend handles fp8 KV natively).
 mods:
   - mods/fes-weights
   - mods/mimo-v2.6-flash
+  - mods/mimo-diffkv-fp8-kv
 
 # Default settings (can be overridden via CLI where supported)
 # gpu_memory_utilization 0.80 (not the 2x recipe's 0.87): the FES bge-m3 embed
@@ -46,19 +60,35 @@ defaults:
   num_speculative_tokens: 7
 
 # Environment variables
-env: {}
+# CUTE_DSL_ARCH: CuTe DSL compiler target for b12x kernel compilation.
+env:
+  CUTE_DSL_ARCH: "sm_121a"
 
-# The vLLM serve command template - identical to mimo-v2.6-flash.yaml (see that
-# recipe for the per-flag rationale; the only difference is the TP size).
+# The vLLM serve command template.
+# --attention-backend B12X: b12x paged attention supports DiffKV (192/128 K/V
+#   head dims), fp8 KV, attention sinks, sliding window, and non-causal (for
+#   DFlash). Replaces the Triton DiffKV backend on sm_121.
+# --moe-backend b12x: b12x fused MoE for MXFP4 experts (w4a8_mx / w4a16).
+#   Replaces Marlin. Geometry validated: hidden 4096%256=0, intermediate
+#   2048/TP4=512%32=0, SiLU, no biases.
+# --linear-backend b12x: b12x GEMM kernels for linear projections.
+# --load-format b12x: async io_uring/CUDA-copy ring for checkpoint loading.
+#   Auto-registered via vLLM general_plugins entry point (b12x installed).
+# --kv-cache-dtype fp8 + --kv-cache-dtype-skip-layers sliding_window: fp8 KV on
+#   the 9 full-attention layers; 39 SWA layers (128-token window) stay bf16.
 command: |
   vllm serve XiaomiMiMo/MiMo-V2.6-Flash-RL \
       --trust-remote-code \
       --host {host} \
       --port {port} \
       --tensor-parallel-size {tensor_parallel} \
-      --moe-backend marlin \
+      --moe-backend b12x \
+      --linear-backend b12x \
+      --attention-backend B12X \
+      --load-format b12x \
       --max-model-len {max_model_len} \
       --kv-cache-dtype fp8 \
+      --kv-cache-dtype-skip-layers sliding_window \
       --max-num-seqs {max_num_seqs} \
       --max-num-batched-tokens {max_num_batched_tokens} \
       --gpu-memory-utilization {gpu_memory_utilization} \
