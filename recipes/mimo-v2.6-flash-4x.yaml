@@ -64,8 +64,16 @@ defaults:
 
 # Environment variables
 # CUTE_DSL_ARCH: CuTe DSL compiler target for b12x kernel compilation.
+# VLLM_USE_V2_MODEL_RUNNER: pin the V2 runner (auto-resolution already picks
+#   it); DFlash drafters with mixed sliding/full attention require it, and the
+#   pin guards against the fallback if the fork's auto-resolution changes.
+#   VLLM_USE_AOT_COMPILE and VLLM_USE_FLASHINFER_SAMPLER are already default-on
+#   in the b12x fork; VLLM_USE_B12X_FP8_GEMM and VLLM_USE_B12X_WO_PROJECTION
+#   from the DeepSeek recipe are dead vars in this fork revision (referenced
+#   nowhere in installed vllm/b12x) and are deliberately omitted.
 env:
   CUTE_DSL_ARCH: "sm_121a"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
 
 # The vLLM serve command template.
 # --attention-backend B12X: b12x paged attention supports DiffKV (192/128 K/V
@@ -85,6 +93,13 @@ env:
 #   platform's skip-page estimate uses the model-level KV head count (4), but
 #   SWA layers have 8, so the shared page lands below the smallest B12X kernel
 #   block page (64) and the engine asserts in resolve_kv_cache_layout.
+# --speculative-config attention_backend B12X: run the DFlash drafter on B12X
+#   instead of TRITON_ATTN — B12X supports non-causal (needed by DFlash), so the
+#   drafter reuses the same kernel family as the target.
+# --compilation-config cudagraph_mode FULL_AND_PIECEWISE + custom_ops all:
+#   piecewise prefill graphs on top of full decode graphs (DeepSeek b12x
+#   recipe combo). Valid only on the V2 model runner (pinned above); dynamic
+#   DFlash decoding stays on full graphs there.
 command: |
   vllm serve XiaomiMiMo/MiMo-V2.6-Flash-RL \
       --trust-remote-code \
@@ -105,8 +120,8 @@ command: |
       --enable-chunked-prefill \
       --async-scheduling \
       --enable-prefix-caching \
-      --speculative-config '{{"method":"dflash","model":"/workspace/MiMo-V2.6-Flash-RL-dflash","num_speculative_tokens":{num_speculative_tokens},"attention_backend":"TRITON_ATTN"}}' \
-      --compilation-config '{{"cudagraph_mode":"FULL_DECODE_ONLY"}}' \
+      --speculative-config '{{"method":"dflash","model":"/workspace/MiMo-V2.6-Flash-RL-dflash","num_speculative_tokens":{num_speculative_tokens},"attention_backend":"B12X"}}' \
+      --compilation-config '{{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}}' \
       --generation-config vllm \
       --override-generation-config '{{"top_p":0.95}}' \
       --reasoning-parser mimo \
