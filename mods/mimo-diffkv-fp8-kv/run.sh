@@ -21,6 +21,10 @@ set -euo pipefail
 #    resolve_kv_cache_layout. The patch floors the SWA spec's padded page at
 #    its chosen kernel block's natural page (needed only with skip-layers on
 #    coarse kernel block sizes such as B12X's 64/128).
+# 4. qwen3_dflash.py — DFlashAttention.get_kv_cache_spec consumes
+#    skip_page_size_padded directly (bypassing the attention.py chooser), so
+#    the same underestimate leaves the drafter's padded page below its
+#    natural 128 KiB page. Floored the same way.
 #
 # Same fix as tonyd2wild/MiMo-V2.6-Flash-2x-DGX-Spark patches 01+03, verified
 # on GB10 (fp8 KV pool measured at 12.6 GiB, needle tests at 250K). Unlike his
@@ -33,21 +37,22 @@ PYTHON_ROOT="${VLLM_SITE_PACKAGES:-${PYTHON_ROOT:-/usr/local/lib/python3.12/dist
 MIMO="$PYTHON_ROOT/vllm/model_executor/models/mimo_v2.py"
 DIFFKV="$PYTHON_ROOT/vllm/v1/attention/backends/triton_attn_diffkv.py"
 ATTENTION="$PYTHON_ROOT/vllm/model_executor/layers/attention/attention.py"
+DFLASH="$PYTHON_ROOT/vllm/model_executor/models/qwen3_dflash.py"
 
 echo "=== MiMo fp8 KV cache mod ==="
 
-for f in "$MIMO" "$DIFFKV" "$ATTENTION"; do
+for f in "$MIMO" "$DIFFKV" "$ATTENTION" "$DFLASH"; do
   if [ ! -f "$f" ]; then
     echo "$PREFIX Missing $f; a newer image is required." >&2
     exit 1
   fi
 done
 
-python3 - "$MIMO" "$DIFFKV" "$ATTENTION" <<'PY'
+python3 - "$MIMO" "$DIFFKV" "$ATTENTION" "$DFLASH" <<'PY'
 from pathlib import Path
 import sys
 
-mimo_path, diffkv_path, attention_path = (Path(p) for p in sys.argv[1:4])
+mimo_path, diffkv_path, attention_path, dflash_path = (Path(p) for p in sys.argv[1:5])
 
 
 def patch(path: Path, edits: list[tuple[str, str]], label: str) -> None:
@@ -166,6 +171,62 @@ patch(
         ),
     ],
     "attention.py",
+)
+
+patch(
+    dflash_path,
+    [
+        (
+            "            return SlidingWindowSpec(\n"
+            "                block_size=vllm_config.cache_config.block_size,\n"
+            "                num_kv_heads=self.num_kv_heads,\n"
+            "                head_size=self.head_size,\n"
+            "                head_size_v=self.head_size_v,\n"
+            "                dtype=self.kv_cache_torch_dtype,\n"
+            "                sliding_window=self.sliding_window,\n"
+            "                page_size_padded=getattr(\n"
+            "                    vllm_config.cache_config, \"skip_page_size_padded\", None\n"
+            "                ),\n",
+            "            # mimo-diffkv-fp8-kv: the DFlash drafter consumes\n"
+            "            # skip_page_size_padded directly (bypassing the attention.py\n"
+            "            # block-size chooser patched above), so the same platform\n"
+            "            # underestimate leaves its padded page below its natural one\n"
+            "            # (block 128 x 1024 B/token = 128 KiB vs 48 KiB shared page)\n"
+            "            # and the engine asserts in resolve_kv_cache_layout. Floor the\n"
+            "            # padded page at the spec's natural page; unification pads the\n"
+            "            # remaining specs up.\n"
+            "            skip_page = getattr(\n"
+            "                vllm_config.cache_config, \"skip_page_size_padded\", None\n"
+            "            )\n"
+            "            spec = SlidingWindowSpec(\n"
+            "                block_size=vllm_config.cache_config.block_size,\n"
+            "                num_kv_heads=self.num_kv_heads,\n"
+            "                head_size=self.head_size,\n"
+            "                head_size_v=self.head_size_v,\n"
+            "                dtype=self.kv_cache_torch_dtype,\n"
+            "                sliding_window=self.sliding_window,\n"
+            "                page_size_padded=None,\n",
+        ),
+        (
+            "                kv_quant_mode=get_kv_quant_mode(self.kv_cache_dtype),\n"
+            "                dcp_replicated=dcp_replicated,\n"
+            "            )\n"
+            "        spec = super().get_kv_cache_spec(vllm_config)\n",
+            "                kv_quant_mode=get_kv_quant_mode(self.kv_cache_dtype),\n"
+            "                dcp_replicated=dcp_replicated,\n"
+            "            )\n"
+            "            if skip_page is not None:\n"
+            "                spec = dataclasses.replace(\n"
+            "                    spec,\n"
+            "                    page_size_padded=max(\n"
+            "                        skip_page, spec.unpadded_page_size_bytes\n"
+            "                    ),\n"
+            "                )\n"
+            "            return spec\n"
+            "        spec = super().get_kv_cache_spec(vllm_config)\n",
+        ),
+    ],
+    "qwen3_dflash.py",
 )
 PY
 
