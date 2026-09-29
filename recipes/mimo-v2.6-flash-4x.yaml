@@ -55,6 +55,7 @@ defaults:
   tensor_parallel: 4
   gpu_memory_utilization: 0.75
   max_model_len: 1048576
+  block_size: 128
   max_num_seqs: 32
   max_num_batched_tokens: 16384
   num_speculative_tokens: 7
@@ -74,6 +75,8 @@ env:
 # --linear-backend b12x: b12x GEMM kernels for linear projections.
 # --load-format b12x: async io_uring/CUDA-copy ring for checkpoint loading.
 #   Auto-registered via vLLM general_plugins entry point (b12x installed).
+# --block-size 128: b12x attention requires block size 64 or 128 (vLLM default
+#   16 is rejected). 128 minimizes block count for the 1M context.
 # --kv-cache-dtype fp8 + --kv-cache-dtype-skip-layers sliding_window: fp8 KV on
 #   the 9 full-attention layers; 39 SWA layers (128-token window) stay bf16.
 command: |
@@ -86,6 +89,7 @@ command: |
       --linear-backend b12x \
       --attention-backend B12X \
       --load-format b12x \
+      --block-size {block_size} \
       --max-model-len {max_model_len} \
       --kv-cache-dtype fp8 \
       --kv-cache-dtype-skip-layers sliding_window \
