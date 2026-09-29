@@ -32,11 +32,13 @@ cluster_only: true
 # mimo drafter-staging mod's snapshot_download() resolve offline (see
 # docs/fes-weight-staging.md). In hub-cache mode it no-ops.
 # mimo-diffkv-fp8-kv runs LAST: on the b12x fork its cache_config wiring is a
-# no-op (the fork already passes it), but the sliding-window fix is still
-# required — Attention() falls back to cache_config.sliding_window (128) for
-# full-attention layers, capping them at 128 tokens and looping long
-# generations. The mod's copy-with-None prevents that. The Triton DiffKV fp8
-# patch is unused (B12X backend handles fp8 KV natively).
+# no-op (the fork already passes it), but two fixes are still required: the
+# sliding-window fix (Attention() falls back to cache_config.sliding_window
+# (128) for full-attention layers, capping them at 128 tokens and looping long
+# generations) and the attention.py skip-page floor (without it
+# --kv-cache-dtype-skip-layers asserts in resolve_kv_cache_layout on B12X's
+# coarse 64/128 kernel blocks). The Triton DiffKV fp8 patch is unused (B12X
+# backend handles fp8 KV natively).
 mods:
   - mods/fes-weights
   - mods/mimo-v2.6-flash
@@ -77,9 +79,12 @@ env:
 #   Auto-registered via vLLM general_plugins entry point (b12x installed).
 # --block-size 128: b12x attention requires block size 64 or 128 (vLLM default
 #   16 is rejected). 128 minimizes block count for the 1M context.
-# --kv-cache-dtype fp8: fp8 KV on all 48 layers. --kv-cache-dtype-skip-layers
-#   was dropped: the mixed bf16-SWA / fp8-full page sizes trigger an assertion
-#   in the b12x fork's KV layout resolver (page_size_padded < unpadded).
+# --kv-cache-dtype fp8 + --kv-cache-dtype-skip-layers sliding_window: fp8 KV on
+#   the 9 full-attention layers; 39 SWA layers (128-token window) stay bf16.
+#   Needs the mimo-diffkv-fp8-kv mod's attention.py page-floor patch: the
+#   platform's skip-page estimate uses the model-level KV head count (4), but
+#   SWA layers have 8, so the shared page lands below the smallest B12X kernel
+#   block page (64) and the engine asserts in resolve_kv_cache_layout.
 command: |
   vllm serve XiaomiMiMo/MiMo-V2.6-Flash-RL \
       --trust-remote-code \
@@ -93,6 +98,7 @@ command: |
       --block-size {block_size} \
       --max-model-len {max_model_len} \
       --kv-cache-dtype fp8 \
+      --kv-cache-dtype-skip-layers sliding_window \
       --max-num-seqs {max_num_seqs} \
       --max-num-batched-tokens {max_num_batched_tokens} \
       --gpu-memory-utilization {gpu_memory_utilization} \
