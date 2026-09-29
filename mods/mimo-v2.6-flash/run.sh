@@ -32,7 +32,9 @@ if ! grep -qF "def _shard_fp8_qkv_proj(" "$MODELS_DIR/mimo_v2.py"; then
   echo "$PREFIX Rebuild from a newer vLLM ref or launch with --apply-vllm-pr 57508." >&2
   exit 1
 fi
-if ! grep -qF "GateLinear" "$MODELS_DIR/mimo_v2.py"; then
+# PR #57784 presents as GateLinear on upstream vLLM main; the b12x fork uses
+# moe_router_dtype + FusedMoEFactory instead. Accept either.
+if ! grep -qF "GateLinear" "$MODELS_DIR/mimo_v2.py" && ! grep -qF "moe_router_dtype" "$MODELS_DIR/mimo_v2.py"; then
   echo "$PREFIX Installed vLLM predates PR #57784 (bf16 MoE router, MXFP4 experts, DFlash value scale)." >&2
   echo "$PREFIX Rebuild from a newer vLLM ref or launch with --apply-vllm-pr 57784." >&2
   exit 1
