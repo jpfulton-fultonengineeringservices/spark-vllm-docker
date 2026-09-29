@@ -1,11 +1,11 @@
 #!/bin/bash
 # shellcheck shell=bash
 #
-# scripts/lib/common.sh - Shared logging, dependency, and utility helpers
-# for the spark-vllm-docker scripts.
+# scripts/deepwiki/lib/common.sh - Shared logging, dependency, and utility
+# helpers for the f2-harness deepwiki scripts.
 #
 # Source this file from other scripts:
-#   LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../lib" >/dev/null 2>&1 && pwd -P)"
+#   LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/lib" >/dev/null 2>&1 && pwd -P)"
 #   source "${LIB_DIR}/common.sh"
 #
 # Compatible with: bash 3.2 + BSD coreutils (macOS stock /bin/bash)
@@ -105,7 +105,7 @@ require_command() {
 #
 # log_repo_root
 #   Walks up from the current directory until `git rev-parse` succeeds and
-#   prints the top-level path. Returns 1 if not inside a git work tree.
+#   prints the top-level path. Returns 1 when not inside a git work tree.
 # ---------------------------------------------------------------------------
 
 log_repo_root() {

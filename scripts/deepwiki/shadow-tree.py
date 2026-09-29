@@ -3,10 +3,11 @@
 
 deepwiki-rs's directory walk and per-directory dossier reads do NOT honor
 .gitignore, so pointing it at the working tree pollutes the analysis with
-gitignored build output (bin/, build/, node_modules/, ...). Git itself
-resolves the full .gitignore cascade, so this script materializes exactly
-`git ls-files` (as hardlinks, falling back to copies) into a scratch
-directory and scripts/generate-deepwiki.sh points deepwiki-rs at that.
+gitignored build output (node_modules/, coverage/, packages/*/lib/ ...). Git
+itself resolves the full .gitignore cascade, so this script materializes
+exactly `git ls-files` (as hardlinks, falling back to copies) into a scratch
+directory and scripts/deepwiki/generate-deepwiki.sh points deepwiki-rs at
+that.
 
 Environment variables:
     REPO_ROOT  repository root, used as cwd for `git ls-files`
