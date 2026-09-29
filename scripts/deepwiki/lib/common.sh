@@ -2,7 +2,7 @@
 # shellcheck shell=bash
 #
 # scripts/deepwiki/lib/common.sh - Shared logging, dependency, and utility
-# helpers for the f2-harness deepwiki scripts.
+# helpers for the spark-vllm-docker deepwiki scripts.
 #
 # Source this file from other scripts:
 #   LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/lib" >/dev/null 2>&1 && pwd -P)"
