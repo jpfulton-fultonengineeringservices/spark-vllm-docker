@@ -8,6 +8,16 @@ This project provides Bash and Python orchestration for running vLLM on one or
 more NVIDIA DGX Spark systems. Work from the repository root and read `README.md`
 for the public project overview.
 
+**Architecture map:** [`deepwiki-rs-docs/.agent-content/index.md`](deepwiki-rs-docs/.agent-content/index.md)
+— a generated, progressively discoverable documentation tree of this whole
+project: C4 context, 12 area maps (boundaries, domains, dependencies),
+topic views, diagrams, and per-file digests. Start there before exploring an
+unfamiliar area: pick a **Topic** for a functional view or an **Area** for a
+structural view, follow the markdown links down until you reach the exact
+source file, then read that file. It is cheaper and more accurate than
+globbing and grepping your way to the same answer, and every page links
+straight into the code it describes.
+
 ## Choose One Guide
 
 - **Use or operate the repository:** For host preparation, recipe selection,
