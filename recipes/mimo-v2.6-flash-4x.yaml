@@ -77,8 +77,9 @@ env:
 #   Auto-registered via vLLM general_plugins entry point (b12x installed).
 # --block-size 128: b12x attention requires block size 64 or 128 (vLLM default
 #   16 is rejected). 128 minimizes block count for the 1M context.
-# --kv-cache-dtype fp8 + --kv-cache-dtype-skip-layers sliding_window: fp8 KV on
-#   the 9 full-attention layers; 39 SWA layers (128-token window) stay bf16.
+# --kv-cache-dtype fp8: fp8 KV on all 48 layers. --kv-cache-dtype-skip-layers
+#   was dropped: the mixed bf16-SWA / fp8-full page sizes trigger an assertion
+#   in the b12x fork's KV layout resolver (page_size_padded < unpadded).
 command: |
   vllm serve XiaomiMiMo/MiMo-V2.6-Flash-RL \
       --trust-remote-code \
@@ -92,7 +93,6 @@ command: |
       --block-size {block_size} \
       --max-model-len {max_model_len} \
       --kv-cache-dtype fp8 \
-      --kv-cache-dtype-skip-layers sliding_window \
       --max-num-seqs {max_num_seqs} \
       --max-num-batched-tokens {max_num_batched_tokens} \
       --gpu-memory-utilization {gpu_memory_utilization} \
