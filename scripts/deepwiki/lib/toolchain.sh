@@ -1,22 +1,22 @@
 #!/bin/bash
 # shellcheck shell=bash
 #
-# scripts/lib/toolchain.sh - Validates and installs the supporting toolchains
-# for the spark-vllm-docker scripts:
+# scripts/deepwiki/lib/toolchain.sh - Validates and installs the supporting
+# toolchains for the f2-harness deepwiki scripts:
 #
 #   rust / cargo / rustup   - required to build deepwiki-rs from the FSE fork
 #   python3 + pyenv         - required for the shadow-tree builder; pyenv is
 #                             used for python version selection/install
 #
 # Source this file from other scripts:
-#   LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../lib" >/dev/null 2>&1 && pwd -P)"
+#   LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/lib" >/dev/null 2>&1 && pwd -P)"
 #   source "${LIB_DIR}/common.sh"
 #   source "${LIB_DIR}/toolchain.sh"
 #
 # Or run standalone:
-#   scripts/lib/toolchain.sh check          # validate presence, exit non-zero if incomplete
-#   scripts/lib/toolchain.sh install        # install what's missing (macOS + Homebrew)
-#   scripts/lib/toolchain.sh python-bin     # print the chosen python3 interpreter path
+#   scripts/deepwiki/lib/toolchain.sh check          # validate presence, exit non-zero if incomplete
+#   scripts/deepwiki/lib/toolchain.sh install        # install what's missing (macOS + Homebrew)
+#   scripts/deepwiki/lib/toolchain.sh python-bin     # print the chosen python3 interpreter path
 #
 # The install path assumes macOS with Homebrew (see toolchain_install).
 #
@@ -155,7 +155,7 @@ toolchain_check() {
         return 0
     fi
     log_error "Toolchain incomplete. Install path (macOS + Homebrew):"
-    printf '       scripts/lib/toolchain.sh install\n' >&2
+    printf '       scripts/deepwiki/lib/toolchain.sh install\n' >&2
     return 1
 }
 
@@ -170,7 +170,7 @@ toolchain_is_macos() {
 # toolchain_install_rust
 #   Installs rustup via Homebrew and, when cargo/rustc are absent, a stable
 #   rust toolchain via rustup-init. Uses --no-modify-path so the caller
-#   controls PATH (scripts/generate-deepwiki.sh prepends ~/.cargo/bin); the
+#   controls PATH (generate-deepwiki.sh prepends ~/.cargo/bin); the
 #   check/install functions resolve rust bins against that dir too.
 toolchain_install_rust() {
     log_step "Ensuring rust toolchain (cargo/rustc via rustup)..."
