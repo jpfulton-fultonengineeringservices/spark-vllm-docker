@@ -27,10 +27,17 @@
 # - per-rank target weights ~58 GB (1/3 of the checkpoint); the last rank adds
 #   the LM head plus the whole DFlash drafter (~5 layers, ~3 GB) and is the
 #   heaviest stage.
-# - fp8 KV on the full-attention layers per stage is roughly a third of the
-#   TP=2 recipe's per-rank need, so the 1M context fits with wide margin at
-#   gpu_memory_utilization 0.80 (kept at the 4x value so the resident FES
-#   bge-m3 embed units keep co-existing; raise it for standalone use).
+# - KV capacity at TP=1, corrected 2026-10-01: the clean two-group layout
+#   (target + independent draft group) needs 33.84 GiB to hold a single
+#   1M-token request, vs 27.17 GiB available at gpu_memory_utilization 0.80
+#   (kept at the 4x value so the resident FES bge-m3 embed units keep
+#   co-existing; raise it for standalone use). An earlier estimate claiming
+#   the 1M context fits with wide margin was wrong (it measured the broken
+#   shared-stride layout). Observed fleet workloads peak far below the
+#   single-request worst case (TP=4: 22% KV util at 8 concurrent), so the
+#   recipe runs with VLLM_SKIP_KV_CACHE_MEMORY_CHECK=1 and keeps the full
+#   1M max_model_len; a request beyond the pool queues instead of crashing.
+#   Single-request fit at this memory: ~698K tokens.
 #
 # b12x at TP=1: hidden 4096%256=0 and MoE intermediate 2048%32=0 hold, so the
 # same backends as the 4x recipe apply. --block-size 128 is required by b12x
@@ -84,6 +91,7 @@ mods:
   - mods/mimo-diffkv-fp8-kv
   - mods/mimo-v2-aux-over-pp
   - mods/b12x-kv-group-lookup
+  - mods/kv-cache-guard-override
 
 # Default settings (can be overridden via CLI where supported)
 defaults:
@@ -106,6 +114,12 @@ defaults:
 env:
   CUTE_DSL_ARCH: "sm_121a"
   VLLM_USE_V2_MODEL_RUNNER: "1"
+  # Skip the startup KV memory guard (needs mods/kv-cache-guard-override).
+  # The guard demands one request fit the full 1M max_model_len in KV (33.84
+  # GiB vs 27.17 GiB available at gmu 0.80); fleet workloads never approach
+  # that (TP=4 peaks at 22% KV util with 8 concurrent sequences), and a
+  # request that outgrows the pool queues instead of crashing.
+  VLLM_SKIP_KV_CACHE_MEMORY_CHECK: "1"
 
 # The vLLM serve command template. Same stack as recipes/mimo-v2.6-flash-4x.yaml
 # with the parallelism rewritten for three nodes (TP is fixed at 1; the
