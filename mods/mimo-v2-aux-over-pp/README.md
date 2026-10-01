@@ -3,8 +3,9 @@
 Runtime mod that enables DFlash (and eagle3-family) speculative decoding for
 MiMo-V2 when vLLM runs with pipeline parallelism (PP > 1). Required by
 `3x-spark-cluster/mimo-v2.6-flash-pp3`, the only local MiMo recipe that runs
-DFlash under PP. Two PP gaps are fixed here: the aux-hidden-state relay
-opt-in and the drafter's input-embedding borrow.
+DFlash under PP. Four PP gaps are fixed here: the aux-hidden-state relay
+opt-in, the drafter's input-embedding borrow, the aux transport glue in
+`MiMoV2Model.forward`, and the draft KV cache group split.
 
 ## What it fixes (verified against vllm main, 2026-10-01)
 
@@ -87,13 +88,35 @@ With the glue in place the slot layout works out per stage (aux ids
 stage 1 packs key 2 and relays 0-1, stage 2 collects 0-2 and packs 3-4 — the
 drafter concatenates all five in layer order.
 
+### 4. Draft KV cache group split at PP > 1
+
+`_partition_parallel_draft_specs` (`vllm/v1/core/kv_cache_utils.py`) gives
+the DFlash drafter's attention layers their own KV cache group. Without the
+split the drafter shares the target's group, and one group shares one block
+stride across incompatible KV geometries (target fp8 320 B rows vs drafter
+bf16 2048 B rows) — on the 3x PP=3 launch the layout math died with
+`setStorage: sizes [2, 130, 2, 128, 2048], strides [532480, 655360,
+262144, 2048, 1] ... out of bounds for storage of size 85196800`.
+
+The upstream split never runs under PP: it early-returns at
+`pipeline_parallel_size > 1`, and its layer-index test compares against the
+PER-RANK layer count (`get_num_layers(parallel_config)` = 16 at PP=3) while
+the drafter's layers extend the GLOBAL index space (48..52 for MiMo-V2.6 +
+5 DFlash layers) — so even without the guard the last stage's own target
+layers would be misclassified as draft. The patch classifies draft layers
+against the global target layer count (`max(num_hidden_layers, per-rank)`,
+bit-identical at PP=1) and allows the split at PP > 1. The resulting group
+shape is the proven PP=1 layout: target group(s) plus one draft group.
+
 ## Behavior
 
 - Idempotent: already-patched regions are skipped, so repeat application in
   the same container is safe.
 - Fails fast with a clear message when the installed vLLM no longer contains
-  the expected `class MiMoV2Model(nn.Module, EagleModelMixin):` or embed-block
-  anchors (layout drift after an image rebuild or fork rebase).
+  the expected `class MiMoV2Model(nn.Module, EagleModelMixin):` / embed-block
+  anchors or the `_partition_parallel_draft_specs` anchor in
+  `vllm/v1/core/kv_cache_utils.py` (layout drift after an image rebuild or
+  fork rebase).
 - Env: `VLLM_SITE_PACKAGES` / `PYTHON_ROOT` (default
   `/usr/local/lib/python3.12/dist-packages`).
 - Runs after `mods/mimo-diffkv-fp8-kv` in the recipe's mod order; the mods

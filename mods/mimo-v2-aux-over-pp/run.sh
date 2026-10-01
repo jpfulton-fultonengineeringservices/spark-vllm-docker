@@ -4,7 +4,7 @@ set -euo pipefail
 # MiMo-V2 aux-hidden-states-over-pipeline mod.
 #
 # Enables DFlash (and eagle3-family) speculative decoding for MiMo-V2 when
-# vLLM runs with pipeline parallelism (PP > 1). Two gaps block it; both are
+# vLLM runs with pipeline parallelism (PP > 1). Three gaps block it; all are
 # fixed here:
 #
 # 1. Startup aborts with:
@@ -36,6 +36,24 @@ set -euo pipefail
 #    finds a real module. Every stage loads the same checkpoint weights, so
 #    the copies are identical; the cost is ~1.25 GiB per extra stage
 #    (vocab 152576 x hidden 4096, bf16).
+#
+# 3. KV cache allocation aborts with:
+#
+#      setStorage: sizes [2, 130, 2, 128, 2048], strides [532480, 655360,
+#      262144, 2048, 1] ... out of bounds for storage of size 85196800
+#
+#    _partition_parallel_draft_specs (vllm/v1/core/kv_cache_utils.py) keeps
+#    the DFlash drafter in the target's cache group under PP. The split
+#    early-returns at PP > 1, and its layer-index test compares against the
+#    PER-RANK layer count (get_num_layers(parallel_config) = 16 at PP=3)
+#    while the drafter's layers extend the GLOBAL index space (48..52), so
+#    even without the guard the last stage's own target layers would be
+#    misclassified as draft. One shared group forces one shared stride
+#    across incompatible KV geometries (target fp8 320 B rows vs drafter
+#    bf16 2048 B rows), and the layout math cannot absorb it. The patch
+#    classifies draft layers against the global target layer count and
+#    allows the split at PP > 1, giving the drafter its own cache group -
+#    the proven PP=1 shape.
 #
 # Risk is bounded: draft tokens are self-verified against target logits, so a
 # misbehaving drafter degrades acceptance rate and speed, not output
@@ -197,3 +215,79 @@ PY
 echo "=====> MiMoV2Model carries DFlash aux hidden states across pipeline stages"
 echo "=====> MiMoV2Model replicates embed_tokens on every pipeline stage for the drafter"
 echo "=====> MiMoV2Model.forward relays aux hidden states across pipeline stages"
+
+KVUTILS="$PYTHON_ROOT/vllm/v1/core/kv_cache_utils.py"
+
+if [ ! -f "$KVUTILS" ]; then
+  echo "$PREFIX Missing $KVUTILS; a newer image is required." >&2
+  exit 1
+fi
+
+python3 - "$KVUTILS" <<'PY'
+from pathlib import Path
+import sys
+
+kvutils_path = Path(sys.argv[1])
+
+
+def patch(path: Path, edits: list[tuple[str, str]], label: str) -> None:
+    text = path.read_text()
+    changed = False
+    for old, new in edits:
+        if new in text:
+            continue
+        if old not in text:
+            raise SystemExit(
+                f"[mimo-v2-aux-over-pp] {label}: expected anchor not found; "
+                "the installed vLLM differs from the layout this mod knows."
+            )
+        text = text.replace(old, new, 1)
+        changed = True
+    if changed:
+        path.write_text(text)
+        print(f"[mimo-v2-aux-over-pp] Patched {label}.")
+    else:
+        print(f"[mimo-v2-aux-over-pp] {label} already patched; skipping.")
+
+
+patch(
+    kvutils_path,
+    [
+        (
+            "        or vllm_config.parallel_config.pipeline_parallel_size > 1\n"
+            "        or vllm_config.scheduler_config.disable_hybrid_kv_cache_manager\n"
+            "    ):\n"
+            "        return kv_cache_spec, {}\n"
+            "\n"
+            "    target_num_layers = vllm_config.model_config.get_num_layers(\n"
+            "        vllm_config.parallel_config\n"
+            "    )\n",
+            "        or vllm_config.scheduler_config.disable_hybrid_kv_cache_manager\n"
+            "    ):\n"
+            "        return kv_cache_spec, {}\n"
+            "\n"
+            "    # spark-vllm-docker/mods/mimo-v2-aux-over-pp: classify draft\n"
+            "    # layers against the GLOBAL target layer count, and allow the\n"
+            "    # split at PP > 1. The drafter's layers extend the global index\n"
+            "    # space (48..52 for MiMo-V2.6 + 5 DFlash layers) and register\n"
+            "    # only on the last PP stage, while\n"
+            "    # get_num_layers(parallel_config) is per-rank (16 at PP=3).\n"
+            "    # The old per-rank count plus the PP > 1 guard kept the drafter\n"
+            "    # inside the target's cache group under PP, and one group shares\n"
+            "    # strides across incompatible KV geometries (setStorage\n"
+            "    # out-of-bounds on the 3x PP=3 launch, 2026-10-01).\n"
+            "    # Independent draft groups are the proven PP=1 shape; max()\n"
+            "    # keeps PP=1 classification bit-identical.\n"
+            "    target_num_layers = max(\n"
+            "        vllm_config.model_config.hf_config.num_hidden_layers,\n"
+            "        vllm_config.model_config.get_num_layers(\n"
+            "            vllm_config.parallel_config\n"
+            "        ),\n"
+            "    )\n",
+        ),
+    ],
+    "kv_cache_utils.py",
+)
+PY
+
+echo "=====> _partition_parallel_draft_specs gives the drafter its own cache group at PP>1"

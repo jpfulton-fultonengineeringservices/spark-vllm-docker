@@ -15,6 +15,61 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 ROOT="$TMP_DIR/site"
 mkdir -p "$ROOT/vllm/model_executor/models"
 MIMO="$ROOT/vllm/model_executor/models/mimo_v2.py"
+mkdir -p "$ROOT/vllm/v1/core"
+KVUTILS="$ROOT/vllm/v1/core/kv_cache_utils.py"
+
+cat > "$KVUTILS" <<'EOF'
+"""Fragment of vllm/v1/core/kv_cache_utils.py for the mod test."""
+
+
+class VllmConfig:
+    pass
+
+
+class KVCacheSpec:
+    pass
+
+
+def _partition_parallel_draft_specs(
+    vllm_config: VllmConfig,
+    kv_cache_spec: dict[str, KVCacheSpec],
+) -> tuple[dict[str, KVCacheSpec], dict[str, KVCacheSpec]]:
+    """Split appended DFlash or GLM DSpark layers for PP1 cache grouping."""
+    from vllm.model_executor.models.utils import extract_layer_index
+
+    speculative_config = vllm_config.speculative_config
+    if (
+        speculative_config is None
+        or not (
+            speculative_config.method == "dflash"
+            or (
+                speculative_config.method == "dspark"
+                and speculative_config.draft_model_config.hf_config.model_type
+                == "glm53_dspark"
+            )
+        )
+        or vllm_config.parallel_config.pipeline_parallel_size > 1
+        or vllm_config.scheduler_config.disable_hybrid_kv_cache_manager
+    ):
+        return kv_cache_spec, {}
+
+    target_num_layers = vllm_config.model_config.get_num_layers(
+        vllm_config.parallel_config
+    )
+    target_specs: dict[str, KVCacheSpec] = {}
+    draft_specs: dict[str, KVCacheSpec] = {}
+    for layer_name, spec in kv_cache_spec.items():
+        try:
+            layer_index = extract_layer_index(layer_name)
+        except (AssertionError, IndexError, ValueError):
+            target_specs[layer_name] = spec
+            continue
+        if layer_index >= target_num_layers:
+            draft_specs[layer_name] = spec
+        else:
+            target_specs[layer_name] = spec
+    return target_specs, draft_specs
+EOF
 
 cat > "$MIMO" <<'EOF'
 import types
@@ -227,13 +282,100 @@ hidden, aux = m2.forward(None, None, mod.IntermediateTensors({
 assert aux == ["A1", "A12", "A24", "H36R36", "H48R48"], aux
 PY
 
+grep -qF "Patched kv_cache_utils.py." <<< "$out1" || fail "missing kv_cache_utils patch report"
+grep -qF "target_num_layers = max(" "$KVUTILS" \
+    || fail "global draft classification missing"
+grep -qF "hf_config.num_hidden_layers" "$KVUTILS" \
+    || fail "global target layer count missing"
+! grep -qF "or vllm_config.parallel_config.pipeline_parallel_size > 1" "$KVUTILS" \
+    || fail "PP>1 guard still blocks the draft-group split"
+
+python3 - "$KVUTILS" <<'PY' || fail "patched _partition_parallel_draft_specs does not behave"
+import importlib.util
+import re
+import sys
+import types
+
+stub = types.ModuleType("vllm.model_executor.models.utils")
+
+
+def extract_layer_index(name):
+    match = re.search(r"(\d+)", name)
+    if not match:
+        raise ValueError(name)
+    return int(match.group(1))
+
+
+stub.extract_layer_index = extract_layer_index
+sys.modules["vllm.model_executor.models.utils"] = stub
+
+spec = importlib.util.spec_from_file_location("kv_utils", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+
+
+class NS:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+def make_cfg(pp):
+    return NS(
+        speculative_config=NS(
+            method="dflash",
+            draft_model_config=NS(hf_config=NS(model_type="dflash_qwen3")),
+        ),
+        parallel_config=NS(pipeline_parallel_size=pp),
+        scheduler_config=NS(disable_hybrid_kv_cache_manager=False),
+        model_config=NS(
+            hf_config=NS(num_hidden_layers=48),
+            get_num_layers=lambda parallel_config: (
+                48 // parallel_config.pipeline_parallel_size
+            ),
+        ),
+    )
+
+
+def indices(names):
+    return sorted(int(re.search(r"\d+", name).group()) for name in names)
+
+
+# PP=3, last stage: global target layers 32..47 plus drafter 48..52. The old
+# code early-returned (one shared group -> shared strides -> setStorage).
+kv = {"model.layers.%d.self_attn" % i: object() for i in range(32, 53)}
+target, draft = m._partition_parallel_draft_specs(make_cfg(3), kv)
+assert indices(target) == list(range(32, 48)), target
+assert indices(draft) == [48, 49, 50, 51, 52], draft
+
+# PP=1: target 0..47 plus drafter 48..52 (bit-identical to the old behavior).
+kv = {"model.layers.%d.self_attn" % i: object() for i in range(0, 53)}
+target, draft = m._partition_parallel_draft_specs(make_cfg(1), kv)
+assert len(target) == 48 and len(draft) == 5, (len(target), len(draft))
+
+# No speculative config: unsplit.
+cfg = make_cfg(3)
+cfg.speculative_config = None
+kv = {"model.layers.0.self_attn": object()}
+assert m._partition_parallel_draft_specs(cfg, kv) == (kv, {})
+PY
+
 # 2. Second run is a no-op (idempotent within a fresh container).
 cp "$MIMO" "$TMP_DIR/mimo.after1"
+cp "$KVUTILS" "$TMP_DIR/kvutils.after1"
 out2=$(PYTHON_ROOT="$ROOT" bash "$MOD") || fail "re-run exited non-zero"
 cmp -s "$TMP_DIR/mimo.after1" "$MIMO" || fail "re-run modified an already-patched file"
+cmp -s "$TMP_DIR/kvutils.after1" "$KVUTILS" \
+    || fail "re-run modified an already-patched kv_cache_utils.py"
 grep -qF "already patched; skipping" <<< "$out2" || fail "missing skip report"
 
-# 3. Missing anchor fails fast instead of writing garbage.
+# 3. Missing kv_cache_utils.py fails fast.
+mv "$KVUTILS" "$TMP_DIR/kvutils.saved"
+if PYTHON_ROOT="$ROOT" bash "$MOD" 2>/dev/null; then
+    fail "mod should fail when kv_cache_utils.py is missing"
+fi
+mv "$TMP_DIR/kvutils.saved" "$KVUTILS"
+
+# 4. Missing anchor fails fast instead of writing garbage.
 cat > "$MIMO" <<'EOF'
 def something_else():
     pass
@@ -242,7 +384,7 @@ if PYTHON_ROOT="$ROOT" bash "$MOD" 2>/dev/null; then
     fail "mod should fail when the anchor is missing"
 fi
 
-# 4. Missing mimo_v2.py fails fast.
+# 5. Missing mimo_v2.py fails fast.
 rm -f "$MIMO"
 if PYTHON_ROOT="$ROOT" bash "$MOD" 2>/dev/null; then
     fail "mod should fail when mimo_v2.py is missing"
