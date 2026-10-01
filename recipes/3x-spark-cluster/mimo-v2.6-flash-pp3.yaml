@@ -108,7 +108,14 @@ defaults:
   max_model_len: 1048576
   block_size: 128
   max_num_seqs: 32
-  max_num_batched_tokens: 16384
+  # 4096, not the 4x fleet's 16384: every KV cache group retains about
+  # (sliding_window + one in-flight chunk) of blocks per request during
+  # prefill, and the PP=3 build fragments the SWA-128 layers into ~11
+  # groups, so a request's prefill-time footprint is context + ~11 x
+  # chunk_size. At 16384 a 63K prompt transiently consumed ~53% of the
+  # 847K-token pool (measured); 4096 cuts the retention term ~4x. Long
+  # prefill is slightly slower; decode is unaffected.
+  max_num_batched_tokens: 4096
   num_speculative_tokens: 7
 
 # Environment variables
