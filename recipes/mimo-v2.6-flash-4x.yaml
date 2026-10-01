@@ -45,12 +45,14 @@ mods:
   - mods/mimo-diffkv-fp8-kv
 
 # Default settings (can be overridden via CLI where supported)
-# gpu_memory_utilization 0.80 (not the 2x recipe's 0.87): the FES bge-m3 embed
-# units stay resident on every rank (~12 GiB docker cap) and the flagship
-# glm53-flash-tp4 proved 0.80 + embed 0.10 co-existence. At TP4 the per-rank
-# weights are ~43 GB, so 0.80 (~97 GiB) still leaves a far larger KV budget
-# than the 2x config needed for the 1M context (fp8 KV ~7 GiB per 1M token per
-# rank vs ~14 GiB at TP2).
+# gpu_memory_utilization: the FES bge-m3 embed units stay resident on every
+# rank (~12 GiB docker cap) and the flagship glm53-flash-tp4 proved 0.80 +
+# embed 0.10 co-existence; the effective default below is 0.75. Corrected
+# 2026-10-01: earlier per-rank KV-budget math in this comment ("fp8 KV ~7 GiB
+# per 1M token per rank, far larger budget than the 2x config needed for the
+# 1M context") was wrong. Observed on TP=4 the engine peaks at 22% KV
+# utilization with 8 concurrent sequences — size expectations from observed
+# utilization, not from the single-request worst case.
 defaults:
   port: 8000
   host: 0.0.0.0
