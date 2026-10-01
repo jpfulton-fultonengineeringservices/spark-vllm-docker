@@ -58,9 +58,14 @@
 # staging, then the two mimo_v2.py source patches (disjoint regions), with
 # mimo-v2-aux-over-pp LAST.
 #
-# V2 model runner is pinned: DFlash drafting and --async-scheduling with PP>1
-# are both rejected on the V1 runner. Async scheduling stays enabled (V2 keeps
-# it under PP and overlaps the pipeline).
+# V2 model runner is pinned: DFlash drafting is rejected on the V1 runner.
+# --async-scheduling is deliberately OFF with PP=3 (2026-10-01): async
+# scheduling reorders per-rank enqueue of the PP send/recv ops, NCCL p2p
+# matches strictly by post order, and the first real step wedged permanently
+# (PP2 spun in b12x plan prep with the GPU stalled on an unmatched recv; the
+# head logged "An unbatched P2P op ... new 2-rank NCCL communicator" just
+# before). Keep it off for any PP>1 topology; the single-node recipes (4x)
+# run it without issue since they have no PP p2p.
 #
 # First-launch gates and the failure fallback (dropping --speculative-config
 # to isolate drafter from target) are documented in
@@ -107,10 +112,9 @@ defaults:
 
 # Environment variables
 # CUTE_DSL_ARCH: CuTe DSL compiler target for b12x kernel compilation.
-# VLLM_USE_V2_MODEL_RUNNER: pin the V2 runner. Required here twice over --
-# DFlash drafting and --async-scheduling with pipeline parallelism are both
-# rejected on the V1 runner -- and it keeps the pin from silently mattering if
-# the fork's auto-resolution changes.
+# VLLM_USE_V2_MODEL_RUNNER: pin the V2 runner (DFlash drafting is rejected on
+# the V1 runner) and keep the pin from silently mattering if the fork's
+# auto-resolution changes.
 env:
   CUTE_DSL_ARCH: "sm_121a"
   VLLM_USE_V2_MODEL_RUNNER: "1"
@@ -161,7 +165,6 @@ command: |
       --max-num-batched-tokens {max_num_batched_tokens} \
       --gpu-memory-utilization {gpu_memory_utilization} \
       --enable-chunked-prefill \
-      --async-scheduling \
       --enable-prefix-caching \
       --speculative-config '{{"method":"dflash","model":"/workspace/MiMo-V2.6-Flash-RL-dflash","num_speculative_tokens":{num_speculative_tokens},"attention_backend":"B12X","kv_cache_dtype":"bfloat16"}}' \
       --compilation-config '{{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}}' \
