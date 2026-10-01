@@ -59,6 +59,7 @@ defaults:
   host: 0.0.0.0
   tensor_parallel: 2
   gpu_memory_utilization: 0.8
+  kv_cache_memory: 17179869184
   max_model_len: 1048576
   block_size: 128
   max_num_seqs: 32
@@ -125,6 +126,7 @@ command: |
       --kv-cache-dtype-skip-layers sliding_window \
       --max-num-seqs {max_num_seqs} \
       --max-num-batched-tokens {max_num_batched_tokens} \
+      --kv-cache-memory {kv_cache_memory} \
       --gpu-memory-utilization {gpu_memory_utilization} \
       --enable-chunked-prefill \
       --async-scheduling \
