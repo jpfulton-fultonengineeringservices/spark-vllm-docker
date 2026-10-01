@@ -83,6 +83,7 @@ mods:
   - mods/mimo-v2.6-flash
   - mods/mimo-diffkv-fp8-kv
   - mods/mimo-v2-aux-over-pp
+  - mods/b12x-kv-group-lookup
 
 # Default settings (can be overridden via CLI where supported)
 defaults:
