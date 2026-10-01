@@ -34,12 +34,16 @@
 #
 # b12x at TP=1: hidden 4096%256=0 and MoE intermediate 2048%32=0 hold, so the
 # same backends as the 4x recipe apply. --block-size 128 is required by b12x
-# attention. KV cache is fp8 on ALL layers (no
+# attention. Target KV cache is fp8 on ALL layers (no
 # --kv-cache-dtype-skip-layers, unlike the 4x recipe): at TP=1 the skip-layers
 # page path produced padded pages the b12x kernel prep rejects ("k_cache page
 # stride must be a whole number of token rows: stride(0)=524288,
-# stride(1)=320"). All-fp8 takes the natural-page path the 2x recipe proves;
-# the SWA layers' 128-token rings in fp8 instead of bf16 cost a few MiB.
+# stride(1)=320" - the padded page came from the bf16 drafter and page
+# unification carried it onto the target's 320-byte-row tensors). All-fp8
+# takes the natural-page path the 2x recipe proves; the SWA layers' 128-token
+# rings in fp8 instead of bf16 cost a few MiB. The DFlash drafter keeps bf16
+# KV via the speculative config's kv_cache_dtype (see below) because b12x's
+# noncausal path requires it.
 #
 # Mod order: fes-weights FIRST (verifies the FES-staged mount and builds the
 # hub-cache shim the drafter staging resolves against; inert without
@@ -117,6 +121,11 @@ env:
 #   page-floor patches are conditional on the skip page and stay inert here.
 # - --speculative-config attention_backend B12X: run the drafter on B12X (it
 #   supports the non-causal attention DFlash needs) on the last PP rank.
+#   kv_cache_dtype bfloat16 is REQUIRED and drafter-scoped: b12x's noncausal
+#   path raises "B12X noncausal attention requires BF16 KV and equal QK/V
+#   dimensions" (the drafter's equal 128/128 dims pass; the bf16 must not be
+#   global - the target keeps fp8 KV). Without this key the drafter inherits
+#   the target's fp8 and aborts at construction.
 # - FULL_AND_PIECEWISE + custom_ops all: piecewise prefill graphs on top of
 #   full decode graphs, valid only on the pinned V2 runner.
 command: |
@@ -139,7 +148,7 @@ command: |
       --enable-chunked-prefill \
       --async-scheduling \
       --enable-prefix-caching \
-      --speculative-config '{{"method":"dflash","model":"/workspace/MiMo-V2.6-Flash-RL-dflash","num_speculative_tokens":{num_speculative_tokens},"attention_backend":"B12X"}}' \
+      --speculative-config '{{"method":"dflash","model":"/workspace/MiMo-V2.6-Flash-RL-dflash","num_speculative_tokens":{num_speculative_tokens},"attention_backend":"B12X","kv_cache_dtype":"bfloat16"}}' \
       --compilation-config '{{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}}' \
       --generation-config vllm \
       --override-generation-config '{{"top_p":0.95}}' \
