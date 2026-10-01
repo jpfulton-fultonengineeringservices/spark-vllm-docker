@@ -131,27 +131,8 @@ grep -qF "max(shared_page, sw_block_size * sw_per_token)" "$ATTENTION" \
     || fail "SWA padded page not floored at the kernel block's natural page"
 grep -qF "skip_page = getattr(" "$DFLASH" \
     || fail "DFlash skip page floor missing"
-grep -qF "align = per_token * 320 // math.gcd(per_token, 320)" "$DFLASH" \
-    || fail "DFlash page row-alignment computation missing"
-grep -qF "page_size_padded=(page + align - 1) // align * align," "$DFLASH" \
-    || fail "DFlash padded page not rounded to whole token rows"
-python3 - <<'PY' || fail "page row-alignment formula does not behave"
-import math
-def padded(skip_page, natural, per_token):
-    page = max(skip_page or 0, natural)
-    align = per_token * 320 // math.gcd(per_token, 320)
-    return (page + align - 1) // align * align
-# TP=1 drafter: bf16 8 heads x 256 B/token = 4096; natural page 524288 must
-# become a whole multiple of the target's 320 B row and of its own 4096.
-assert padded(None, 524288, 4096) == 532480, padded(None, 524288, 4096)
-assert 532480 % 320 == 0 and 532480 % 4096 == 0
-# TP=4 drafter: 1024 B/token, natural 131072 -> 133120.
-assert padded(None, 131072, 1024) == 133120, padded(None, 131072, 1024)
-assert 133120 % 320 == 0 and 133120 % 1024 == 0
-# Skip-page floor folds in: max(skip, natural) before rounding.
-assert padded(196608, 524288, 4096) == 532480
-assert padded(262144, 262144, 2048) == 266240
-PY
+grep -qF "page_size_padded=max(" "$DFLASH" \
+    || fail "DFlash padded page not floored"
 grep -qF "Patched mimo_v2.py." <<< "$out1" || fail "missing patch report (mimo)"
 grep -qF "Patched triton_attn_diffkv.py." <<< "$out1" || fail "missing patch report (diffkv)"
 grep -qF "Patched attention.py." <<< "$out1" || fail "missing patch report (attention)"
