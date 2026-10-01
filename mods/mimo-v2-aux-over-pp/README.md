@@ -62,6 +62,31 @@ Cost: ~1.25 GiB per extra stage (vocab 152576 x hidden 4096, bf16); only the
 first stage's copy is used by the target forward, the last stage's copy is
 shared into the drafter.
 
+### 3. Aux-state transport glue in MiMoV2Model.forward
+
+Even with the relay enabled, the drafter only saw the aux states captured on
+its own stage ("DFlash drafter expects 20480 concatenated aux hidden features
+but received 8192" on the 3x PP=3 launch, 20480 = 5 aux layers x 4096, 8192 =
+the 2 layers local to the last stage). `MiMoV2Model.forward` predates the
+aux-over-PP support and diverged from the canonical LlamaModel/Qwen2Model
+glue in three ways, all fixed here:
+
+- `enumerate(islice(self.layers, self.start_layer, self.end_layer))` lacked
+  `start=self.start_layer`, so aux states were captured at slice-relative
+  indices instead of global layer ids — the wrong layers on any non-first
+  stage.
+- The forward never called `collect_remote_aux_hidden_states(...)`, so aux
+  states relayed from upstream stages were dropped on the floor.
+- Non-last stages never packed their local aux states into the outgoing
+  intermediate tensors (`pack_local_aux_hidden_states`), so there was nothing
+  for the middle-stage relay to carry; the last stage never prepended
+  `remote_aux` to its own list.
+
+With the glue in place the slot layout works out per stage (aux ids
+`[0, 11, 23, 35, 47]` + 1 = `(1, 12, 24, 36, 48)`): stage 0 packs keys 0-1,
+stage 1 packs key 2 and relays 0-1, stage 2 collects 0-2 and packs 3-4 — the
+drafter concatenates all five in layer order.
+
 ## Behavior
 
 - Idempotent: already-patched regions are skipped, so repeat application in
