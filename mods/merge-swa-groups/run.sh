@@ -10,12 +10,17 @@ set -euo pipefail
 # KV footprint ~11x (measured: a 63K prompt transiently consumed ~53% of the
 # 847K-token pool at 16384-token chunks and ~20% at 4096).
 #
-# Groups whose KVCacheSpec is value-identical can share one block table
-# losslessly (same page geometry, same window): this mod merges them back
-# into a single group at the single return point of get_kv_cache_groups'
-# parallel-draft branch, so the EngineCore, the model runner, and the CUDA
-# graph capture all observe the merged layout consistently. After the merge
-# each stage has 3 groups: full-attention, SWA-128, and the SWA-1024 draft.
+# Groups whose block-table semantics are value-identical can share one
+# block table losslessly (same page geometry, same window): this mod merges
+# them back into a single group at both get_kv_cache_groups return points
+# (the parallel-draft branch used by the coordinator/global view, and the
+# fall-through return used by the per-stage worker path), so the EngineCore,
+# the model runner, and CUDA graph capture all observe the merged layout
+# consistently. Groups are plain-spec or UniformTypeKVCacheSpecs-wrapped;
+# wrappers merge only when every inner per-layer spec is value-identical
+# (verified on node: the fragmented SWA-128 groups are all wrapper-wrapped
+# with identical inner specs). After the merge each stage has 3 groups:
+# full-attention, SWA-128, and the SWA-1024 draft.
 
 PREFIX="[merge-swa-groups]"
 PYTHON_ROOT="${VLLM_SITE_PACKAGES:-${PYTHON_ROOT:-/usr/local/lib/python3.12/dist-packages}}"
@@ -35,29 +40,47 @@ import sys
 path = Path(sys.argv[1])
 text = path.read_text()
 
-helper = '''def _merge_identical_spec_groups(
+helper = '''def _uniform_merge_key(spec: KVCacheSpec):
+    # Groups may merge when their block-table semantics are identical: the
+    # same block_size and either one plain spec or a UniformType wrapper
+    # whose inner per-layer specs are all value-identical.
+    block_size = getattr(spec, "block_size", None)
+    if isinstance(spec, UniformTypeKVCacheSpecs):
+        inner = list(spec.kv_cache_specs.values())
+        if not inner:
+            return None
+        first = inner[0]
+        if any(s != first for s in inner[1:]):
+            return None
+        return (block_size, first)
+    return (block_size, spec)
+
+
+def _merge_identical_spec_groups(
     kv_cache_groups: list[KVCacheGroupSpec],
 ) -> list[KVCacheGroupSpec]:
     # spark-vllm-docker/mods/merge-swa-groups: undo the PP-stage splitter's
     # fragmentation of value-identical specs (13 SWA-128 layers -> ~10
     # groups). Same-spec groups share a block table losslessly; each extra
-    # group instead multiplied per-request KV retention. UniformType groups
-    # are left untouched (their per-layer specs differ inside one wrapper).
+    # group instead multiplied per-request KV retention.
     merged: list[KVCacheGroupSpec] = []
+    keys: list[object] = []
     for group in kv_cache_groups:
-        spec = group.kv_cache_spec
-        if isinstance(spec, UniformTypeKVCacheSpecs):
+        key = _uniform_merge_key(group.kv_cache_spec)
+        target = None
+        if key is not None:
+            for existing, existing_key in zip(merged, keys):
+                if existing_key is not None and existing_key == key:
+                    target = existing
+                    break
+        if target is None:
             merged.append(group)
+            keys.append(key)
             continue
-        for existing in merged:
-            existing_spec = existing.kv_cache_spec
-            if isinstance(existing_spec, UniformTypeKVCacheSpecs):
-                continue
-            if existing_spec == spec:
-                existing.layer_names.extend(group.layer_names)
-                break
-        else:
-            merged.append(group)
+        target.layer_names.extend(group.layer_names)
+        target_spec = target.kv_cache_spec
+        if isinstance(target_spec, UniformTypeKVCacheSpecs):
+            target_spec.kv_cache_specs.update(group.kv_cache_spec.kv_cache_specs)
     if len(merged) != len(kv_cache_groups):
         logger.info(
             "Merged %d same-spec KV cache groups into %d",
