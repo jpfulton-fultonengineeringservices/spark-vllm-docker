@@ -3,8 +3,9 @@ set -euo pipefail
 
 # Focused check for mods/mimo-v2-aux-over-pp/run.sh: flips
 # supports_aux_hidden_states_over_pp on MiMoV2Model, replicates embed_tokens on
-# every PP stage, is idempotent on re-run, and fails fast when the anchor or
-# the file is missing.
+# every PP stage, rewires the forward-pass aux glue to the canonical
+# LlamaModel/Qwen2Model pattern (global layer ids + pack/collect over PP), is
+# idempotent on re-run, and fails fast when an anchor or the file is missing.
 
 PROJECT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 MOD="$PROJECT_DIR/mods/mimo-v2-aux-over-pp/run.sh"
@@ -17,6 +18,8 @@ MIMO="$ROOT/vllm/model_executor/models/mimo_v2.py"
 
 cat > "$MIMO" <<'EOF'
 import types
+from bisect import bisect_right
+from itertools import islice
 
 
 class _StubModule:
@@ -35,12 +38,70 @@ class PPMissingLayer:
     pass
 
 
+class IntermediateTensors:
+    def __init__(self, tensors):
+        self.tensors = tensors
+
+    def __getitem__(self, key):
+        return self.tensors[key]
+
+
 class EagleModelMixin:
     supports_aux_hidden_states_over_pp = False
+    AUX_HIDDEN_STATE_KEY = "aux_hidden_states_"
+    _aux_slot_base_cached = 0
+    _aux_upstream_total_cached = 0
+
+    def _set_aux_hidden_state_layers(self, layers):
+        self.aux_hidden_state_layers = tuple(sorted(set(layers)))
+        self._aux_slot_base_cached = 0
+        self._aux_upstream_total_cached = 0
+        self._cache_aux_pp_layout()
+
+    def _cache_aux_pp_layout(self):
+        pp = get_pp_group()
+        if pp.world_size < 2:
+            return
+        if not pp.is_first_rank:
+            self._aux_slot_base_cached = bisect_right(
+                self.aux_hidden_state_layers, self.start_layer
+            )
+        if pp.is_last_rank:
+            self._aux_upstream_total_cached = self._aux_slot_base_cached
+
+    def _maybe_add_hidden_state(self, aux_hidden_states, layer_idx, hidden_states, residual):
+        if layer_idx in self.aux_hidden_state_layers:
+            value = hidden_states + residual if residual is not None else hidden_states
+            aux_hidden_states.append(value)
+        return aux_hidden_states
+
+    def pack_local_aux_hidden_states(self, aux_hidden_states):
+        if not aux_hidden_states:
+            return {}
+        base = self._aux_slot_base_cached
+        return {
+            f"{self.AUX_HIDDEN_STATE_KEY}{base + i}": t
+            for i, t in enumerate(aux_hidden_states)
+        }
+
+    def collect_remote_aux_hidden_states(self, intermediate_tensors):
+        total = self._aux_upstream_total_cached
+        if total == 0:
+            return []
+        assert intermediate_tensors is not None
+        out = []
+        for i in range(total):
+            key = f"{self.AUX_HIDDEN_STATE_KEY}{i}"
+            if key not in intermediate_tensors.tensors:
+                raise RuntimeError(f"Missing {key} from PP intermediate tensors")
+            out.append(intermediate_tensors[key])
+        return out
 
 
 def get_pp_group():
-    return types.SimpleNamespace(is_first_rank=True, is_last_rank=False)
+    return types.SimpleNamespace(
+        world_size=1, is_first_rank=True, is_last_rank=True
+    )
 
 
 class MiMoV2Model(nn.Module, EagleModelMixin):
@@ -59,17 +120,57 @@ class MiMoV2Model(nn.Module, EagleModelMixin):
             )
         else:
             self.embed_tokens = PPMissingLayer()
+
+    def forward(self, input_ids, positions, intermediate_tensors=None, inputs_embeds=None):
+        if get_pp_group().is_first_rank:
+            hidden_states = "H"
+            residual = None
+        else:
+            assert intermediate_tensors is not None
+            hidden_states = intermediate_tensors["hidden_states"]
+            residual = intermediate_tensors["residual"]
+
+        aux_hidden_states = self._maybe_add_hidden_state(
+            [], self.start_layer, hidden_states, residual
+        )
+        for idx, layer in enumerate(
+            islice(self.layers, self.start_layer, self.end_layer)
+        ):
+            hidden_states, residual = layer(positions, hidden_states, residual)
+            self._maybe_add_hidden_state(
+                aux_hidden_states, idx + 1, hidden_states, residual
+            )
+
+        if not get_pp_group().is_last_rank:
+            return IntermediateTensors(
+                {"hidden_states": hidden_states, "residual": residual}
+            )
+
+        hidden_states, _ = self.norm(hidden_states, residual)
+
+        if len(aux_hidden_states) > 0:
+            return hidden_states, aux_hidden_states
+        return hidden_states
+
+    def norm(self, hidden_states, residual):
+        return hidden_states, residual
 EOF
 
 fail() { echo "FAIL: $1" >&2; exit 1; }
 
-# 1. First run applies both patches and the changes take effect.
+# 1. First run applies all three patches and the changes take effect.
 out1=$(PYTHON_ROOT="$ROOT" bash "$MOD") || fail "mod exited non-zero"
 grep -qF "supports_aux_hidden_states_over_pp = True" "$MIMO" \
     || fail "opt-in attribute missing"
 if grep -qF "self.embed_tokens = PPMissingLayer()" "$MIMO"; then
     fail "embed_tokens still PPMissingLayer on non-first PP stages"
 fi
+grep -qF "start=self.start_layer," "$MIMO" \
+    || fail "aux capture still renumbers layers per PP stage"
+grep -qF "collect_remote_aux_hidden_states(intermediate_tensors)" "$MIMO" \
+    || fail "upstream aux collection missing"
+grep -qF "pack_local_aux_hidden_states(aux_hidden_states)" "$MIMO" \
+    || fail "local aux packing into intermediate tensors missing"
 grep -qF "Patched mimo_v2.py." <<< "$out1" || fail "missing patch report"
 python3 - "$MIMO" <<'PY' || fail "patched mimo_v2.py does not behave"
 import importlib.util, sys, types
@@ -78,21 +179,52 @@ mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 assert mod.MiMoV2Model.supports_aux_hidden_states_over_pp is True, "class attr not set"
 assert mod.EagleModelMixin.supports_aux_hidden_states_over_pp is False, "mixin was mutated"
+
 cfg = types.SimpleNamespace(tie_word_embeddings=False, vocab_size=152576, hidden_size=4096)
+mod.get_pp_group = lambda: types.SimpleNamespace(world_size=1, is_first_rank=True, is_last_rank=True)
 assert getattr(mod.MiMoV2Model(vllm_config=cfg), "supports_aux_hidden_states_over_pp", False) is True
-# Non-first PP stage (the drafter's stage): embed must be a real module so
-# maybe_share_target_embed can borrow it.
-mod.get_pp_group = lambda: types.SimpleNamespace(is_first_rank=False, is_last_rank=False)
+
+# Embed replication on non-first / tied-last stages.
+mod.get_pp_group = lambda: types.SimpleNamespace(world_size=3, is_first_rank=False, is_last_rank=False)
 mid = mod.MiMoV2Model(vllm_config=cfg)
 assert isinstance(mid.embed_tokens, mod.VocabParallelEmbedding), mid.embed_tokens
-# First stage unchanged; tied embeddings still reach the last stage.
-mod.get_pp_group = lambda: types.SimpleNamespace(is_first_rank=True, is_last_rank=False)
-first = mod.MiMoV2Model(vllm_config=cfg)
-assert isinstance(first.embed_tokens, mod.VocabParallelEmbedding), first.embed_tokens
-mod.get_pp_group = lambda: types.SimpleNamespace(is_first_rank=False, is_last_rank=True)
-tied_cfg = types.SimpleNamespace(tie_word_embeddings=True, vocab_size=152576, hidden_size=4096)
-last = mod.MiMoV2Model(vllm_config=tied_cfg)
-assert isinstance(last.embed_tokens, mod.VocabParallelEmbedding), last.embed_tokens
+mod.get_pp_group = lambda: types.SimpleNamespace(world_size=3, is_first_rank=False, is_last_rank=True)
+last_tied = mod.MiMoV2Model(vllm_config=types.SimpleNamespace(tie_word_embeddings=True, vocab_size=1, hidden_size=1))
+assert isinstance(last_tied.embed_tokens, mod.VocabParallelEmbedding), last_tied.embed_tokens
+
+# Aux-over-PP forward glue, 48 layers / 3 stages, aux ids (1, 12, 24, 36, 48).
+AUX_IDS = (1, 12, 24, 36, 48)
+
+def make_model(start, end, world, first, last):
+    mod.get_pp_group = lambda: types.SimpleNamespace(world_size=world, is_first_rank=first, is_last_rank=last)
+    m = mod.MiMoV2Model(vllm_config=cfg)
+    m.start_layer, m.end_layer = start, end
+    m.layers = [lambda pos, h, r, i=i: (f"H{i+1}", f"R{i+1}") for i in range(48)]
+    m._set_aux_hidden_state_layers(AUX_IDS)
+    return m
+
+# Stage 0 (layers 0-15): captures ids 1 and 12 into output slots 0 and 1.
+m0 = make_model(0, 16, 3, True, False)
+out = m0.forward(None, None)
+assert isinstance(out, mod.IntermediateTensors), out
+assert set(k for k in out.tensors if k.startswith("aux_")) == {"aux_hidden_states_0", "aux_hidden_states_1"}, out.tensors.keys()
+
+# Stage 1 (layers 16-31): relays nothing itself (pp_handler does), captures id
+# 24 into slot 2 -- which REQUIRES global layer numbering.
+m1 = make_model(16, 32, 3, False, False)
+out = m1.forward(None, None, mod.IntermediateTensors({"hidden_states": "H", "residual": "R", "aux_hidden_states_0": "A1", "aux_hidden_states_1": "A12"}))
+assert set(k for k in out.tensors if k.startswith("aux_")) == {"aux_hidden_states_2"}, out.tensors.keys()
+assert out.tensors["aux_hidden_states_2"] == "H24R24", out.tensors["aux_hidden_states_2"]
+
+# Stage 2 (layers 32-47, the drafter's stage): collects 3 upstream aux and
+# captures ids 36 and 48 locally -> 5 features in LAYER order (the drafter
+# concatenates them as its 5 x 4096 target features).
+m2 = make_model(32, 48, 3, False, True)
+hidden, aux = m2.forward(None, None, mod.IntermediateTensors({
+    "hidden_states": "H", "residual": "R",
+    "aux_hidden_states_0": "A1", "aux_hidden_states_1": "A12", "aux_hidden_states_2": "A24",
+}))
+assert aux == ["A1", "A12", "A24", "H36R36", "H48R48"], aux
 PY
 
 # 2. Second run is a no-op (idempotent within a fresh container).
