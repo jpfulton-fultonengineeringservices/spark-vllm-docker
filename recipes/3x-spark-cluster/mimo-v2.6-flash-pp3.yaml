@@ -34,10 +34,12 @@
 #
 # b12x at TP=1: hidden 4096%256=0 and MoE intermediate 2048%32=0 hold, so the
 # same backends as the 4x recipe apply. --block-size 128 is required by b12x
-# attention. --kv-cache-dtype-skip-layers sliding_window keeps fp8 KV on the
-# 9 full-attention layers while the 39 SWA layers stay bf16; it needs the
-# mimo-diffkv-fp8-kv mod's attention.py skip-page floor (same assertion as at
-# TP=4).
+# attention. KV cache is fp8 on ALL layers (no
+# --kv-cache-dtype-skip-layers, unlike the 4x recipe): at TP=1 the skip-layers
+# page path produced padded pages the b12x kernel prep rejects ("k_cache page
+# stride must be a whole number of token rows: stride(0)=524288,
+# stride(1)=320"). All-fp8 takes the natural-page path the 2x recipe proves;
+# the SWA layers' 128-token rings in fp8 instead of bf16 cost a few MiB.
 #
 # Mod order: fes-weights FIRST (verifies the FES-staged mount and builds the
 # hub-cache shim the drafter staging resolves against; inert without
@@ -109,9 +111,10 @@ env:
 # - --linear-backend b12x: b12x GEMM kernels for linear projections.
 # - --load-format b12x: async io_uring/CUDA-copy ring for checkpoint loading.
 # - --block-size 128: b12x attention requires block size 64 or 128.
-# - --kv-cache-dtype fp8 + --kv-cache-dtype-skip-layers sliding_window: fp8 KV
-#   on the 9 full-attention layers; 39 SWA layers stay bf16. Needs the
-#   mimo-diffkv-fp8-kv mod's page-floor patches.
+# - --kv-cache-dtype fp8 on all layers (no --kv-cache-dtype-skip-layers): the
+#   skip-layers page path breaks b12x kernel prep at TP=1 (see the header
+#   note). All-fp8 keeps the natural-page path; the mimo-diffkv-fp8-kv mod's
+#   page-floor patches are conditional on the skip page and stay inert here.
 # - --speculative-config attention_backend B12X: run the drafter on B12X (it
 #   supports the non-causal attention DFlash needs) on the last PP rank.
 # - FULL_AND_PIECEWISE + custom_ops all: piecewise prefill graphs on top of
@@ -130,7 +133,6 @@ command: |
       --block-size {block_size} \
       --max-model-len {max_model_len} \
       --kv-cache-dtype fp8 \
-      --kv-cache-dtype-skip-layers sliding_window \
       --max-num-seqs {max_num_seqs} \
       --max-num-batched-tokens {max_num_batched_tokens} \
       --gpu-memory-utilization {gpu_memory_utilization} \
