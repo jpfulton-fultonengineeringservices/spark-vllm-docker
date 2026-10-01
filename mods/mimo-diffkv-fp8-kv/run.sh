@@ -24,14 +24,7 @@ set -euo pipefail
 # 4. qwen3_dflash.py — DFlashAttention.get_kv_cache_spec consumes
 #    skip_page_size_padded directly (bypassing the attention.py chooser), so
 #    the same underestimate leaves the drafter's padded page below its
-#    natural 128 KiB page. The patch now always sets the drafter's page to
-#    max(skip page, natural) rounded UP to a whole number of token rows: the
-#    HMA shares one block stride across KV specs (at TP=1 the 8-head SWA
-#    layers and the 8-head drafter alias), and the b12x kernel prep rejects
-#    any page stride that is not a whole number of token rows ("k_cache page
-#    stride must be a whole number of token rows") — the drafter's 524288 B
-#    bf16 page poisons the target's 320 B-row views otherwise (3x PP=3
-#    launch, 2026-10-01).
+#    natural 128 KiB page. Floored the same way.
 #
 # Same fix as tonyd2wild/MiMo-V2.6-Flash-2x-DGX-Spark patches 01+03, verified
 # on GB10 (fp8 KV pool measured at 12.6 GiB, needle tests at 250K). Unlike his
@@ -222,25 +215,13 @@ patch(
             "                kv_quant_mode=get_kv_quant_mode(self.kv_cache_dtype),\n"
             "                dcp_replicated=dcp_replicated,\n"
             "            )\n"
-            "            # mimo-diffkv-fp8-kv: round the page up to a whole number\n"
-            "            # of token rows. The HMA shares one block stride across KV\n"
-            "            # specs (at TP=1 the 8-head SWA layers and the 8-head\n"
-            "            # drafter alias), and the b12x kernel prep rejects any page\n"
-            "            # stride that is not a whole number of token rows (\"k_cache\n"
-            "            # page stride must be a whole number of token rows\"). The\n"
-            "            # drafter's bf16 page (128 x 4096 B = 524288 at TP=1) is not\n"
-            "            # a multiple of the target's 320 B (192+128) row, so any\n"
-            "            # stride it contributes poisons the target's cache views;\n"
-            "            # rounding to a common multiple keeps every shared stride\n"
-            "            # legal. The skip-page floor folds into the same round.\n"
-            "            import math\n"
-            "            page = max(skip_page or 0, spec.unpadded_page_size_bytes)\n"
-            "            per_token = spec.unpadded_page_size_bytes // spec.block_size\n"
-            "            align = per_token * 320 // math.gcd(per_token, 320)\n"
-            "            spec = dataclasses.replace(\n"
-            "                spec,\n"
-            "                page_size_padded=(page + align - 1) // align * align,\n"
-            "            )\n"
+            "            if skip_page is not None:\n"
+            "                spec = dataclasses.replace(\n"
+            "                    spec,\n"
+            "                    page_size_padded=max(\n"
+            "                        skip_page, spec.unpadded_page_size_bytes\n"
+            "                    ),\n"
+            "                )\n"
             "            return spec\n"
             "        spec = super().get_kv_cache_spec(vllm_config)\n",
         ),

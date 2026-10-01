@@ -118,9 +118,8 @@ env:
 # - --block-size 128: b12x attention requires block size 64 or 128.
 # - --kv-cache-dtype fp8 on all layers (no --kv-cache-dtype-skip-layers): the
 #   skip-layers page path breaks b12x kernel prep at TP=1 (see the header
-#   note). The mimo-diffkv-fp8-kv mod's drafter-page patch now always rounds
-#   the drafter's page up to whole token rows, which is what keeps the shared
-#   block stride legal against the target's 320 B rows.
+#   note). All-fp8 keeps the natural-page path; the mimo-diffkv-fp8-kv mod's
+#   page-floor patches are conditional on the skip page and stay inert here.
 # - --speculative-config attention_backend B12X: run the drafter on B12X (it
 #   supports the non-causal attention DFlash needs) on the last PP rank.
 #   kv_cache_dtype bfloat16 is REQUIRED and drafter-scoped: b12x's noncausal
