@@ -64,6 +64,13 @@ helper = '''def _merge_identical_spec_groups(
             len(kv_cache_groups),
             len(merged),
         )
+    else:
+        for group in kv_cache_groups:
+            logger.info(
+                "merge-swa-groups diag: nlayers=%d spec=%r",
+                len(group.layer_names),
+                group.kv_cache_spec,
+            )
     return merged
 
 
