@@ -1,0 +1,133 @@
+# Recipe: MiMo-V2.6-Flash-RL 4x (b12x)
+# TP=4 across four DGX Spark nodes using the b12x-optimized serving stack:
+# B12X attention (DiffKV + fp8 KV), b12x MoE (MXFP4), b12x linear, and b12x
+# async checkpoint loading. fp8 KV on the 9 full-attention layers via
+# --kv-cache-dtype-skip-layers; the 39 SWA layers stay bf16. Intended for FES
+# evaluation: scripts/fes-eval.sh (cluster-config) launches it against
+# FES-staged weights via the fes-weights mod; a plain run-recipe.sh launch
+# still works because fes-weights is opt-in (inert without
+# FES_WEIGHTS_ENABLED=1) and falls back to the hub cache via .env HF_HOME.
+
+recipe_version: "1"
+name: MiMo-V2.6-Flash-RL 2x
+description: vLLM serving XiaomiMiMo/MiMo-V2.6-Flash-RL with DFlash speculative decoding on a two-node DGX Spark cluster (TP=2, b12x stack)
+
+# HuggingFace model to download (optional, for --download-model)
+model: XiaomiMiMo/MiMo-V2.6-Flash-RL
+
+# Container image: b12x fork (local-inference-lab/vllm@dev/karmic-kraken) with
+# B12X paged attention (DiffKV + fp8 KV + sinks + non-causal), b12x MoE (MXFP4
+# w4a8_mx), b12x linear, and b12x async checkpoint loader. Build with:
+#   ./build-and-copy.sh --exp-b12x -t vllm-node-b12x
+container: vllm-node-b12x
+
+build_args:
+  - --exp-b12x
+
+# ~173 GB of weights: needs all four Sparks
+cluster_only: true
+
+# fes-weights must run FIRST: it verifies the FES-staged mount and builds the
+# hub-cache shim that lets both this recipe's `vllm serve <org/model>` and the
+# mimo drafter-staging mod's snapshot_download() resolve offline (see
+# docs/fes-weight-staging.md). In hub-cache mode it no-ops.
+# mimo-diffkv-fp8-kv runs LAST: on the b12x fork its cache_config wiring is a
+# no-op (the fork already passes it), but two fixes are still required: the
+# sliding-window fix (Attention() falls back to cache_config.sliding_window
+# (128) for full-attention layers, capping them at 128 tokens and looping long
+# generations) and the attention.py skip-page floor (without it
+# --kv-cache-dtype-skip-layers asserts in resolve_kv_cache_layout on B12X's
+# coarse 64/128 kernel blocks). The Triton DiffKV fp8 patch is unused (B12X
+# backend handles fp8 KV natively).
+mods:
+  - mods/fes-weights
+  - mods/mimo-v2.6-flash
+  - mods/mimo-diffkv-fp8-kv
+
+# Default settings (can be overridden via CLI where supported)
+# gpu_memory_utilization: the FES bge-m3 embed units stay resident on every
+# rank (~12 GiB docker cap) and the flagship glm53-flash-tp4 proved 0.80 +
+# embed 0.10 co-existence; the effective default below is 0.75. Corrected
+# 2026-10-01: earlier per-rank KV-budget math in this comment ("fp8 KV ~7 GiB
+# per 1M token per rank, far larger budget than the 2x config needed for the
+# 1M context") was wrong. Observed on TP=4 the engine peaks at 22% KV
+# utilization with 8 concurrent sequences — size expectations from observed
+# utilization, not from the single-request worst case.
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 2
+  gpu_memory_utilization: 0.75
+  max_model_len: 1048576
+  block_size: 128
+  max_num_seqs: 32
+  max_num_batched_tokens: 16384
+  num_speculative_tokens: 7
+
+# Environment variables
+# CUTE_DSL_ARCH: CuTe DSL compiler target for b12x kernel compilation.
+# VLLM_USE_V2_MODEL_RUNNER: pin the V2 runner (auto-resolution already picks
+#   it); DFlash drafters with mixed sliding/full attention require it, and the
+#   pin guards against the fallback if the fork's auto-resolution changes.
+#   VLLM_USE_AOT_COMPILE and VLLM_USE_FLASHINFER_SAMPLER are already default-on
+#   in the b12x fork; VLLM_USE_B12X_FP8_GEMM and VLLM_USE_B12X_WO_PROJECTION
+#   from the DeepSeek recipe are dead vars in this fork revision (referenced
+#   nowhere in installed vllm/b12x) and are deliberately omitted.
+env:
+  CUTE_DSL_ARCH: "sm_121a"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+
+# The vLLM serve command template.
+# --attention-backend B12X: b12x paged attention supports DiffKV (192/128 K/V
+#   head dims), fp8 KV, attention sinks, sliding window, and non-causal (for
+#   DFlash). Replaces the Triton DiffKV backend on sm_121.
+# --moe-backend b12x: b12x fused MoE for MXFP4 experts (w4a8_mx / w4a16).
+#   Replaces Marlin. Geometry validated: hidden 4096%256=0, intermediate
+#   2048/TP4=512%32=0, SiLU, no biases.
+# --linear-backend b12x: b12x GEMM kernels for linear projections.
+# --load-format b12x: async io_uring/CUDA-copy ring for checkpoint loading.
+#   Auto-registered via vLLM general_plugins entry point (b12x installed).
+# --block-size 128: b12x attention requires block size 64 or 128 (vLLM default
+#   16 is rejected). 128 minimizes block count for the 1M context.
+# --kv-cache-dtype fp8 + --kv-cache-dtype-skip-layers sliding_window: fp8 KV on
+#   the 9 full-attention layers; 39 SWA layers (128-token window) stay bf16.
+#   Needs the mimo-diffkv-fp8-kv mod's attention.py page-floor patch: the
+#   platform's skip-page estimate uses the model-level KV head count (4), but
+#   SWA layers have 8, so the shared page lands below the smallest B12X kernel
+#   block page (64) and the engine asserts in resolve_kv_cache_layout.
+# --speculative-config attention_backend B12X: run the DFlash drafter on B12X
+#   instead of TRITON_ATTN — B12X supports non-causal (needed by DFlash), so the
+#   drafter reuses the same kernel family as the target.
+# --compilation-config cudagraph_mode FULL_AND_PIECEWISE + custom_ops all:
+#   piecewise prefill graphs on top of full decode graphs (DeepSeek b12x
+#   recipe combo). Valid only on the V2 model runner (pinned above); dynamic
+#   DFlash decoding stays on full graphs there.
+command: |
+  vllm serve XiaomiMiMo/MiMo-V2.6-Flash-RL \
+      --trust-remote-code \
+      --host {host} \
+      --port {port} \
+      --tensor-parallel-size {tensor_parallel} \
+      --moe-backend b12x \
+      --linear-backend b12x \
+      --attention-backend B12X \
+      --load-format b12x \
+      --block-size {block_size} \
+      --max-model-len {max_model_len} \
+      --kv-cache-dtype fp8 \
+      --kv-cache-dtype-skip-layers sliding_window \
+      --max-num-seqs {max_num_seqs} \
+      --max-num-batched-tokens {max_num_batched_tokens} \
+      --gpu-memory-utilization {gpu_memory_utilization} \
+      --enable-chunked-prefill \
+      --async-scheduling \
+      --enable-prefix-caching \
+      --speculative-config '{{"method":"dflash","model":"/workspace/MiMo-V2.6-Flash-RL-dflash","num_speculative_tokens":{num_speculative_tokens},"attention_backend":"B12X"}}' \
+      --compilation-config '{{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}}' \
+      --generation-config vllm \
+      --override-generation-config '{{"top_p":0.95}}' \
+      --reasoning-parser mimo \
+      --tool-call-parser mimo \
+      --enable-auto-tool-choice \
+      --kv-cache-metrics \
+      --enable-mfu-metrics
