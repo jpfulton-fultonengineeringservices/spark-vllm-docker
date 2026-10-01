@@ -43,6 +43,7 @@ mods:
   - mods/fes-weights
   - mods/mimo-v2.6-flash
   - mods/mimo-diffkv-fp8-kv
+  - mods/kv-cache-guard-override
 
 # Default settings (can be overridden via CLI where supported)
 # gpu_memory_utilization: the FES bge-m3 embed units stay resident on every
@@ -57,7 +58,7 @@ defaults:
   port: 8000
   host: 0.0.0.0
   tensor_parallel: 2
-  gpu_memory_utilization: 0.75
+  gpu_memory_utilization: 0.8
   max_model_len: 1048576
   block_size: 128
   max_num_seqs: 32
@@ -76,6 +77,12 @@ defaults:
 env:
   CUTE_DSL_ARCH: "sm_121a"
   VLLM_USE_V2_MODEL_RUNNER: "1"
+  # Skip the startup KV memory guard (needs mods/kv-cache-guard-override).
+  # The guard demands one request fit the full 1M max_model_len in KV (33.84
+  # GiB vs 27.17 GiB available at gmu 0.80); fleet workloads never approach
+  # that (TP=4 peaks at 22% KV util with 8 concurrent sequences), and a
+  # request that outgrows the pool queues instead of crashing.
+  VLLM_SKIP_KV_CACHE_MEMORY_CHECK: "1"
 
 # The vLLM serve command template.
 # --attention-backend B12X: b12x paged attention supports DiffKV (192/128 K/V
