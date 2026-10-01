@@ -305,6 +305,35 @@ for additional launcher options.
 
 ## CHANGELOG
 
+### 2026-10-01
+
+#### MiMo-V2.6-Flash-RL three-node recipe (PP=3)
+
+Added the cluster-only `recipes/3x-spark-cluster/mimo-v2.6-flash-pp3.yaml` for
+serving `XiaomiMiMo/MiMo-V2.6-Flash-RL` on three DGX Spark nodes with pipeline
+parallelism (PP=3, TP=1) on the B12X stack. Tensor parallelism cannot use
+three nodes for this model — 64 query heads, 4/8 KV heads, hidden 4096, and
+the 256 experts per layer are all indivisible by 3 — so PP=3 is the only
+topology that puts all three nodes behind one model, same as the qwen 3x
+recipe. Each rank holds about a third of the ~173 GB checkpoint, leaving ample
+headroom for the full 1M context on fp8 KV at 0.80 GPU memory utilization
+(co-exists with the resident bge-m3 embed units).
+
+DFlash speculative decoding runs on the last pipeline rank. The drafter
+consumes target aux hidden states that span all three pipeline stages
+(`target_layer_ids` `[0, 11, 23, 35, 47]` in the checkpoint's `dflash/`
+directory), so the new `mods/mimo-v2-aux-over-pp` mod opts `MiMoV2Model` into
+vLLM's cross-stage aux hidden state relay — without it the engine refuses to
+start with "does not support dflash with pipeline parallelism". Drafts remain
+self-verified against target logits, so drafter problems cost acceptance rate,
+not output correctness. First-launch checks and the no-spec-decode fallback
+are documented in `mods/mimo-v2-aux-over-pp/README.md`.
+
+```bash
+./run-recipe.sh --discover
+./run-recipe.sh recipes/3x-spark-cluster/mimo-v2.6-flash-pp3.yaml --setup
+```
+
 ### 2026-09-23
 
 #### EarlyOOM in 3rd-party containers

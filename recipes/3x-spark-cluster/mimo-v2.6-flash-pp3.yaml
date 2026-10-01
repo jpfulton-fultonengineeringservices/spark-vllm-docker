@@ -1,0 +1,143 @@
+# Recipe: MiMo-V2.6-Flash-RL 3x (b12x, PP=3)
+# TP=1 + pipeline parallelism across three DGX Spark nodes using the b12x
+# serving stack (B12X attention / MoE / linear / loader) from the 4x recipe.
+#
+# Why PP=3 and not TP=3: none of the model's shardable dimensions divide by 3
+# (64 query heads, 4 global / 8 SWA KV heads, hidden 4096, MoE intermediate
+# 2048, 256 routed experts), so Megatron-style tensor parallelism refuses
+# TP=3. Legal TP degrees are 1/2/4/8. PP=3 is the only topology that uses all
+# three nodes for one model (the same reason the qwen 3x recipe is PP=3).
+#
+# DFlash under PP: the drafter consumes target aux hidden states at
+# dflash/config.json target_layer_ids [0, 11, 23, 35, 47], which span all
+# three PP stages (16 layers each). vLLM relays non-local aux states to the
+# last rank generically but gates it behind supports_aux_hidden_states_over_pp,
+# which MiMoV2Model does not set -- startup would abort with "MiMoV2Flash-
+# ForCausalLM does not support dflash with pipeline parallelism". The
+# mods/mimo-v2-aux-over-pp mod flips that opt-in. Drafts stay self-verified
+# against target logits: a drafter problem costs acceptance rate, not output
+# correctness.
+#
+# Memory (121.6 GiB unified pool per node, ~173 GB weights):
+# - per-rank target weights ~58 GB (1/3 of the checkpoint); the last rank adds
+#   the LM head plus the whole DFlash drafter (~5 layers, ~3 GB) and is the
+#   heaviest stage.
+# - fp8 KV on the full-attention layers per stage is roughly a third of the
+#   TP=2 recipe's per-rank need, so the 1M context fits with wide margin at
+#   gpu_memory_utilization 0.80 (kept at the 4x value so the resident FES
+#   bge-m3 embed units keep co-existing; raise it for standalone use).
+#
+# b12x at TP=1: hidden 4096%256=0 and MoE intermediate 2048%32=0 hold, so the
+# same backends as the 4x recipe apply. --block-size 128 is required by b12x
+# attention. --kv-cache-dtype-skip-layers sliding_window keeps fp8 KV on the
+# 9 full-attention layers while the 39 SWA layers stay bf16; it needs the
+# mimo-diffkv-fp8-kv mod's attention.py skip-page floor (same assertion as at
+# TP=4).
+#
+# Mod order: fes-weights FIRST (verifies the FES-staged mount and builds the
+# hub-cache shim the drafter staging resolves against; inert without
+# FES_WEIGHTS_ENABLED=1, see docs/fes-weight-staging.md), then drafter
+# staging, then the two mimo_v2.py source patches (disjoint regions), with
+# mimo-v2-aux-over-pp LAST.
+#
+# V2 model runner is pinned: DFlash drafting and --async-scheduling with PP>1
+# are both rejected on the V1 runner. Async scheduling stays enabled (V2 keeps
+# it under PP and overlaps the pipeline).
+#
+# First-launch gates and the failure fallback (dropping --speculative-config
+# to isolate drafter from target) are documented in
+# mods/mimo-v2-aux-over-pp/README.md.
+
+recipe_version: "1"
+name: MiMo-V2.6-Flash-RL 3x (PP=3)
+description: vLLM serving XiaomiMiMo/MiMo-V2.6-Flash-RL with DFlash speculative decoding on a three-node DGX Spark cluster (PP=3, TP=1, b12x stack)
+
+# HuggingFace model to download (optional, for --download-model)
+model: XiaomiMiMo/MiMo-V2.6-Flash-RL
+
+# Container image: b12x fork (local-inference-lab/vllm@dev/karmic-kraken) with
+# B12X paged attention (DiffKV + fp8 KV + sinks + non-causal), b12x MoE (MXFP4
+# w4a8_mx), b12x linear, and b12x async checkpoint loader. Build with:
+#   ./build-and-copy.sh --exp-b12x -t vllm-node-b12x
+container: vllm-node-b12x
+
+build_args:
+  - --exp-b12x
+
+# ~173 GB of weights: needs all three Sparks
+cluster_only: true
+
+mods:
+  - mods/fes-weights
+  - mods/mimo-v2.6-flash
+  - mods/mimo-diffkv-fp8-kv
+  - mods/mimo-v2-aux-over-pp
+
+# Default settings (can be overridden via CLI where supported)
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  pipeline_parallel: 3
+  gpu_memory_utilization: 0.80
+  max_model_len: 1048576
+  block_size: 128
+  max_num_seqs: 32
+  max_num_batched_tokens: 16384
+  num_speculative_tokens: 7
+
+# Environment variables
+# CUTE_DSL_ARCH: CuTe DSL compiler target for b12x kernel compilation.
+# VLLM_USE_V2_MODEL_RUNNER: pin the V2 runner. Required here twice over --
+# DFlash drafting and --async-scheduling with pipeline parallelism are both
+# rejected on the V1 runner -- and it keeps the pin from silently mattering if
+# the fork's auto-resolution changes.
+env:
+  CUTE_DSL_ARCH: "sm_121a"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+
+# The vLLM serve command template. Same stack as recipes/mimo-v2.6-flash-4x.yaml
+# with the parallelism rewritten for three nodes (TP is fixed at 1; the
+# launcher derives the node count from tp * pp * dp = 3).
+# - --attention-backend B12X: DiffKV (192/128 K/V head dims), fp8 KV, attention
+#   sinks, sliding window, and non-causal (needed by DFlash).
+# - --moe-backend b12x: fused MoE for the MXFP4 experts (w4a8_mx).
+# - --linear-backend b12x: b12x GEMM kernels for linear projections.
+# - --load-format b12x: async io_uring/CUDA-copy ring for checkpoint loading.
+# - --block-size 128: b12x attention requires block size 64 or 128.
+# - --kv-cache-dtype fp8 + --kv-cache-dtype-skip-layers sliding_window: fp8 KV
+#   on the 9 full-attention layers; 39 SWA layers stay bf16. Needs the
+#   mimo-diffkv-fp8-kv mod's page-floor patches.
+# - --speculative-config attention_backend B12X: run the drafter on B12X (it
+#   supports the non-causal attention DFlash needs) on the last PP rank.
+# - FULL_AND_PIECEWISE + custom_ops all: piecewise prefill graphs on top of
+#   full decode graphs, valid only on the pinned V2 runner.
+command: |
+  vllm serve XiaomiMiMo/MiMo-V2.6-Flash-RL \
+      --trust-remote-code \
+      --host {host} \
+      --port {port} \
+      --tensor-parallel-size 1 \
+      --pipeline-parallel-size {pipeline_parallel} \
+      --moe-backend b12x \
+      --linear-backend b12x \
+      --attention-backend B12X \
+      --load-format b12x \
+      --block-size {block_size} \
+      --max-model-len {max_model_len} \
+      --kv-cache-dtype fp8 \
+      --kv-cache-dtype-skip-layers sliding_window \
+      --max-num-seqs {max_num_seqs} \
+      --max-num-batched-tokens {max_num_batched_tokens} \
+      --gpu-memory-utilization {gpu_memory_utilization} \
+      --enable-chunked-prefill \
+      --async-scheduling \
+      --enable-prefix-caching \
+      --speculative-config '{{"method":"dflash","model":"/workspace/MiMo-V2.6-Flash-RL-dflash","num_speculative_tokens":{num_speculative_tokens},"attention_backend":"B12X"}}' \
+      --compilation-config '{{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}}' \
+      --generation-config vllm \
+      --override-generation-config '{{"top_p":0.95}}' \
+      --reasoning-parser mimo \
+      --tool-call-parser mimo \
+      --enable-auto-tool-choice \
+      --kv-cache-metrics \
+      --enable-mfu-metrics

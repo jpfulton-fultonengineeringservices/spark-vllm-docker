@@ -2,7 +2,8 @@
 
 Runtime mod that makes `--kv-cache-dtype fp8` actually work for MiMo-V2 on
 sm_121. Required by every local MiMo recipe that passes the flag
-(`mimo-v2.6-flash`, `mimo-v2.6-flash-ucm`, `3x-spark-cluster/mimo-v2.6-flash-pp3`).
+(`mimo-v2.6-flash`, `mimo-v2.6-flash-ucm`, `mimo-v2.6-flash-4x`,
+`3x-spark-cluster/mimo-v2.6-flash-pp3`).
 
 ## What it fixes (verified against vllm main, 2026-09-22)
 
@@ -48,6 +49,8 @@ while the flag is set.
 
 - `dflash/config.json` trailing comma and drafter staging:
   `mods/mimo-v2.6-flash`.
+- DFlash aux hidden states across pipeline stages (PP > 1):
+  `mods/mimo-v2-aux-over-pp`.
 - Fused fp8 `qkv_proj` TP sharding and MXFP4/bf16-router support: upstream
   PRs [#57508](https://github.com/vllm-project/vllm/pull/57508) /
   [#57784](https://github.com/vllm-project/vllm/pull/57784), checked by
