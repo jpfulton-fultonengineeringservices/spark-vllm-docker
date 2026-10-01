@@ -3,9 +3,12 @@
 Runtime mod that enables DFlash (and eagle3-family) speculative decoding for
 MiMo-V2 when vLLM runs with pipeline parallelism (PP > 1). Required by
 `3x-spark-cluster/mimo-v2.6-flash-pp3`, the only local MiMo recipe that runs
-DFlash under PP.
+DFlash under PP. Two PP gaps are fixed here: the aux-hidden-state relay
+opt-in and the drafter's input-embedding borrow.
 
 ## What it fixes (verified against vllm main, 2026-10-01)
+
+### 1. Aux hidden states over PP
 
 DFlash builds its draft context from target-model aux hidden states
 (`target_layer_ids` in the checkpoint's `dflash/config.json`; for
@@ -31,20 +34,44 @@ model runner during setup).
 
 The mod patches `vllm/model_executor/models/mimo_v2.py` to set
 `supports_aux_hidden_states_over_pp = True` on `MiMoV2Model` — the same
-one-line opt-in the supported classes carry. Nothing else in the model is
-touched: `MiMoV2Model` already builds its layers with `make_layers` /
-`PPMissingLayer`, so its PP structure is complete.
+one-line opt-in the supported classes carry.
+
+### 2. Target input embedding on the drafter's PP stage
+
+The DFlash drafter ships no `embed_tokens` weights of its own (its
+`dflash/config.json` declares none), so `load_dflash_model` borrows the
+target's embedding (`maybe_share_target_embed` in
+`vllm/v1/worker/gpu/spec_decode/eagle/utils.py`). Under PP the target's
+`embed_tokens` is a `PPMissingLayer` on every stage except the first — and the
+drafter lives on the LAST stage, so drafter load aborts with:
+
+```
+RuntimeError: DFlashQwen3ForCausalLM needs the target input embedding,
+but it is unavailable on this PP stage
+```
+
+(Observed live on the 3x PP=3 launch, 2026-10-01: PP rank 2 dies during
+`speculator.load_model`; rank 0 then reports a gloo "Connection closed by
+peer" cascade.)
+
+The mod also patches `MiMoV2Model.__init__` to build `embed_tokens` on every
+pipeline stage instead of only the first (and the last when
+`tie_word_embeddings`). Every stage loads the same checkpoint weights, so the
+copies are identical and the borrow on the last stage shares real weights.
+Cost: ~1.25 GiB per extra stage (vocab 152576 x hidden 4096, bf16); only the
+first stage's copy is used by the target forward, the last stage's copy is
+shared into the drafter.
 
 ## Behavior
 
-- Idempotent: an already-patched file is skipped, so repeat application in the
-  same container is safe.
+- Idempotent: already-patched regions are skipped, so repeat application in
+  the same container is safe.
 - Fails fast with a clear message when the installed vLLM no longer contains
-  the expected `class MiMoV2Model(nn.Module, EagleModelMixin):` anchor (layout
-  drift after an image rebuild or fork rebase).
+  the expected `class MiMoV2Model(nn.Module, EagleModelMixin):` or embed-block
+  anchors (layout drift after an image rebuild or fork rebase).
 - Env: `VLLM_SITE_PACKAGES` / `PYTHON_ROOT` (default
   `/usr/local/lib/python3.12/dist-packages`).
-- Runs after `mods/mimo-diffkv-fp8-kv` in the recipe's mod order; the two mods
+- Runs after `mods/mimo-diffkv-fp8-kv` in the recipe's mod order; the mods
   patch disjoint regions of `mimo_v2.py`.
 
 ## Why the risk is bounded

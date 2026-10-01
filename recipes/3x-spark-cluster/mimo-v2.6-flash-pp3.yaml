@@ -14,7 +14,12 @@
 # last rank generically but gates it behind supports_aux_hidden_states_over_pp,
 # which MiMoV2Model does not set -- startup would abort with "MiMoV2Flash-
 # ForCausalLM does not support dflash with pipeline parallelism". The
-# mods/mimo-v2-aux-over-pp mod flips that opt-in. Drafts stay self-verified
+# mods/mimo-v2-aux-over-pp mod flips that opt-in. The same mod replicates the
+# target's embed_tokens on every PP stage: the drafter ships no embedding of
+# its own and borrows the target's, which under PP lives only on stage 0 while
+# the drafter lives on the last stage (without the fix drafter load aborts
+# with "needs the target input embedding, but it is unavailable on this PP
+# stage"; cost ~1.25 GiB per extra stage). Drafts stay self-verified
 # against target logits: a drafter problem costs acceptance rate, not output
 # correctness.
 #
