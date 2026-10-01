@@ -97,6 +97,7 @@ mods:
   - mods/mimo-v2-aux-over-pp
   - mods/b12x-kv-group-lookup
   - mods/kv-cache-guard-override
+  - mods/merge-swa-groups
   - mods/diag-kv-groups
 
 # Default settings (can be overridden via CLI where supported)
