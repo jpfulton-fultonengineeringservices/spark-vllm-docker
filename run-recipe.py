@@ -177,7 +177,9 @@ def load_recipe(recipe_path: Path) -> dict[str, Any]:
     EXTENSIBILITY:
     - To add new required fields: Add to the 'required' list below
     - To add new optional fields with defaults: Add to the setdefault() calls at the end
-    - Recipe search order: exact path -> recipes/ dir -> with .yaml -> with .yml
+    - Recipe search order: exact path -> with .yaml -> with .yml -> recipes/
+      forms preserving any subdirectory (nested specs like
+      3x-spark-cluster/mimo-v2.6-flash-pp3) -> flat recipes/ name fallbacks
 
     RECIPE SCHEMA:
         name (str, required): Human-readable name for the recipe
@@ -206,10 +208,15 @@ def load_recipe(recipe_path: Path) -> dict[str, Any]:
     """
     if not recipe_path.exists():
         # Try candidates in order: add extension to original path first,
-        # then fall back to flat recipes/ directory (for bare recipe names)
+        # then recipes/-relative forms (preserving any subdirectory for nested
+        # recipes like 3x-spark-cluster/mimo-v2.6-flash-pp3), then fall back
+        # to the flat recipes/ directory (for bare recipe names)
         candidates = [
             Path(str(recipe_path) + ".yaml"),
             Path(str(recipe_path) + ".yml"),
+            RECIPES_DIR / recipe_path,
+            RECIPES_DIR / f"{recipe_path}.yaml",
+            RECIPES_DIR / f"{recipe_path}.yml",
             RECIPES_DIR / recipe_path.name,
             RECIPES_DIR / f"{recipe_path.name}.yaml",
             RECIPES_DIR / f"{recipe_path.name}.yml",

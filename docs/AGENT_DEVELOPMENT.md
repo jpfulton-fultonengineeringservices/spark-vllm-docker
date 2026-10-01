@@ -87,7 +87,8 @@ Always give automated dry-runs either `--solo` or an explicit dummy `-n` node
 list. Otherwise the runner may use `.env` or start network autodiscovery.
 Cluster dry-runs still read interface settings from `.env` even with `-n`; use
 `--config /dev/null` when validating independently of local configuration.
-Nested recipes must be passed by path. The dummy `-n` addresses above are
+Nested recipes accept a bare subdirectory spec (for example
+`3x-spark-cluster/mimo-v2.6-flash-pp3`) or a path. The dummy `-n` addresses above are
 synthetic test inputs only; operational workflows use autodiscovery by default.
 
 Do not use `--setup`, `--build-only`, `--download-only`, `--force-*`, or

@@ -427,6 +427,34 @@ test_ray_mode_adds_ray_backend() {
     fi
 }
 
+# Test: nested recipe specs resolve both bare (subdir/name) and as a path
+test_nested_recipe_spec_resolves() {
+    log_test "Nested recipe spec resolves (bare and path forms)"
+
+    # Regression: bare nested specs reached run-recipe.py via fes-eval.sh and
+    # failed to resolve (flat-name candidates dropped the subdirectory).
+    nested="3x-spark-cluster/mimo-v2.6-flash-pp3"
+    if [[ ! -f "$PROJECT_DIR/recipes/$nested.yaml" ]]; then
+        log_skip "$nested.yaml not found"
+        return
+    fi
+
+    output=$("$PROJECT_DIR/run-recipe.py" "$nested" --dry-run -n "192.168.1.1,192.168.1.2,192.168.1.3" 2>&1)
+    if ! echo "$output" | grep -q "\-\-pipeline-parallel-size 3"; then
+        log_fail "bare nested spec '$nested' did not resolve"
+        log_verbose "$output"
+        return
+    fi
+
+    output=$("$PROJECT_DIR/run-recipe.py" "recipes/$nested.yaml" --dry-run -n "192.168.1.1,192.168.1.2,192.168.1.3" 2>&1)
+    if echo "$output" | grep -q "\-\-pipeline-parallel-size 3"; then
+        log_pass "bare and path nested specs resolve"
+    else
+        log_fail "path form 'recipes/$nested.yaml' did not resolve"
+        log_verbose "$output"
+    fi
+}
+
 # Test: CLI overrides work (--port)
 test_cli_override_port() {
     log_test "CLI override --port works"
@@ -1615,6 +1643,7 @@ main() {
     test_solo_mode_rejects_backend_flags
     test_cluster_mode_defaults_no_ray
     test_ray_mode_adds_ray_backend
+    test_nested_recipe_spec_resolves
     test_cli_override_port
     echo ""
     
