@@ -74,24 +74,38 @@ return_anchor = "        return [*target_groups, *draft_groups]"
 return_patched = (
     "        return _merge_identical_spec_groups([*target_groups, *draft_groups])"
 )
+# The per-stage worker path (no draft layers on PP ranks 0..N-2) skips the
+# parallel-draft branch entirely and falls through to this return; it is the
+# path whose 11-group view the KVCacheManager actually uses.
+tail_anchor = (
+    "    _annotate_eagle_groups(vllm_config, kv_cache_spec, groups)\n"
+    "    _warn_if_unannotated_eagle_mamba(vllm_config, groups)\n"
+    "    return groups\n"
+)
+tail_patched = (
+    "    _annotate_eagle_groups(vllm_config, kv_cache_spec, groups)\n"
+    "    _warn_if_unannotated_eagle_mamba(vllm_config, groups)\n"
+    "    return _merge_identical_spec_groups(groups)\n"
+)
 
-if helper in text and return_patched in text:
+if helper in text and return_patched in text and tail_patched in text:
     print("[merge-swa-groups] already patched; skipping.")
     raise SystemExit(0)
 
-if def_anchor not in text:
-    raise SystemExit(
-        "[merge-swa-groups] get_kv_cache_groups definition not found; "
-        "the installed vLLM differs from the layout this mod knows."
-    )
-if return_anchor not in text:
-    raise SystemExit(
-        "[merge-swa-groups] parallel-draft return not found; "
-        "the installed vLLM differs from the layout this mod knows."
-    )
+for anchor, label in (
+    (def_anchor, "get_kv_cache_groups definition"),
+    (return_anchor, "parallel-draft return"),
+    (tail_anchor, "fall-through return"),
+):
+    if anchor not in text:
+        raise SystemExit(
+            f"[merge-swa-groups] {label} not found; "
+            "the installed vLLM differs from the layout this mod knows."
+        )
 
 text = text.replace(def_anchor, helper + def_anchor, 1)
 text = text.replace(return_anchor, return_patched, 1)
+text = text.replace(tail_anchor, tail_patched, 1)
 path.write_text(text)
 print("[merge-swa-groups] Patched get_kv_cache_groups with same-spec merge.")
 PY
