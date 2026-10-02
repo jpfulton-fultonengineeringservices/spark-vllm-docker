@@ -1,0 +1,92 @@
+# Recipe: MiMo-V2.6-Flash-RL EXL3 (two DGX Spark, TP=2)
+#
+# Serves the b12x `exl3-v1` pack produced by mods/exl3-mimo (see
+# mods/exl3-mimo/EXL3_MIMO_PACK.md) across two GB10 nodes at TP=2. Routed
+# experts are EXL3 (3-bit MCG); attention / dense-MLP stay in the pack's source
+# format. This is the two-node sibling of
+# recipes/mimo-v2.6-flash-exl3-1x.yaml (same serve args, topology split).
+#
+# !!! FIRST DRAFT — flags marked (confirm) follow the b12x EXL3 design
+# (DeepSeek-V4.1 / Kimi-K3 lineage) and must be checked at first boot against
+# the actual MiMo pack. The EXL3 MoE path is driven by the `exl3` quant method
+# (Exl3Config/Exl3MoEMethod), not by --moe-backend.
+#
+# Model path: this recipe serves a LOCAL pack, not a Hub id. The pack dir must
+# be mounted on EVERY node at the same container path, e.g.:
+#   -v /nas-1/fes-projects/exl3-mimo-build/mimo-exl3-v1:/models/mimo-exl3-v1
+# Because `model:` is a path, --setup / --download-model does not apply.
+#
+# Launch (first node is the head):
+#   ./run-recipe.sh recipes/mimo-v2.6-flash-exl3-2x.yaml \
+#     -n 10.10.10.165,10.10.10.75 \
+#     -v /nas-1/fes-projects/exl3-mimo-build/mimo-exl3-v1:/models/mimo-exl3-v1 \
+#     --tp 2
+
+recipe_version: "1"
+name: MiMo-V2.6-Flash-RL EXL3 2x
+description: vLLM serving a MiMo-V2.6-Flash-RL EXL3 pack (B12X exl3-v1 container) on two DGX Spark nodes (TP=2, b12x stack, exl3 quant method)
+
+# Local exl3-v1 pack, mounted on every node at this container path. Not a Hub
+# id — do not use --setup/--download-model.
+model: /models/mimo-exl3-v1
+
+# b12x fork (local-inference-lab/vllm@dev/karmic-kraken) with B12X paged
+# attention (DiffKV + fp8 KV + sinks + non-causal) and b12x linear. Build with:
+#   ./build-and-copy.sh --exp-b12x -t vllm-node-b12x
+container: vllm-node-b12x
+
+build_args:
+  - --exp-b12x
+
+# 2 nodes: the experts-only EXL3 pack is ~110 GB total, ~55 GB/rank at TP=2, so
+# two nodes leave room for fp8 KV and the resident embed units.
+cluster_only: true
+
+# exl3-mimo relaxes the fork's DeepSeek-shaped EXL3 gates for MiMo (SiLU +
+# non-DeepSeek dense arrangement). mimo-v2.6-flash carries the model-support
+# patches; kv-cache-guard-override skips the single-request 1M KV guard.
+mods:
+  - mods/mimo-v2.6-flash
+  - mods/exl3-mimo
+  - mods/kv-cache-guard-override
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 2
+  # (confirm) ~55 GB experts/rank + non-expert weights + fp8 KV at TP=2; 0.8
+  # also leaves room for the resident embed units (~0.10), matching the
+  # flagship b12x recipes' 0.80 + embed co-existence.
+  gpu_memory_utilization: 0.8
+  max_model_len: 1048576
+  block_size: 128
+  max_num_seqs: 32
+  max_num_batched_tokens: 16384
+
+env:
+  CUTE_DSL_ARCH: "sm_121a"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+  VLLM_SKIP_KV_CACHE_MEMORY_CHECK: "1"
+
+command: |
+  vllm serve /models/mimo-exl3-v1 \
+      --trust-remote-code \
+      --host {host} \
+      --port {port} \
+      --tensor-parallel-size {tensor_parallel} \
+      --quantization exl3 \
+      --attention-backend B12X \
+      --linear-backend b12x \
+      --block-size {block_size} \
+      --max-model-len {max_model_len} \
+      --kv-cache-dtype fp8 \
+      --kv-cache-dtype-skip-layers sliding_window \
+      --max-num-seqs {max_num_seqs} \
+      --max-num-batched-tokens {max_num_batched_tokens} \
+      --gpu-memory-utilization {gpu_memory_utilization} \
+      --enable-chunked-prefill \
+      --async-scheduling \
+      --enable-prefix-caching \
+      --generation-config vllm \
+      --reasoning-parser mimo \
+      --kv-cache-metrics
