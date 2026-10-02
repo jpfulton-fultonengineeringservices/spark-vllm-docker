@@ -1,0 +1,76 @@
+# Recipe: MiMo-V2.6-Flash-RL EXL3 (single DGX Spark, TP=1)
+#
+# The Config C prefill lane: one node serving the EXL3 pack at TP=1 with the
+# b12x runtime's EXL3 routed-expert path. Only routed experts are EXL3;
+# attention / dense-MLP stay in the pack's source format (see mods/exl3-mimo).
+#
+# !!! FIRST DRAFT — flags marked (confirm) are set from the b12x EXL3 design
+# (DeepSeek-V4.1/Kimi-K3 lineage) and must be checked at first boot against the
+# actual MiMo pack. The EXL3 MoE path is driven by the `exl3` quant method
+# (Exl3Config/Exl3MoEMethod), not by --moe-backend.
+
+recipe_version: "1"
+name: MiMo-V2.6-Flash-RL EXL3 1x
+description: vLLM serving a MiMo-V2.6-Flash-RL EXL3 pack (B12X exl3-v1 container) on one DGX Spark (TP=1, b12x stack, exl3 quant method)
+
+# EXL3 pack produced per mods/exl3-mimo/EXL3_MIMO_PACK.md. Set to the local
+# path or Hub id of the finished B12X exl3-v1 pack.
+model: FES/MiMo-V2.6-Flash-RL-exl3-b12x   # (confirm) point at the real pack
+
+# b12x fork (local-inference-lab/vllm@dev/karmic-kraken) with B12X paged
+# attention (DiffKV + fp8 KV + sinks + non-causal) and b12x linear. Build with:
+#   ./build-and-copy.sh --exp-b12x -t vllm-node-b12x
+container: vllm-node-b12x
+
+build_args:
+  - --exp-b12x
+
+# Single node (fits one GB10 with the experts-only EXL3 pack).
+solo_only: true
+
+# exl3-mimo relaxes the fork's DeepSeek-shaped EXL3 gates for MiMo (SiLU +
+# non-DeepSeek dense arrangement). mimo-v2.6-flash carries the model-support
+# patches; kv-cache-guard-override skips the single-request 1M KV guard.
+mods:
+  - mods/mimo-v2.6-flash
+  - mods/exl3-mimo
+  - mods/kv-cache-guard-override
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 1
+  # (confirm) experts-only EXL3 ~83 GiB + fp8 KV + runtime on 121.6 GiB.
+  gpu_memory_utilization: 0.9
+  max_model_len: 1048576
+  block_size: 128
+  max_num_seqs: 32
+  max_num_batched_tokens: 16384
+
+env:
+  CUTE_DSL_ARCH: "sm_121a"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+  VLLM_SKIP_KV_CACHE_MEMORY_CHECK: "1"
+
+command: |
+  vllm serve FES/MiMo-V2.6-Flash-RL-exl3-b12x \
+      --trust-remote-code \
+      --host {host} \
+      --port {port} \
+      --tensor-parallel-size {tensor_parallel} \
+      --quantization exl3 \
+      --attention-backend B12X \
+      --linear-backend b12x \
+      --block-size {block_size} \
+      --max-model-len {max_model_len} \
+      --kv-cache-dtype fp8 \
+      --kv-cache-dtype-skip-layers sliding_window \
+      --max-num-seqs {max_num_seqs} \
+      --max-num-batched-tokens {max_num_batched_tokens} \
+      --gpu-memory-utilization {gpu_memory_utilization} \
+      --enable-chunked-prefill \
+      --async-scheduling \
+      --enable-prefix-caching \
+      --generation-config vllm \
+      --reasoning-parser mimo \
+      --kv-cache-metrics
