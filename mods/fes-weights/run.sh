@@ -46,22 +46,53 @@ make_shim() {
     local org="${model%%/*}" name="${model#*/}"
     [ "$org" != "$model" ] || fail "$src" "hub model must be org/model, got '$model'"
     local repo_dir="$hub_root/models--${org}--${name}"
-    local snap="$repo_dir/snapshots/fes-staged"
     local fp_file="$repo_dir/.fes-shim-fp"
     local fp base f
     fp="$(cd "$src" && find . -maxdepth 1 -type f -printf '%f %s\n' | sort | sha256sum | cut -d' ' -f1)"
+
+    # Best-effort: hand the repo dir to the serving user and make it
+    # group/world writable so a root-squashed peer (mod runs as nobody there)
+    # can manage the shim. Real root on node1 succeeds and fixes the shared
+    # tree for everyone; on squashed peers this is a harmless no-op.
+    mkdir -p "$repo_dir" 2>/dev/null || true
+    chown -R -h ubuntu:ubuntu "$repo_dir" 2>/dev/null || true
+    chmod -R u+rwX,g+rwX,o+rwX "$repo_dir" 2>/dev/null || true
+
+    local snap="$repo_dir/snapshots/fes-staged"
     if [ -f "$fp_file" ] && [ "$(cat "$fp_file")" = "$fp" ] && [ -d "$snap" ]; then
         echo "$PREFIX $model: hub shim up to date ($snap -> $src)"
         return
     fi
-    rm -rf "$snap"
-    mkdir -p "$snap" "$repo_dir/refs"
+
+    # Writability guard. The HF cache is node1-local, NFS-exported with
+    # root_squash: the real root run on node1 owns it and (re)builds the shim;
+    # a peer (nobody) that cannot write reuses the snapshot node1 already made
+    # rather than failing the whole launch. Only fail if there is nothing usable.
+    if ! touch "$repo_dir/.wtest" 2>/dev/null; then
+        local cur
+        cur="$(cat "$repo_dir/refs/main" 2>/dev/null || true)"
+        if [ -n "$cur" ] && [ -d "$repo_dir/snapshots/$cur" ]; then
+            echo "$PREFIX $model: WARNING hub cache not writable (root-squashed peer); reusing existing snapshot '$cur'" >&2
+            return 0
+        fi
+        fail "$src" "hub cache not writable and no usable existing shim under $repo_dir"
+    fi
+    rm -f "$repo_dir/.wtest"
+
+    # Rebuild in place when possible. If the existing snapshot cannot be cleared
+    # (root-owned from an earlier root run), fall back to a fresh immutable
+    # snapshot name and repoint refs/main — never delete what we do not own.
+    if [ -d "$snap" ] && ! rm -rf "$snap" 2>/dev/null; then
+        snap="$repo_dir/snapshots/fes-staged-${fp:0:12}"
+        rm -rf "$snap" 2>/dev/null || true
+    fi
+    mkdir -p "$snap" "$repo_dir/refs" || fail "$src" "cannot create hub shim dirs under $repo_dir"
     for f in "$src"/*; do
         base="$(basename "$f")"
         case "$base" in .*) continue ;; esac
         ln -sfn "$f" "$snap/$base"
     done
-    printf '%s' "fes-staged" > "$repo_dir/refs/main"
+    printf '%s' "$(basename "$snap")" > "$repo_dir/refs/main"
     printf '%s\n' "$fp" > "$fp_file"
     echo "$PREFIX $model: hub shim created ($snap -> $src)"
 }
@@ -83,19 +114,21 @@ fix_hf_cache_perms() {
     [ -d "$hf_dir" ] || return 0
     mkdir -p "$hf_dir/modules" 2>/dev/null || true
     chown -R -h ubuntu:ubuntu "$hf_dir" 2>/dev/null || true
-    chmod -R u+rwX,g+rwX "$hf_dir" 2>/dev/null || true
+    chmod -R u+rwX,g+rwX,o+rwX "$hf_dir" 2>/dev/null || true
 }
 
 verify "$weights_dir" "main weights"
 if [ -n "${FES_DRAFT_DIR:-}" ]; then
     verify "$draft_dir" "draft weights"
 fi
+# Fix cache ownership/permissions before creating shims so a root-squashed peer
+# can manage the shim dirs it inherits from node1's root run.
+fix_hf_cache_perms
 if [ -n "${FES_HUB_MODEL:-}" ]; then
     make_shim "$FES_HUB_MODEL" "$weights_dir"
 fi
 if [ -n "${FES_DRAFT_HUB_MODEL:-}" ]; then
     make_shim "$FES_DRAFT_HUB_MODEL" "$draft_dir"
 fi
-fix_hf_cache_perms
 
 echo "$PREFIX FES_WEIGHTS_OK op=verify dir=$weights_dir slug=${FES_HUB_MODEL:-none}"
