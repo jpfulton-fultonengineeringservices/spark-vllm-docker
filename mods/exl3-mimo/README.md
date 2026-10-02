@@ -42,6 +42,21 @@ first cut.
 > Note: the newer upstream **`btx-atoms-v1`** container generation is *not*
 > present in this image's B12X — do not repoint at it. Build `exl3-v1`.
 
+## Serving
+
+The pack is experts-only. Before serving, assemble a servable checkpoint from
+the source model (minus routed experts) + the `exl3-v1` container + an
+`exl3` `quantization_config`:
+
+```bash
+pack-build assemble <src> <exl3-v1> <serve-out>
+```
+
+The output is a normal-looking HF checkpoint that the FES weight-staging path
+(`model-weights.sh stage` → `/opt/llm/models/<slug>` → `mods/fes-weights` hub
+shim) stages and the recipe serves. See `EXL3_MIMO_PACK.md` and
+`pack-build/NEW_MODEL.md`.
+
 ## Provenance / licensing
 
 - The fork's `exl3.py` is Apache-2.0 (vLLM project / Local Inference Lab);

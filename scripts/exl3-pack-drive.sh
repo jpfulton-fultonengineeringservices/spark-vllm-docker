@@ -13,6 +13,7 @@
 #   pipeline  <src> <work> <exl3-out> <v1-out> <bits> <codebook> [convert-args...]
 #   convert   <src> <out> <work> <bits> <codebook> [convert-args...]
 #   repack    <pack> <v1-out> <bits> [repack-args...]
+#   assemble  <src> <pack> <serve-out> [assemble-args...]
 #   detect    <src>
 #   build                                   build the image on the node
 #   sync                                    rsync build context to the node
@@ -174,6 +175,11 @@ print(d.get('layers_completed',0) or 0)
         printf '\033[H'
       fi
       python3 "$PACK_STATUS_BIN" --delta "$delta" --interval "$POLL_INTERVAL" "$tmp"
+      # Terminal phase: stop even if the container lingers (inspect races).
+      if grep -qE '"phase"[[:space:]]*:[[:space:]]*"(done|error)"' "$tmp"; then
+        printf '\n'
+        break
+      fi
     else
       printf '\033[H'
       printf 'waiting for %s ...\n' "$status_file"
@@ -280,6 +286,35 @@ cmd_repack() {
   ssh "$(ssh_target)" "docker logs '${NAME}' 2>&1 | tail -30" || true
 }
 
+cmd_assemble() {
+  [ $# -ge 3 ] || { err "assemble needs <src> <pack> <serve-out>"; exit 2; }
+  local src="$1" pack="$2" serve_out="$3"
+  shift 3
+  local status_file
+  status_file="$(derive_status_file "$serve_out")"
+
+  [ "$NO_SYNC" = true ] || do_sync
+  [ "$NO_BUILD" = true ] || do_build
+  ensure_dirs "$serve_out"
+
+  ssh "$(ssh_target)" docker run -d --rm --gpus all \
+    --name "$NAME" \
+    -v /nas-1:/nas-1 \
+    -e "PACK_STATUS_FILE=${status_file}" \
+    "$TAG" \
+    assemble "$src" "$pack" "$serve_out" "$@"
+
+  if [ "$DETACH" = true ]; then
+    echo "started container ${NAME}; status: ${status_file}"
+    echo "  watch:  $0 watch --host ${HOST} ${serve_out}"
+    return 0
+  fi
+
+  poll "$status_file"
+  echo "--- container logs (tail) ---"
+  ssh "$(ssh_target)" "docker logs '${NAME}' 2>&1 | tail -30" || true
+}
+
 cmd_detect() {
   [ $# -ge 1 ] || { err "detect needs <src>"; exit 2; }
   local src="$1"
@@ -352,6 +387,7 @@ case "$subcommand" in
   pipeline) cmd_pipeline "${POSITIONAL[@]}" ;;
   convert)  cmd_convert "${POSITIONAL[@]}" ;;
   repack)   cmd_repack "${POSITIONAL[@]}" ;;
+  assemble) cmd_assemble "${POSITIONAL[@]}" ;;
   detect)   cmd_detect "${POSITIONAL[@]}" ;;
   build)    cmd_build ;;
   sync)     cmd_sync ;;

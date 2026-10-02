@@ -11,24 +11,28 @@
 # the actual MiMo pack. The EXL3 MoE path is driven by the `exl3` quant method
 # (Exl3Config/Exl3MoEMethod), not by --moe-backend.
 #
-# Model path: this recipe serves a LOCAL pack, not a Hub id. The pack dir must
-# be mounted on EVERY node at the same container path, e.g.:
-#   -v /nas-1/fes-projects/exl3-mimo-build/mimo-exl3-v1:/models/mimo-exl3-v1
-# Because `model:` is a path, --setup / --download-model does not apply.
+# Model: served via the FES staged-weights path. The slug holds the ASSEMBLED
+# serving checkpoint (source dense weights minus routed experts + the exl3-v1
+# container + a fork-shaped quantization_config), produced by:
+#   scripts/exl3-pack-drive.sh assemble <src> <exl3-v1-pack> /nas-1/models/mimo/mimo-v2.6-flash-rl-exl3-v1
+# Mods/fes-weights presents that dir under this hub id, so `vllm serve` resolves
+# offline. Because `model:` is a packaging id (not a downloadable repo), run the
+# staged path (spark-vllm-docker-serve.sh stage/launch, or scripts/fes-eval.sh);
+# `--setup`/`--download-model` do not apply.
 #
-# Launch (first node is the head):
-#   ./run-recipe.sh recipes/mimo-v2.6-flash-exl3-2x.yaml \
-#     -n 10.10.10.165,10.10.10.75 \
-#     -v /nas-1/fes-projects/exl3-mimo-build/mimo-exl3-v1:/models/mimo-exl3-v1 \
-#     --tp 2
+# Launch on the head rank (gx10-cb11):
+#   cluster-config/scripts/spark-vllm-docker-serve.sh stage  --recipe mimo-v2.6-flash-exl3-2x
+#   cluster-config/scripts/spark-vllm-docker-serve.sh launch --recipe mimo-v2.6-flash-exl3-2x
+# (the SPARK_VLLM_DOCKER_SLUGS map in cluster.env binds this recipe to the
+# mimo-v2.6-flash-rl-exl3-v1 slug)
 
 recipe_version: "1"
 name: MiMo-V2.6-Flash-RL EXL3 2x
 description: vLLM serving a MiMo-V2.6-Flash-RL EXL3 pack (B12X exl3-v1 container) on two DGX Spark nodes (TP=2, b12x stack, exl3 quant method)
 
-# Local exl3-v1 pack, mounted on every node at this container path. Not a Hub
-# id — do not use --setup/--download-model.
-model: /models/mimo-exl3-v1
+# Local exl3-v1 serving checkpoint, staged by the FES weights path under this
+# hub id. Not a downloadable repo — use the staged launch (see header).
+model: XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3
 
 # b12x fork (local-inference-lab/vllm@dev/karmic-kraken) with B12X paged
 # attention (DiffKV + fp8 KV + sinks + non-causal) and b12x linear. Build with:
@@ -69,7 +73,7 @@ env:
   VLLM_SKIP_KV_CACHE_MEMORY_CHECK: "1"
 
 command: |
-  vllm serve /models/mimo-exl3-v1 \
+  vllm serve XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3 \
       --trust-remote-code \
       --host {host} \
       --port {port} \

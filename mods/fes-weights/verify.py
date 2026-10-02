@@ -14,11 +14,30 @@ import os
 import sys
 
 SIZE_TOLERANCE = 1.02
+EXL3_MANIFEST = "exl3-manifest.json"
 
 
 def fail(reason):
     print(reason, file=sys.stderr)
     sys.exit(1)
+
+
+def exl3_layer_files(path):
+    """Layer file names declared by an exl3-v1 manifest, or None if not an exl3 pack."""
+    manifest_path = os.path.join(path, EXL3_MANIFEST)
+    if not os.path.isfile(manifest_path):
+        return None
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except (json.JSONDecodeError, OSError) as exc:
+        fail(f"unreadable {EXL3_MANIFEST} in {path}: {exc}")
+    if manifest.get("kind") != "exl3-manifest":
+        fail(f"{EXL3_MANIFEST} in {path} is not kind=exl3-manifest")
+    layers = manifest.get("layers") or {}
+    if not layers:
+        fail(f"{EXL3_MANIFEST} in {path} declares no layers")
+    return {ref["file"] for ref in layers.values() if isinstance(ref, dict) and ref.get("file")}
 
 
 def verify(path):
@@ -40,6 +59,18 @@ def verify(path):
     if quant_format == "nvfp4" and not os.path.isfile(os.path.join(path, "hf_quant_config.json")):
         fail("nvfp4 checkpoint missing hf_quant_config.json")
 
+    exl3_files = exl3_layer_files(path)
+    if exl3_files is not None:
+        missing_layers = sorted(
+            f for f in exl3_files if not os.path.isfile(os.path.join(path, f))
+        )
+        if missing_layers:
+            fail(
+                f"exl3 manifest references {len(missing_layers)} missing layer "
+                f"file(s), e.g. {missing_layers[0]}"
+            )
+    exl3_layers = len(exl3_files) if exl3_files is not None else 0
+
     index_path = os.path.join(path, "model.safetensors.index.json")
     if os.path.isfile(index_path):
         try:
@@ -58,12 +89,14 @@ def verify(path):
         staged = sum(os.path.getsize(os.path.join(path, s)) for s in shards)
         if total_size and not total_size <= staged <= total_size * SIZE_TOLERANCE:
             fail(f"size mismatch: index total_size={total_size} staged={staged}")
-        return {"shards": len(shards), "bytes": staged, "quant_format": quant_format}
+        return {"shards": len(shards), "bytes": staged, "quant_format": quant_format,
+                "exl3_layers": exl3_layers}
 
     single = os.path.join(path, "model.safetensors")
     if not os.path.isfile(single):
         fail("neither model.safetensors.index.json nor model.safetensors present")
-    return {"shards": 1, "bytes": os.path.getsize(single), "quant_format": quant_format}
+    return {"shards": 1, "bytes": os.path.getsize(single), "quant_format": quant_format,
+            "exl3_layers": exl3_layers}
 
 
 def main():
