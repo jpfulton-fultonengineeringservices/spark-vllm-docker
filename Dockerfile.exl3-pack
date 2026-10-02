@@ -1,0 +1,78 @@
+# Dockerfile.exl3-pack — EXL3 pack builder (convert + repack) for GB10 / b12x
+#
+# General-purpose image for building EXL3 MoE packs on this workspace:
+#   1. convert : run exllamav3's quantizer (HF model -> exllamav3 EXL3 pack)
+#   2. repack  : reshape an exllamav3 pack -> b12x `exl3-v1` container the
+#                vllm-node-b12x runtime reads (mods/exl3-mimo)
+#
+# Build from the repository root:
+#   docker build -f Dockerfile.exl3-pack -t exl3-pack:cu13.0 .
+#
+# Run (mount the source model read-only + a work dir):
+#   docker run --rm --gpus all \
+#     -v /nas-1/models:/models:ro \
+#     -v /nas-1/fes-projects/exl3-mimo-build:/work \
+#     exl3-pack:cu13.0 \
+#     convert -i /models/mimo/mimo-v2.6-flash-rl \
+#             -o /work/mimo-mcg-k3 -w /work/work-k3 -b 3 -cb mcg
+#
+#   docker run --rm --gpus all \
+#     -v /nas-1/fes-projects/exl3-mimo-build:/work \
+#     exl3-pack:cu13.0 \
+#     repack --pack /work/mimo-mcg-k3 --out /work/mimo-exl3-v1 --bits 3 --self-check
+#
+# Base image: the runtime image already carries torch 2.13.0+cu130, b12x 1.3.0
+# (with the exl3-v1 reader/writer), and the CUDA toolchain. Override BASE_IMAGE
+# for a different torch/cu13 base.
+#
+# NOTE on codebook/rate: the b12x `exl3-v1` path executes `mcg` at K3-K6 and
+# `lut_e4m3` at K2-K4 (MCG K2 is rejected at runtime). exllamav3 can emit
+# `mul1`/`mcg`/`3inst` — use `-cb mcg` for b12x. See mods/exl3-mimo/EXL3_MIMO_PACK.md.
+
+ARG BASE_IMAGE=vllm-node-b12x:latest
+FROM ${BASE_IMAGE}
+
+SHELL ["/bin/bash", "-lc"]
+ENV DEBIAN_FRONTEND=noninteractive
+
+# --- exllamav3 (FES aarch64 / cu13.0 build: includes MiMoV2 arch + exllamav3_ext)
+# Pinned by URL + sha256; swap for a newer release tag as needed.
+ARG EXLLAMAV3_WHEEL_URL=https://github.com/Fulton-Engineering-Services/dgx-spark-wheels/releases/download/exllamav3-v1.5.1-cu13.0/exllamav3-1.5.1%2Bcu13.0torch2.13.glibc239-cp312-cp312-linux_aarch64.whl
+ARG EXLLAMAV3_WHEEL_SHA256=e993d5763d9d94e42e04bc20087f458b75d0df0c9afe4d85bfca53ee196027d9
+ARG EXLLAMAV3_WHEEL=exllamav3-1.5.1+cu13.0torch2.13.glibc239-cp312-cp312-linux_aarch64.whl
+RUN set -eux; \
+    curl -fsSL -o /tmp/${EXLLAMAV3_WHEEL} "${EXLLAMAV3_WHEEL_URL}"; \
+    echo "${EXLLAMAV3_WHEEL_SHA256}  /tmp/${EXLLAMAV3_WHEEL}" | sha256sum -c -; \
+    python3 -m pip install --no-deps --break-system-packages /tmp/${EXLLAMAV3_WHEEL} \
+      || python3 -m pip install --no-deps /tmp/${EXLLAMAV3_WHEEL}; \
+    rm -f /tmp/${EXLLAMAV3_WHEEL}
+
+# --- repack tool + docs
+COPY mods/exl3-mimo/pack-build/repack_exl3_to_b12x.py /opt/exl3-pack/repack_exl3_to_b12x.py
+COPY mods/exl3-mimo/EXL3_MIMO_PACK.md /opt/exl3-pack/EXL3_MIMO_PACK.md
+
+# --- dispatcher: `exl3-pack convert ...` / `exl3-pack repack ...`
+RUN set -eux; \
+    printf '%s\n' \
+      '#!/usr/bin/env bash' \
+      'set -euo pipefail' \
+      'TL="$(python3 -c "import torch,os;print(os.path.dirname(torch.__file__)+\"/lib\")")"' \
+      'export LD_LIBRARY_PATH="${TL}:${LD_LIBRARY_PATH:-}"' \
+      'case "${1:-help}" in' \
+      '  convert) shift; exec python3 -m exllamav3.conversion.convert_model "$@" ;;' \
+      '  repack)  shift; exec python3 /opt/exl3-pack/repack_exl3_to_b12x.py "$@" ;;' \
+      '  help|*)  echo "exl3-pack {convert|repack} [args...]"' \
+      '           echo "  convert: exllamav3 convert_model  (e.g. -i /models/<m> -o /work/<pack> -w /work/<work> -b 3 -cb mcg)"' \
+      '           echo "  repack : exllamav3 pack -> b12x exl3-v1 (e.g. --pack /work/<pack> --out /work/<v1> --bits 3 --self-check)"' \
+      '           echo "docs: /opt/exl3-pack/EXL3_MIMO_PACK.md" ;;' \
+      'esac' \
+      > /usr/local/bin/exl3-pack; \
+    chmod +x /usr/local/bin/exl3-pack
+
+WORKDIR /work
+ENTRYPOINT ["/usr/local/bin/exl3-pack"]
+CMD ["help"]
+
+LABEL org.opencontainers.image.title="EXL3 pack builder (convert + repack)" \
+      org.opencontainers.image.description="exllamav3 EXL3 quantizer + b12x exl3-v1 repack for DGX Spark / GB10" \
+      org.opencontainers.image.source="https://github.com/Fulton-Engineering-Services/spark-vllm-docker"
