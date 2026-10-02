@@ -20,10 +20,12 @@ _timestamp() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
 _now_epoch() { date +%s; }
 
 _gpu_memory_mb() {
-  if command -v nvidia-smi >/dev/null 2>&1; then
-    nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null \
-      | head -1 || true
-  fi
+  # Print "used total" only when both are plain integers. nvidia-smi can report
+  # [N/A] (MIG / driver quirk), which would otherwise corrupt the status JSON.
+  command -v nvidia-smi >/dev/null 2>&1 || return 0
+  nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null \
+    | head -1 \
+    | awk -F', *' 'NF>=2 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ { print $1, $2 }'
 }
 
 _disk_free_gb() {
@@ -60,7 +62,7 @@ _monitor_write_status() {
     printf '  "started_at": "%s",\n' "$started_at"
     printf '  "last_update": "%s",\n' "$now"
     printf '  "elapsed_seconds": %d,\n' "$elapsed"
-    if [ -n "$gpu_used" ]; then
+    if [[ "$gpu_used" =~ ^[0-9]+$ ]] && [[ "$gpu_total" =~ ^[0-9]+$ ]]; then
       printf '  "gpu_memory_used_mb": %s,\n' "$gpu_used"
       printf '  "gpu_memory_total_mb": %s,\n' "$gpu_total"
     fi

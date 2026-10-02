@@ -108,6 +108,14 @@ def _render(st: dict) -> str:
     return "\n".join(lines)
 
 
+def _load_status(path):
+    """Parse the status JSON, or return None if absent/unreadable/mid-write."""
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
@@ -140,8 +148,8 @@ def main(argv: list[str] | None = None) -> int:
         signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
         try:
             while True:
-                if path.exists():
-                    st = json.loads(path.read_text())
+                st = _load_status(path) if path.exists() else None
+                if st is not None:
                     if json_flag:
                         print(json.dumps(st, indent=2))
                     else:
@@ -158,7 +166,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"status file not found: {path}", file=sys.stderr)
         return 1
 
-    st = json.loads(path.read_text())
+    st = _load_status(path)
+    if st is None:
+        print(f"status file not found or unreadable: {path}", file=sys.stderr)
+        return 1
     if json_flag:
         print(json.dumps(st, indent=2))
     else:
