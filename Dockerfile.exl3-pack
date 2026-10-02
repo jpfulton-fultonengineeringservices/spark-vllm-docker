@@ -23,6 +23,8 @@
 #   pack-build status --watch from a second terminal on the host:
 #     docker exec <container> pack-build status --watch
 #
+# New model onboarding: see mods/exl3-mimo/pack-build/NEW_MODEL.md
+#
 # Build from the repository root:
 #   docker build -f Dockerfile.exl3-pack -t exl3-pack:cu13.0 .
 #
