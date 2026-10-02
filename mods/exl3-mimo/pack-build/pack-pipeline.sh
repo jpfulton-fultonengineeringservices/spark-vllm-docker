@@ -106,7 +106,7 @@ pipeline_convert() {
 
   local exit_code=0
   set +e
-  python3 -m exllamav3.conversion.convert_model \
+  python3 -u -m exllamav3.conversion.convert_model \
     -i "$src" -o "$out" -w "$work" \
     -b "$bits" -cb "$codebook" ${resume_flag} "$@" 2>&1 | \
   while IFS= read -r line; do
@@ -169,11 +169,11 @@ pipeline_repack() {
   started_at=$(_timestamp)
 
   _monitor_write_status "$started_at" \
-    "stage=repack" "phase=starting" "bits=${bits}"
+    "stage=repack" "phase=starting" "codebook=mcg" "bits=${bits}"
 
   local exit_code=0
   set +e
-  python3 "${SCRIPT_DIR}/repack_exl3_to_b12x.py" \
+  python3 -u "${SCRIPT_DIR}/repack_exl3_to_b12x.py" \
     --pack "$pack" --out "$v1_out" --bits "$bits" "$@" 2>&1 | \
   while IFS= read -r line; do
     echo "$line"
@@ -181,7 +181,7 @@ pipeline_repack() {
     ln=$(echo "$line" | grep -oP 'layer \K\d+' | head -1 || true)
     if [ -n "$ln" ]; then
       _monitor_write_status "$started_at" \
-        "stage=repack" "phase=assembling" \
+        "stage=repack" "phase=assembling" "codebook=mcg" "bits=${bits}" \
         "current_layer=${ln}" "layers_completed=${ln}"
     fi
   done
@@ -196,7 +196,7 @@ pipeline_repack() {
     return "$exit_code"
   fi
 
-  _monitor_write_status "$started_at" "stage=repack" "phase=done"
+  _monitor_write_status "$started_at" "stage=repack" "phase=done" "codebook=mcg" "bits=${bits}"
   echo "[pipeline] repack complete: ${v1_out}"
   return 0
 }

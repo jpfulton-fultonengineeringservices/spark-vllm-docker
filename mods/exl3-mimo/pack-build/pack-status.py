@@ -41,6 +41,17 @@ def _human_duration(seconds: float) -> str:
     return f"{h}h{m:02d}m{s:02d}s"
 
 
+def _live_elapsed(started: str) -> float | None:
+    """Seconds since an ISO-8601 Z timestamp, or None if unparseable."""
+    if not started:
+        return None
+    try:
+        t = datetime.strptime(started, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return max(0.0, (datetime.now(timezone.utc) - t).total_seconds())
+
+
 def _render(st: dict) -> str:
     lines: list[str] = []
     stage = st.get("stage", "unknown")
@@ -55,6 +66,11 @@ def _render(st: dict) -> str:
         lines.append(f"updated:    {last}")
 
     elapsed = st.get("elapsed_seconds")
+    # Prefer live elapsed from started_at so the display advances between
+    # status writes (writers only refresh it when a stage emits a line).
+    live = _live_elapsed(started)
+    if live is not None:
+        elapsed = live
     eta = st.get("eta_seconds")
     if elapsed is not None:
         lines.append(f"elapsed:    {_human_duration(elapsed)}")
