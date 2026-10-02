@@ -20,6 +20,25 @@
 - Rates: codebook `mcg`, **uniform** bits (mcg K3–K6; K2 needs `sqg_e4m3`).
   Target uniform K3 first. Hadamard: uncoupled for the first cut.
 
+## Serving assembly
+
+The container is experts-only. The b12x runtime (`Exl3MoEMethod`) reads
+`exl3-manifest.json` + `exl3-layer-*.safetensors` from the **served model
+directory** and loads everything else (attention / dense-MLP / embeddings /
+head / router) from the ordinary HF checkpoint. A servable checkpoint is
+therefore assembled from the source model (with the routed experts removed),
+this container, and a `quantization_config` that declares the exl3 method:
+
+```bash
+pack-build assemble <src> <exl3-v1> <serve-out>
+```
+
+Output = `config.json` (`quant_method: exl3`, `exl3.manifest`,
+`dense_format: fp8`, `ignored_layers`), re-sharded dense weights +
+`model.safetensors.index.json`, copied tokenizer/modeling files, and the
+`exl3-v1` container. This is the artifact the FES weight-staging path stages
+and serves (see `NEW_MODEL.md`, and the fork's `docs/fes-weight-staging.md`).
+
 ## In-image writer (B12X 1.3.0)
 
 `b12x/moe/_shared/kernels/w4a16/exl3_synth.py`:

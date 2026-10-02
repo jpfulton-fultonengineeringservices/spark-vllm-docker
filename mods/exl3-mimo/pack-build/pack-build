@@ -5,6 +5,7 @@
 #   pipeline  <src> <work> <exl3-out> <v1-out> <bits> <codebook> [args...]
 #   convert   <src> <out> <work> <bits> <codebook> [args...]
 #   repack    <pack> <v1-out> <bits> [args...]
+#   assemble  <src> <pack> <serve-out> [args...]
 #   detect    <src>
 #   status    [--json] [--watch [INTERVAL]] [status-file]
 #   help
@@ -53,6 +54,14 @@ case "$cmd" in
       exit 2
     fi
     exec bash -c 'source "${0}/pack-pipeline.sh"; pipeline_repack_direct "$@"' "${SCRIPT_DIR}" "$@"
+    ;;
+
+  assemble)
+    if [ $# -lt 3 ]; then
+      echo "usage: pack-build assemble <src> <pack> <serve-out> [args...]" >&2
+      exit 2
+    fi
+    exec bash -c 'source "${0}/pack-pipeline.sh"; pipeline_assemble_direct "$@"' "${SCRIPT_DIR}" "$@"
     ;;
 
   detect)

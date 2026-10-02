@@ -83,7 +83,24 @@ drive this with `scripts/exl3-pack-drive.sh`.
      3 --self-check
    ```
 
-4. **Or run the full pipeline** (convert → repack, one command):
+4. **Assemble the serving checkpoint** — the `exl3-v1` container is experts-only;
+   the b12x runtime also needs the ordinary dense checkpoint (attention / dense
+   MLP / embeddings / head / router) with the routed experts removed, plus a
+   fork-shaped `quantization_config`. `assemble` writes that directory:
+
+   ```bash
+   ./scripts/exl3-pack-drive.sh assemble --host home-gx10-node1 \
+     /nas-1/models/<org>/<model> \
+     /nas-1/fes-projects/exl3-mimo-build/<model>-exl3-v1 \
+     /nas-1/models/<family>/<model>-exl3-v1
+   ```
+
+   The output is a normal-looking HF checkpoint (config.json + re-sharded dense
+   weights + index + tokenizer/modeling files) plus `exl3-manifest.json` and the
+   `exl3-layer-*.safetensors` container, so the FES weight-staging path
+   (`model-weights.sh stage` / `verify`) accepts it directly.
+
+5. **Or run the full pipeline** (convert → repack, one command):
 
    ```bash
    ./scripts/exl3-pack-drive.sh pipeline --host home-gx10-node1 \
@@ -94,7 +111,7 @@ drive this with `scripts/exl3-pack-drive.sh`.
      3 mcg
    ```
 
-5. **Verify the container** — confirm the manifest and per-layer safetensors:
+6. **Verify the container** — confirm the manifest and per-layer safetensors:
 
    ```bash
    ssh home-gx10-node1 \
@@ -102,7 +119,7 @@ drive this with `scripts/exl3-pack-drive.sh`.
    # expects exl3-manifest.json + exl3-layer-<NNNNN>.safetensors per MoE layer
    ```
 
-6. **Boot the runtime** — reference the pack from a recipe YAML (see
+7. **Boot the runtime** — reference the pack from a recipe YAML (see
    `recipes/` and the `exl3-mimo` mod README) and run greedy-parity + PPL
    validation.
 

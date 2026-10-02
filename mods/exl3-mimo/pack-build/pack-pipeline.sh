@@ -291,6 +291,50 @@ pipeline_repack_direct() {
   pipeline_repack "$pack" "$v1_out" "$bits" "$@"
 }
 
+# --- assemble -----------------------------------------------------------------
+# Materialize a servable HF checkpoint: source dense weights minus routed
+# experts + the exl3-v1 container + a fork-shaped quantization_config. The
+# result is what the FES weight-staging path stages and the b12x runtime serves.
+pipeline_assemble() {
+  local src="$1" pack="$2" serve_out="$3"
+  shift 3
+
+  _create_dir "$serve_out"
+  echo "[pipeline] assemble: ${src} + ${pack} -> ${serve_out}"
+
+  local started_at
+  started_at=$(_timestamp)
+  _monitor_write_status "$started_at" "stage=assemble" "phase=starting"
+
+  local exit_code=0
+  set +e
+  python3 -u "${SCRIPT_DIR}/pack-assemble.py" \
+    --source "$src" --pack "$pack" --out "$serve_out" "$@" 2>&1 | \
+  while IFS= read -r line; do
+    echo "$line"
+  done
+  exit_code=${PIPESTATUS[0]}
+  set -e
+
+  if [ "$exit_code" -ne 0 ]; then
+    echo "[pipeline] assemble FAILED (exit ${exit_code})" >&2
+    _monitor_write_status "$started_at" \
+      "stage=assemble" "phase=error" \
+      "errors=[\"pack-assemble exited with code ${exit_code}\"]"
+    return "$exit_code"
+  fi
+
+  _monitor_write_status "$started_at" "stage=assemble" "phase=done"
+  echo "[pipeline] assemble complete: ${serve_out}"
+  return 0
+}
+
+pipeline_assemble_direct() {
+  local src="$1" pack="$2" serve_out="$3"
+  shift 3
+  pipeline_assemble "$src" "$pack" "$serve_out" "$@"
+}
+
 # Library guard — when sourced, nothing runs.
 # When executed directly, print usage.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
