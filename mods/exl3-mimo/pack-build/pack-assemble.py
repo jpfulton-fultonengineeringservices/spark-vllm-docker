@@ -4,14 +4,21 @@
 The b12x EXL3 runtime (``vllm/model_executor/layers/quantization/exl3.py``)
 reads ``exl3-manifest.json`` + ``exl3-layer-<NNNNN>.safetensors`` from the
 served model directory, and loads everything *else* (attention / dense-MLP /
-embeddings / head / router) from the ordinary HF checkpoint. So the pack alone
-is not servable: the routed-expert weights must be *removed* from the dense
-checkpoint and the exl3 container dropped in next to a config that declares the
-``exl3`` quant method.
+embeddings / head / router) from the ordinary HF checkpoint. Its dense path
+(``Exl3Config`` extends ``ModelOptMxFp8Config``) only accepts MXFP8-serialized
+weights — a ModelOpt-FP8 block checkpoint (``weight_scale_inv``) cannot pass
+through it. So the assembly:
 
-This script builds that directory. Run INSIDE the b12x runtime image (torch +
-safetensors). Model-agnostic: geometry/ignored-layer names are derived from the
-source, so any MoE that onboards to the pack builder works.
+  1. strips the routed-expert tensors (they live in the exl3 container),
+  2. dequantizes dense FP8-block weights to BF16 (exact: every e4m3 value is
+     representable in bf16; one rounding on the scale product),
+  3. copies the exl3 container next to the dense checkpoint,
+  4. writes a config whose ``quantization_config`` declares the exl3 method with
+     every non-routed linear module in ``ignored_layers`` (they load as plain
+     BF16 through UnquantizedLinearMethod).
+
+Run INSIDE the b12x runtime image (torch + safetensors). Model-agnostic: the
+expert predicate and the ignored-layer set are derived from the source.
 
 Inputs:
   --source  HF model dir (the same one ``convert_model`` consumed)
@@ -20,13 +27,11 @@ Inputs:
 
 Output layout (a normal-looking HF checkpoint the FES staging path can verify):
   config.json                     source config + exl3 quantization_config
-  model-<NNNNN>-of-<NNNNN>.safetensors   source shards MINUS routed experts
+  model-<NNNNN>-of-<NNNNN>.safetensors   source shards MINUS routed experts,
+                                          dense FP8-block weights dequantized
   model.safetensors.index.json    weight map for the kept tensors only
   exl3-manifest.json + exl3-layer-<NNNNN>.safetensors   copied from --pack
   tokenizer / chat template / trust_remote_code .py    copied from --source
-
-The routed-expert predicate is ``.mlp.experts.`` in the tensor name; shared
-experts and the router (``.mlp.gate.``) are kept.
 """
 
 from __future__ import annotations
@@ -37,16 +42,15 @@ import shutil
 import sys
 from pathlib import Path
 
+import torch
 from safetensors import safe_open
 from safetensors.torch import save_file
 
 EXL3_MANIFEST_FILENAME = "exl3-manifest.json"
 LAYER_PREFIX = "exl3-layer-"
 EXPERT_MARKER = ".mlp.experts."
-
-
-def _text_config(cfg: dict) -> dict:
-    return cfg.get("text_config", cfg)
+WEIGHT_SUFFIX = ".weight"
+SCALE_INV_SUFFIX = ".weight_scale_inv"
 
 
 def _load_json(path: Path) -> dict:
@@ -64,13 +68,34 @@ def _weight_map(source: Path) -> dict[str, str]:
 
 
 def _ignored_layers(kept_keys: list[str]) -> list[str]:
-    """Module basenames the exl3 method must leave in the source format."""
+    """Module basenames the exl3 method must leave unquantized (bf16 dense)."""
     names: set[str] = {"gate", "lm_head"}
     for k in kept_keys:
         for part in k.split("."):
             if part.endswith("_proj"):
                 names.add(part)
     return sorted(names)
+
+
+def _dequant_fp8_block(weight: torch.Tensor, scale_inv: torch.Tensor,
+                       block: tuple[int, int]) -> torch.Tensor:
+    """Dequant a DeepSeek-style FP8-block weight (weight_scale_inv) to BF16.
+
+    The scale grid covers the block-padded weight (ceil shape/dim per block);
+    expand with repeat_interleave over the padded grid, then slice to the real
+    weight shape.
+    """
+    m, n = weight.shape
+    so, si = scale_inv.shape
+    bs_out, bs_in = block
+    if so * bs_out < m or si * bs_in < n:
+        raise SystemExit(
+            f"fp8 block dequant: scale grid {(so, si)} x block {block} does not "
+            f"cover weight {(m, n)}"
+        )
+    scale = scale_inv.to(torch.float32)
+    scale = scale.repeat_interleave(bs_out, dim=0).repeat_interleave(bs_in, dim=1)
+    return (weight.to(torch.float32) * scale[:m, :n]).to(torch.bfloat16).contiguous()
 
 
 def _copy_aux(source: Path, out: Path) -> list[str]:
@@ -97,16 +122,19 @@ def _copy_aux(source: Path, out: Path) -> list[str]:
 
 
 def _write_shards(source: Path, out: Path, weight_map: dict[str, str],
-                  kept_keys: list[str], max_bytes: int) -> tuple[dict[str, str], int]:
-    """Copy kept tensors into fresh shards; return (new_weight_map, total_bytes)."""
-    by_source: dict[str, list[str]] = {}
-    for key in kept_keys:
-        by_source.setdefault(weight_map[key], []).append(key)
+                  kept_keys: list[str], fp8_bases: set[str],
+                  fp8_block: tuple[int, int],
+                  max_bytes: int) -> tuple[dict[str, str], int]:
+    """Write kept tensors (fp8 pairs dequantized) to fresh shards."""
+    out_keys = [k for k in kept_keys if not k.endswith(SCALE_INV_SUFFIX)]
+
+    def load(key: str) -> torch.Tensor:
+        with safe_open(str(source / weight_map[key]), framework="pt") as handle:
+            return handle.get_tensor(key)
 
     new_map: dict[str, str] = {}
-    total = 0
     shard_idx = 0
-    pending: dict[str, object] = {}
+    pending: dict[str, torch.Tensor] = {}
     pending_bytes = 0
 
     def flush() -> None:
@@ -121,10 +149,24 @@ def _write_shards(source: Path, out: Path, weight_map: dict[str, str],
         pending = {}
         pending_bytes = 0
 
+    by_source: dict[str, list[str]] = {}
+    for key in out_keys:
+        by_source.setdefault(weight_map[key], []).append(key)
+
+    dequanted = 0
     for src_shard in sorted(by_source):
         with safe_open(str(source / src_shard), framework="pt") as handle:
             for key in sorted(by_source[src_shard]):
-                tensor = handle.get_tensor(key).contiguous()
+                if key.endswith(WEIGHT_SUFFIX) and key[:-len(WEIGHT_SUFFIX)] in fp8_bases:
+                    scale_key = key[:-len(WEIGHT_SUFFIX)] + SCALE_INV_SUFFIX
+                    tensor = _dequant_fp8_block(
+                        handle.get_tensor(key),
+                        load(scale_key),
+                        fp8_block,
+                    )
+                    dequanted += 1
+                else:
+                    tensor = handle.get_tensor(key).contiguous()
                 size = tensor.numel() * tensor.element_size()
                 if pending and pending_bytes + size > max_bytes:
                     flush()
@@ -141,49 +183,29 @@ def _write_shards(source: Path, out: Path, weight_map: dict[str, str],
         for key, val in list(new_map.items()):
             if val == old.name:
                 new_map[key] = new.name
-    total = sum(
-        (out / name).stat().st_size for name in set(new_map.values())
-    )
+    total = sum((out / name).stat().st_size for name in set(new_map.values()))
+    print(f"  dense: {len(out_keys)} tensor(s), {dequanted} fp8-block pair(s) "
+          f"dequanted to bf16, {total / 1e9:.1f} GB across {total_files} shard(s)")
     return new_map, total
 
 
 def _patch_config(source: Path, pack: Path, out: Path, kept_keys: list[str],
-                  dense_format: str) -> dict:
+                  dense_format: str) -> None:
     cfg = _load_json(source / "config.json")
-    tc = _text_config(cfg)
     src_qc = cfg.get("quantization_config", {}) or {}
     manifest = _load_json(pack / EXL3_MANIFEST_FILENAME)
-    geometry = manifest.get("geometry", {})
     rates = manifest.get("rates", {})
-
-    # Exl3Config extends ModelOptMxFp8Config: the non-routed dense projections are
-    # loaded through the fork's MXFP8/FP8 dense path, and `ignored_layers` names
-    # the modules that stay in the source's *unquantized* (bf16) format. The
-    # source checkpoint's own quantization_config is authoritative for that
-    # split (e.g. MiMo ignores o_proj); fall back to a derived suffix set only
-    # when the source declares none. Suffix names (not full paths) match the
-    # fork's is_layer_skipped(..., match_mode="suffix").
-    src_ignored = src_qc.get("ignored_layers") or []
-    if src_ignored:
-        ignored = sorted({str(n).split(".")[-1] for n in src_ignored})
-    else:
-        ignored = _ignored_layers(kept_keys)
 
     cfg["quantization_config"] = {
         "quant_method": "exl3",
-        "version": src_qc.get("version"),
         "codebook": manifest.get("codebook"),
         "bits": rates.get("bits"),
         "exl3": {"manifest": EXL3_MANIFEST_FILENAME},
         "dense_format": dense_format,
-        "ignored_layers": ignored,
+        "ignored_layers": _ignored_layers(kept_keys),
         "original_quantization_config": src_qc,
     }
     (out / "config.json").write_text(json.dumps(cfg, indent=2) + "\n")
-    return {"geometry": geometry, "dense_format": dense_format,
-            "num_experts": geometry.get("num_experts"),
-            "hidden_size": geometry.get("hidden_size"),
-            "source_hidden": tc.get("hidden_size")}
 
 
 def _copy_pack(pack: Path, out: Path) -> int:
@@ -209,7 +231,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--pack", required=True, type=Path, help="exl3-v1 container dir")
     ap.add_argument("--out", required=True, type=Path, help="serving dir to write")
     ap.add_argument("--dense-format", default=None,
-                    help="override config dense_format (default: fp8 for an fp8 source)")
+                    help="config dense_format label (default: bf16 — dense is "
+                         "dequanted; override only with a matching layout)")
     ap.add_argument("--max-shard-bytes", type=int, default=5_000_000_000,
                     help="approx max bytes per output shard (default 5 GB)")
     ap.add_argument("--force", action="store_true",
@@ -228,37 +251,45 @@ def main(argv: list[str] | None = None) -> int:
             )
     args.out.mkdir(parents=True, exist_ok=True)
 
-    src_qc = _load_json(args.source / "config.json").get("quantization_config", {}) or {}
-    dense_format = args.dense_format or (
-        "fp8" if str(src_qc.get("quant_method", "")).lower() == "fp8" else "mxfp8"
-    )
-
     wm = _weight_map(args.source)
     kept = [k for k in wm if EXPERT_MARKER not in k]
     dropped = len(wm) - len(kept)
+    fp8_bases = (
+        {k[:-len(WEIGHT_SUFFIX)] for k in kept if k.endswith(WEIGHT_SUFFIX)}
+        & {k[:-len(SCALE_INV_SUFFIX)] for k in kept if k.endswith(SCALE_INV_SUFFIX)}
+    )
+    src_qc = _load_json(args.source / "config.json").get("quantization_config", {}) or {}
+    block_raw = src_qc.get("weight_block_size") or [128, 128]
+    fp8_block = (int(block_raw[0]), int(block_raw[1]))
+    dense_format = args.dense_format or ("bf16" if fp8_bases else "fp8")
+
     print(f"assemble: source={args.source} pack={args.pack} out={args.out}")
     print(f"  tensors: keep={len(kept)} drop_routed_experts={dropped} "
+          f"fp8_block_pairs={len(fp8_bases)} block={list(fp8_block)} "
           f"dense_format={dense_format}")
 
-    new_map, total = _write_shards(args.source, args.out, wm, kept, args.max_shard_bytes)
+    new_map, total = _write_shards(args.source, args.out, wm, kept, fp8_bases,
+                                   fp8_block, args.max_shard_bytes)
     (args.out / "model.safetensors.index.json").write_text(
         json.dumps({"metadata": {"total_size": total}, "weight_map": new_map}, indent=2) + "\n"
     )
-    shards = sorted(set(new_map.values()))
-    print(f"  wrote {len(shards)} shard(s), {total / 1e9:.1f} GB of dense weights")
 
     layers = _copy_pack(args.pack, args.out)
     print(f"  copied {EXL3_MANIFEST_FILENAME} + {layers} exl3 layer file(s)")
 
-    info = _patch_config(args.source, args.pack, args.out, kept, dense_format)
+    _patch_config(args.source, args.pack, args.out, kept, dense_format)
     copied = _copy_aux(args.source, args.out)
     print(f"  copied {len(copied)} auxiliary file(s)/dir(s): {', '.join(copied[:8])}"
           f"{' ...' if len(copied) > 8 else ''}")
 
-    if info["num_experts"] and info["hidden_size"] != info["source_hidden"]:
+    cfg = _load_json(args.out / "config.json")
+    tc = cfg.get("text_config", cfg)
+    manifest = _load_json(args.out / EXL3_MANIFEST_FILENAME)
+    geometry = manifest.get("geometry", {})
+    if geometry.get("hidden_size") and geometry["hidden_size"] != tc.get("hidden_size"):
         raise SystemExit(
-            f"manifest hidden_size {info['hidden_size']} != source hidden "
-            f"{info['source_hidden']}; wrong pack for this source?"
+            f"manifest hidden_size {geometry['hidden_size']} != source hidden "
+            f"{tc.get('hidden_size')}; wrong pack for this source?"
         )
     print("assemble: OK")
     return 0

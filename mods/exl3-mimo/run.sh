@@ -15,7 +15,10 @@ set -euo pipefail
 #        kv_b_proj} and disjoint from {q_proj, k_proj, v_proj}
 #    MiMo keeps attention / dense-MLP in its source format; only routed experts
 #    are EXL3. Keep the exl3-manifest requirement + fail-closed list check,
-#    accept an fp8 (as well as mxfp8) dense format.
+#    accept bf16/fp8 (as well as mxfp8) dense formats. "bf16" is what the
+#    pack-build "assemble" stage emits: it dequants the source's FP8-block dense
+#    weights (the fork's ModelOptMxFp8Config dense path rejects them) to BF16
+#    and lists every non-routed linear module in ignored_layers.
 #
 # 2. Exl3MoEMethod required SiTU experts with beta 4/25. MiMo-V2.6 uses SiLU.
 #    The B12X trellis MoE kernels accept nonlinearity="silu"; the SiTU check is
@@ -104,11 +107,11 @@ patch(
             "        if (\n"
             "            not isinstance(exl3, dict)\n"
             "            or exl3.get(\"manifest\") != EXL3_MANIFEST_FILENAME\n"
-            "            or config.get(\"dense_format\") not in (\"mxfp8\", \"fp8\")\n"
+            "            or config.get(\"dense_format\") not in (\"mxfp8\", \"fp8\", \"bf16\")\n"
             "        ):\n"
             "            raise ValueError(\n"
             "                f\"EXL3 requires an {EXL3_MANIFEST_FILENAME} expert container \"\n"
-            "                \"and MXFP8/FP8 dense weights\"\n"
+            "                \"and MXFP8/FP8/BF16 dense weights\"\n"
             "            )\n"
             "        # spark-vllm-docker/mods/exl3-mimo: accept a model-shaped\n"
             "        # non-routed arrangement. MiMo keeps attention / dense-MLP in\n"
