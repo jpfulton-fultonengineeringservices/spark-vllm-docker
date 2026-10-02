@@ -53,6 +53,7 @@ mods:
   - mods/fes-weights
   - mods/mimo-v2.6-flash
   - mods/exl3-mimo
+  - mods/mimo-diffkv-fp8-kv
   - mods/kv-cache-guard-override
 
 defaults:
