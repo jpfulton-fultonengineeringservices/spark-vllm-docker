@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# pack-build — EXL3 pack builder entrypoint.
+#
+# Subcommands:
+#   pipeline  <src> <work> <exl3-out> <v1-out> <bits> <codebook> [args...]
+#   convert   <src> <out> <work> <bits> <codebook> [args...]
+#   repack    <pack> <v1-out> <bits> [args...]
+#   detect    <src>
+#   status    [--json] [--watch [INTERVAL]] [status-file]
+#   help
+#
+# Environment:
+#   PACK_STATUS_FILE        status JSON path (default: /work/.pack-status.json)
+#   PACK_MONITOR_INTERVAL   seconds between resource samples (default: 10)
+
+set -euo pipefail
+
+TL="$(python3 -c "import torch,os;print(os.path.dirname(torch.__file__)+\"/lib\")" 2>/dev/null || echo "")"
+if [ -n "$TL" ]; then
+  export LD_LIBRARY_PATH="${TL}:${LD_LIBRARY_PATH:-}"
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PACK_MONITOR_INTERVAL="${PACK_MONITOR_INTERVAL:-10}"
+
+usage() {
+  sed -n '/^#!/d; /^#/{s/^# \?//;p}' "$0"
+}
+
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  pipeline)
+    if [ $# -lt 6 ]; then
+      echo "usage: pack-build pipeline <src> <work> <exl3-out> <v1-out> <bits> <codebook> [args...]" >&2
+      exit 2
+    fi
+    exec bash -c 'source "${0}/pack-pipeline.sh"; pipeline_run "$@"' "${SCRIPT_DIR}" "$@"
+    ;;
+
+  convert)
+    if [ $# -lt 5 ]; then
+      echo "usage: pack-build convert <src> <out> <work> <bits> <codebook> [args...]" >&2
+      exit 2
+    fi
+    exec bash -c 'source "${0}/pack-pipeline.sh"; pipeline_convert_direct "$@"' "${SCRIPT_DIR}" "$@"
+    ;;
+
+  repack)
+    if [ $# -lt 3 ]; then
+      echo "usage: pack-build repack <pack> <v1-out> <bits> [args...]" >&2
+      exit 2
+    fi
+    exec bash -c 'source "${0}/pack-pipeline.sh"; pipeline_repack_direct "$@"' "${SCRIPT_DIR}" "$@"
+    ;;
+
+  detect)
+    if [ $# -lt 1 ]; then
+      echo "usage: pack-build detect <src>" >&2
+      exit 2
+    fi
+    exec python3 "${SCRIPT_DIR}/pack-model-info.py" "$@"
+    ;;
+
+  status)
+    exec python3 "${SCRIPT_DIR}/pack-status.py" "$@"
+    ;;
+
+  help|--help|-h)
+    usage
+    ;;
+
+  *)
+    echo "pack-build: unknown subcommand '${cmd}'" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
