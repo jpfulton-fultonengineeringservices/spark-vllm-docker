@@ -85,7 +85,7 @@ def _copy_aux(source: Path, out: Path) -> list[str]:
             continue
         if entry.is_file() and name.endswith(skip_suffix):
             continue
-        if entry.is_dir() and name in ("__pycache__", ".cache", "dflash"):
+        if entry.is_dir() and name in ("__pycache__", ".cache"):
             continue
         dest = out / name
         if entry.is_dir():
