@@ -76,7 +76,12 @@ RUN set -eux; \
     echo "${EXLLAMAV3_WHEEL_SHA256}  /tmp/${EXLLAMAV3_WHEEL}" | sha256sum -c -; \
     python3 -m pip install --no-deps --break-system-packages /tmp/${EXLLAMAV3_WHEEL} \
       || python3 -m pip install --no-deps /tmp/${EXLLAMAV3_WHEEL}; \
-    rm -f /tmp/${EXLLAMAV3_WHEEL}
+    rm -f /tmp/${EXLLAMAV3_WHEEL}; \
+    # Runtime deps the base image lacks (the wheel is installed --no-deps).
+    # `marisa_trie` is required by exllamav3.loader when it assembles the
+    # output; without it convert_model dies AFTER quantization (hours lost).
+    python3 -m pip install --break-system-packages marisa_trie \
+      || python3 -m pip install marisa_trie
 
 # --- pack-build tooling
 COPY mods/exl3-mimo/pack-build/ /opt/exl3-pack/

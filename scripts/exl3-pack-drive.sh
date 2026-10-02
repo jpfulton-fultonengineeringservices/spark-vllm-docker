@@ -63,7 +63,8 @@ ssh_target() {
 }
 
 usage() {
-  sed -n '/^#!/d; /^#/{s/^# \?//;p}' "$0"
+  # Portable header printer (BSD/GNU awk; macOS sed rejects the sed form).
+  awk 'NR==1{next} /^#/{ sub(/^# ?/,""); print; next } { exit }' "$0"
 }
 
 err() {
@@ -92,13 +93,18 @@ derive_status_file() {
 
 do_sync() {
   echo "syncing build context to $(ssh_target):${CONTEXT_DIR}/ ..."
-  rsync -a --delete \
-    --exclude '*.pyc' \
-    --exclude '__pycache__' \
-    --exclude '.DS_Store' \
+  # Explicit source -> destination rsyncs so the layout the Dockerfile COPYs
+  # (./Dockerfile.exl3-pack, mods/exl3-mimo/...) is preserved. Also clears any
+  # stale root entries from older syncs.
+  ssh "$(ssh_target)" "mkdir -p '${CONTEXT_DIR}/mods' && rm -rf '${CONTEXT_DIR}/Users' '${CONTEXT_DIR}/exl3-mimo'"
+  rsync -a \
+    --exclude '*.pyc' --exclude '__pycache__' --exclude '.DS_Store' \
     "${REPO_ROOT}/Dockerfile.exl3-pack" \
-    "${REPO_ROOT}/mods/exl3-mimo" \
-    "$(ssh_target):${CONTEXT_DIR}/"
+    "$(ssh_target):${CONTEXT_DIR}/Dockerfile.exl3-pack"
+  rsync -a --delete \
+    --exclude '*.pyc' --exclude '__pycache__' --exclude '.DS_Store' \
+    "${REPO_ROOT}/mods/exl3-mimo/" \
+    "$(ssh_target):${CONTEXT_DIR}/mods/exl3-mimo/"
   echo "sync complete."
 }
 
@@ -317,6 +323,11 @@ while [ $# -gt 0 ]; do
     *) POSITIONAL+=("$1"); shift ;;
   esac
 done
+
+# help does not need a host
+case "$subcommand" in
+  help|-h|--help) usage; exit 0 ;;
+esac
 
 require_host
 
