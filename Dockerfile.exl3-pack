@@ -1,33 +1,62 @@
-# Dockerfile.exl3-pack — EXL3 pack builder (convert + repack) for GB10 / b12x
+# Dockerfile.exl3-pack — EXL3 pack builder (convert + repack + pipeline) for GB10 / b12x
 #
-# General-purpose image for building EXL3 MoE packs on this workspace:
-#   1. convert : run exllamav3's quantizer (HF model -> exllamav3 EXL3 pack)
-#   2. repack  : reshape an exllamav3 pack -> b12x `exl3-v1` container the
-#                vllm-node-b12x runtime reads (mods/exl3-mimo)
+# General-purpose image for building EXL3 MoE packs on this workspace.
+# Model geometry is auto-detected from source config.json — no per-model
+# config needed for standard MoE architectures (MiMo-V2, DeepSeek-V4,
+# Kimi-K3, Qwen-MoE, etc.).
+#
+# Subcommands (see pack-build help):
+#   pipeline   src work exl3-out v1-out bits codebook [convert-args...]
+#              Full convert -> repack pipeline with progress tracking.
+#   convert    src out work bits codebook [convert-args...]
+#              exllamav3 convert_model with progress tracking.
+#   repack     pack v1-out bits [repack-args...]
+#              b12x exl3-v1 repack with progress tracking.
+#   detect     src
+#              Auto-detect model geometry from source config.json.
+#   status     [--json] [--watch [INTERVAL]] [status-file]
+#              Read or watch the progress status file.
+#
+# Observability:
+#   Progress written atomically to /work/.pack-status.json (JSON).
+#   pack-build status --watch shows live layer progress and ETA.
+#   pack-build status --watch from a second terminal on the host:
+#     docker exec <container> pack-build status --watch
 #
 # Build from the repository root:
 #   docker build -f Dockerfile.exl3-pack -t exl3-pack:cu13.0 .
 #
-# Run (mount the source model read-only + a work dir):
-#   docker run --rm --gpus all \
+# Run (mount the source model read-only + work/output dirs):
+#   docker run --rm --gpus all --name pack-mimo \
 #     -v /nas-1/models:/models:ro \
 #     -v /nas-1/fes-projects/exl3-mimo-build:/work \
 #     exl3-pack:cu13.0 \
-#     convert -i /models/mimo/mimo-v2.6-flash-rl \
-#             -o /work/mimo-mcg-k3 -w /work/work-k3 -b 3 -cb mcg
+#     pipeline /models/mimo/mimo-v2.6-flash-rl /work/work-k3 \
+#              /work/mimo-mcg-k3 /work/mimo-exl3-v1 3 mcg
 #
+#   # Monitor progress from a second terminal:
+#   docker exec pack-mimo pack-build status --watch
+#
+#   # Single stage:
 #   docker run --rm --gpus all \
 #     -v /nas-1/fes-projects/exl3-mimo-build:/work \
 #     exl3-pack:cu13.0 \
-#     repack --pack /work/mimo-mcg-k3 --out /work/mimo-exl3-v1 --bits 3 --self-check
+#     repack /work/mimo-mcg-k3 /work/mimo-exl3-v1 3 --self-check
 #
-# Base image: the runtime image already carries torch 2.13.0+cu130, b12x 1.3.0
-# (with the exl3-v1 reader/writer), and the CUDA toolchain. Override BASE_IMAGE
+#   # Inspect a new model:
+#   docker run --rm \
+#     -v /nas-1/models:/models:ro \
+#     exl3-pack:cu13.0 \
+#     detect /models/deepseek-v4.1
+#
+# Base image: the runtime image carries torch 2.13.0+cu130, b12x 1.3.0
+# (exl3-v1 reader/writer), and the CUDA toolchain. Override BASE_IMAGE
 # for a different torch/cu13 base.
 #
-# NOTE on codebook/rate: the b12x `exl3-v1` path executes `mcg` at K3-K6 and
+# Codebook/rate: the b12x `exl3-v1` path executes `mcg` at K3-K6 and
 # `lut_e4m3` at K2-K4 (MCG K2 is rejected at runtime). exllamav3 can emit
-# `mul1`/`mcg`/`3inst` — use `-cb mcg` for b12x. See mods/exl3-mimo/EXL3_MIMO_PACK.md.
+# `mul1`/`mcg`/`3inst` — use `-cb mcg` for b12x.
+# See mods/exl3-mimo/EXL3_MIMO_PACK.md.
 
 ARG BASE_IMAGE=vllm-node-b12x:latest
 FROM ${BASE_IMAGE}
@@ -47,32 +76,27 @@ RUN set -eux; \
       || python3 -m pip install --no-deps /tmp/${EXLLAMAV3_WHEEL}; \
     rm -f /tmp/${EXLLAMAV3_WHEEL}
 
-# --- repack tool + docs
-COPY mods/exl3-mimo/pack-build/repack_exl3_to_b12x.py /opt/exl3-pack/repack_exl3_to_b12x.py
+# --- pack-build tooling
+COPY mods/exl3-mimo/pack-build/ /opt/exl3-pack/
 COPY mods/exl3-mimo/EXL3_MIMO_PACK.md /opt/exl3-pack/EXL3_MIMO_PACK.md
+RUN chmod +x /opt/exl3-pack/pack-build \
+  && chmod +x /opt/exl3-pack/pack-monitor.sh \
+  && chmod +x /opt/exl3-pack/pack-pipeline.sh
 
-# --- dispatcher: `exl3-pack convert ...` / `exl3-pack repack ...`
-RUN set -eux; \
-    printf '%s\n' \
-      '#!/usr/bin/env bash' \
-      'set -euo pipefail' \
-      'TL="$(python3 -c "import torch,os;print(os.path.dirname(torch.__file__)+\"/lib\")")"' \
-      'export LD_LIBRARY_PATH="${TL}:${LD_LIBRARY_PATH:-}"' \
-      'case "${1:-help}" in' \
-      '  convert) shift; exec python3 -m exllamav3.conversion.convert_model "$@" ;;' \
-      '  repack)  shift; exec python3 /opt/exl3-pack/repack_exl3_to_b12x.py "$@" ;;' \
-      '  help|*)  echo "exl3-pack {convert|repack} [args...]"' \
-      '           echo "  convert: exllamav3 convert_model  (e.g. -i /models/<m> -o /work/<pack> -w /work/<work> -b 3 -cb mcg)"' \
-      '           echo "  repack : exllamav3 pack -> b12x exl3-v1 (e.g. --pack /work/<pack> --out /work/<v1> --bits 3 --self-check)"' \
-      '           echo "docs: /opt/exl3-pack/EXL3_MIMO_PACK.md" ;;' \
-      'esac' \
-      > /usr/local/bin/exl3-pack; \
-    chmod +x /usr/local/bin/exl3-pack
+# --- entrypoint
+RUN printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'exec /opt/exl3-pack/pack-build "$@"' \
+  > /usr/local/bin/exl3-pack; \
+  chmod +x /usr/local/bin/exl3-pack
 
 WORKDIR /work
+ENV PACK_STATUS_FILE=/work/.pack-status.json \
+    PACK_MONITOR_INTERVAL=10
+
 ENTRYPOINT ["/usr/local/bin/exl3-pack"]
 CMD ["help"]
 
-LABEL org.opencontainers.image.title="EXL3 pack builder (convert + repack)" \
-      org.opencontainers.image.description="exllamav3 EXL3 quantizer + b12x exl3-v1 repack for DGX Spark / GB10" \
+LABEL org.opencontainers.image.title="EXL3 pack builder (convert + repack + pipeline)" \
+      org.opencontainers.image.description="exllamav3 EXL3 quantizer + b12x exl3-v1 repack for DGX Spark / GB10. Model-agnostic geometry detection. Progress tracking with ETA." \
       org.opencontainers.image.source="https://github.com/Fulton-Engineering-Services/spark-vllm-docker"
