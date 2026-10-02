@@ -50,6 +50,7 @@ cluster_only: true
 # non-DeepSeek dense arrangement). mimo-v2.6-flash carries the model-support
 # patches; kv-cache-guard-override skips the single-request 1M KV guard.
 mods:
+  - mods/fes-weights
   - mods/mimo-v2.6-flash
   - mods/exl3-mimo
   - mods/kv-cache-guard-override
@@ -71,6 +72,10 @@ env:
   CUTE_DSL_ARCH: "sm_121a"
   VLLM_USE_V2_MODEL_RUNNER: "1"
   VLLM_SKIP_KV_CACHE_MEMORY_CHECK: "1"
+  # The mimo-v2.6-flash mod resolves its DFlash drafter from the served
+  # snapshot of MIMO_V26_MODEL_ID; point it at this (assembled) checkpoint so it
+  # finds dflash/ there rather than the source MiMo repo.
+  MIMO_V26_MODEL_ID: "XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3"
 
 command: |
   vllm serve XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3 \
