@@ -181,7 +181,12 @@ def main(argv: list[str] | None = None) -> int:
         intermediate_size=inter, moe_layer_indices=tuple(moe_layers), bits=args.bits,
         intermediate_hadamard=False, per_expert_input_rotations=True,
         unit_hidden_rotations=False, row_alignment=args.row_alignment,
-        extent_alignment_slots=args.extent_alignment_slots, extent_barriers=(), seed=0,
+        extent_alignment_slots=args.extent_alignment_slots,
+        # The fork's plan_exl3_extent requires exactly one barrier at the
+        # half-way slot so TP ranks never own an extent crossing the
+        # intermediate halves; an empty barrier list makes the runtime raise
+        # "EXL3 extent planning requires one barrier between aligned halves".
+        extent_barriers=((inter // 32) // 2,), seed=0,
     )
     num_slots = inter // 32
     print(f"pack={args.pack} out={args.out} codebook=mcg K{args.bits} "
