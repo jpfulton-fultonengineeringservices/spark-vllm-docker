@@ -77,6 +77,17 @@ pipeline_convert() {
   _create_dir "$out"
   _create_dir "$work"
 
+  # Resume an interrupted job: exllamav3 saves per-module state under
+  # $work/qtensors and requires an explicit -r. Auto-enable it when quantized
+  # state exists and the output is still empty, so a crash mid-run (e.g. a
+  # missing runtime dep) does not discard hours of quantization.
+  local resume_flag=""
+  if [ -d "$work/qtensors" ] && [ -n "$(ls -A "$work/qtensors" 2>/dev/null)" ] \
+     && [ -z "$(ls -A "$out" 2>/dev/null)" ]; then
+    resume_flag="-r"
+    echo "[pipeline] resuming: found quantized state in ${work}/qtensors"
+  fi
+
   local total_layers
   total_layers=$(_guess_total_layers "$src")
   local model_name
@@ -97,7 +108,7 @@ pipeline_convert() {
   set +e
   python3 -m exllamav3.conversion.convert_model \
     -i "$src" -o "$out" -w "$work" \
-    -b "$bits" -cb "$codebook" "$@" 2>&1 | \
+    -b "$bits" -cb "$codebook" ${resume_flag} "$@" 2>&1 | \
   while IFS= read -r line; do
     echo "$line"
     local layer_num=""
