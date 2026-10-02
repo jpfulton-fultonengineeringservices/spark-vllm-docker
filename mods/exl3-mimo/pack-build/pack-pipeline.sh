@@ -161,6 +161,16 @@ pipeline_repack() {
   local pack="$1" v1_out="$2" bits="$3"
   shift 3
 
+  local total_layers=0
+  if [ -f "$pack/model.safetensors.index.json" ]; then
+    total_layers=$(python3 -c "
+import json
+wm = json.load(open('$pack/model.safetensors.index.json'))['weight_map']
+layers = {int(k.split('.')[2]) for k in wm if '.mlp.experts.' in k}
+print(len(layers))
+" 2>/dev/null || echo 0)
+  fi
+
   _create_dir "$v1_out"
 
   echo "[pipeline] repack: ${pack} -> ${v1_out} (K${bits})"
@@ -169,7 +179,8 @@ pipeline_repack() {
   started_at=$(_timestamp)
 
   _monitor_write_status "$started_at" \
-    "stage=repack" "phase=starting" "codebook=mcg" "bits=${bits}"
+    "stage=repack" "phase=starting" "codebook=mcg" "bits=${bits}" \
+    "layers_total=${total_layers}"
 
   local exit_code=0
   set +e
@@ -182,6 +193,7 @@ pipeline_repack() {
     if [ -n "$ln" ]; then
       _monitor_write_status "$started_at" \
         "stage=repack" "phase=assembling" "codebook=mcg" "bits=${bits}" \
+        "layers_total=${total_layers}" \
         "current_layer=${ln}" "layers_completed=${ln}"
     fi
   done
@@ -196,7 +208,8 @@ pipeline_repack() {
     return "$exit_code"
   fi
 
-  _monitor_write_status "$started_at" "stage=repack" "phase=done" "codebook=mcg" "bits=${bits}"
+  _monitor_write_status "$started_at" "stage=repack" "phase=done" "codebook=mcg" "bits=${bits}" \
+    "layers_total=${total_layers}"
   echo "[pipeline] repack complete: ${v1_out}"
   return 0
 }

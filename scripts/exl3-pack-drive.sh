@@ -142,35 +142,52 @@ poll() {
   local tmp
   tmp="$(mktemp "${TMPDIR:-/tmp}/pack-status.XXXXXX")"
 
+  tput civis 2>/dev/null || true
   cleanup_poll() {
+    tput cnorm 2>/dev/null || true
     rm -f "$tmp"
-    exit 0
   }
-  trap cleanup_poll INT TERM
+  trap cleanup_poll EXIT
+
+  local prev_done=-1
+  local first_poll=true
 
   while true; do
     if ssh "$(ssh_target)" "cat '${status_file}' 2>/dev/null" > "$tmp" 2>/dev/null \
         && [ -s "$tmp" ]; then
-      printf '\033[2J\033[H'
-      python3 "$PACK_STATUS_BIN" "$tmp"
+      local cur_done
+      cur_done=$(python3 -c "
+import json,sys
+d=json.load(open('$tmp'))
+print(d.get('layers_completed',0) or 0)
+" 2>/dev/null || echo 0)
+      local delta=0
+      if [ "$prev_done" -ge 0 ] 2>/dev/null && [ "$cur_done" -ge "$prev_done" ] 2>/dev/null; then
+        delta=$((cur_done - prev_done))
+      fi
+      prev_done=$cur_done
+
+      if [ "$first_poll" = true ]; then
+        printf '\033[2J\033[H'
+        first_poll=false
+      else
+        printf '\033[H'
+      fi
+      python3 "$PACK_STATUS_BIN" --delta "$delta" --interval "$POLL_INTERVAL" "$tmp"
     else
-      printf '\033[2J\033[H'
+      printf '\033[H'
       printf 'waiting for %s ...\n' "$status_file"
     fi
 
     local state
     state="$(container_state)"
     case "$state" in
-      exited*) break ;;
-      gone*)   break ;;
+      exited*) printf '\n'; break ;;
+      gone*)   printf '\n'; break ;;
     esac
 
     sleep "$POLL_INTERVAL"
   done
-
-  printf '\n'
-  trap - INT TERM
-  rm -f "$tmp"
 }
 
 # --- subcommands --------------------------------------------------------------
