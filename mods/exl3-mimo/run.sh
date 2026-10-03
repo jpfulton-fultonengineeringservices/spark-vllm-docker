@@ -39,6 +39,7 @@ set -euo pipefail
 PREFIX="[exl3-mimo]"
 PYTHON_ROOT="${VLLM_SITE_PACKAGES:-${PYTHON_ROOT:-/usr/local/lib/python3.12/dist-packages}}"
 EXL3="$PYTHON_ROOT/vllm/model_executor/layers/quantization/exl3.py"
+MIMO_V2="$PYTHON_ROOT/vllm/model_executor/models/mimo_v2.py"
 
 echo "=== EXL3-for-MiMo mod ==="
 
@@ -47,11 +48,17 @@ if [ ! -f "$EXL3" ]; then
   exit 1
 fi
 
-python3 - "$EXL3" <<'PY'
+if [ ! -f "$MIMO_V2" ]; then
+  echo "$PREFIX Missing $MIMO_V2; a vLLM runtime with the MiMo-V2 model is required." >&2
+  exit 1
+fi
+
+python3 - "$EXL3" "$MIMO_V2" <<'PY'
 from pathlib import Path
 import sys
 
 exl3_path = Path(sys.argv[1])
+mimo_path = Path(sys.argv[2])
 
 
 def patch(path: Path, edits: list[tuple[str, str]], label: str) -> None:
@@ -177,40 +184,100 @@ patch(
             "                rotation_dtype=torch.float16,\n"
             "            ),\n",
         ),
-        # 4) Exl3MoEMethod.apply: all-reduce the routed-expert output across TP
-        # ranks. The integrated b12x trellis (w4a16) MoE plan does not perform
-        # the TP output reduction itself, and the vLLM modular-MoE runner's own
-        # reduction is not reached for this path, so every rank returned only
-        # its rank-local intermediate-slice contribution and MiMo served
-        # garbage (flat logprobs ~ -3.9). MXFP4/DeepSeek/Kimi all reduce the
-        # routed output; this restores the same contract for EXL3.
-        (
-            "        assert self.moe_kernel is not None\n"
-            "        return self.moe_kernel.apply(\n"
-            "            hidden_states=x,\n",
-            "        assert self.moe_kernel is not None\n"
-            "        # spark-vllm-docker/mods/exl3-mimo: reduce the routed-expert\n"
-            "        # output across tensor-parallel ranks (see the module note).\n"
-            "        from vllm.distributed import (\n"
-            "            get_tensor_model_parallel_world_size as _exl3_tp_size,\n"
-            "            tensor_model_parallel_all_reduce as _exl3_tp_all_reduce,\n"
-            "        )\n"
-            "        _exl3_routed_out = self.moe_kernel.apply(\n"
-            "            hidden_states=x,\n",
-        ),
-        (
-            "            shared_experts_input=shared_experts_input,\n"
-            "            workspace=workspace,\n"
-            "        )\n",
-            "            shared_experts_input=shared_experts_input,\n"
-            "            workspace=workspace,\n"
-            "        )\n"
-            "        if _exl3_tp_size() > 1:\n"
-            "            _exl3_routed_out = _exl3_tp_all_reduce(_exl3_routed_out)\n"
-            "        return _exl3_routed_out\n",
-        ),
     ],
     "vllm/model_executor/layers/quantization/exl3.py",
+)
+
+# spark-vllm-docker/mods/exl3-mimo: the EXL3 serving checkpoint stores the
+# fused attention qkv_proj in BF16 (dequantized from the source FP8-block
+# dense weights) while preserving the source's interleaved [Q_i|K_i|V_i]
+# checkpoint layout. The fork's FP8 loader shards such a tensor through
+# `_shard_fp8_qkv_proj` (interleaved-aware), but a BF16 tensor falls through
+# to the generic fused-qkv loader, which assumes a SIMPLE [Q|K|V] layout and
+# selects the wrong rows at TP>1 -> corrupted attention -> garbage serving.
+# Restore the interleaved-aware sharding for the BF16 fused qkv_proj.
+patch(
+    mimo_path,
+    [
+        # 1) Intercept BF16 fused qkv_proj before the generic fused loader.
+        (
+            "            ):\n"
+            "                continue\n"
+            "            stacked_matched = False\n",
+            "            ):\n"
+            "                continue\n"
+            "            if self._try_load_bf16_qkv_proj(\n"
+            "                name,\n"
+            "                loaded_weight,\n"
+            "                params_dict,\n"
+            "                loaded_params,\n"
+            "                tp_rank,\n"
+            "                tp_size,\n"
+            "            ):\n"
+            "                continue\n"
+            "            stacked_matched = False\n",
+        ),
+        # 2) Add the de-interleave method before _try_load_fp8_qkv_proj.
+        (
+            "    def _try_load_fp8_qkv_proj(\n",
+            "    def _try_load_bf16_qkv_proj(\n"
+            "        self,\n"
+            "        name: str,\n"
+            "        tensor: torch.Tensor,\n"
+            "        params_dict: dict[str, torch.nn.Parameter],\n"
+            "        loaded_params: set[str],\n"
+            "        tp_rank: int,\n"
+            "        tp_size: int,\n"
+            "    ) -> bool:\n"
+            "        \"\"\"De-interleave a BF16 fused qkv_proj for TP sharding.\n"
+            "\n"
+            "        The EXL3 serving checkpoint stores qkv_proj in BF16 while\n"
+            "        preserving the source's interleaved [Q_i|K_i|V_i] layout;\n"
+            "        the generic fused loader assumes a simple [Q|K|V] and would\n"
+            "        select wrong rows at TP>1. Mirror _shard_fp8_qkv_proj's\n"
+            "        de-interleave without the FP8 dequant/requant steps.\n"
+            "        \"\"\"\n"
+            "        if not (\n"
+            "            name.endswith(\"qkv_proj.weight\")\n"
+            "            and tensor.dtype == torch.bfloat16\n"
+            "        ):\n"
+            "            return False\n"
+            "        if is_pp_missing_parameter(name, self):\n"
+            "            return True\n"
+            "        prefix = name.rsplit(\".\", 1)[0]\n"
+            "        attn = self.get_submodule(prefix.rsplit(\".\", 1)[0])\n"
+            "        ckpt_tp = self.config.num_key_value_heads\n"
+            "        gpr = ckpt_tp // tp_size\n"
+            "        if gpr == 1:\n"
+            "            w_rank = tensor.chunk(tp_size, dim=0)[tp_rank]\n"
+            "        else:\n"
+            "            qg = (attn.total_num_heads // ckpt_tp) * attn.head_dim\n"
+            "            kg = (attn.total_num_kv_heads // ckpt_tp) * attn.head_dim\n"
+            "            vg = (\n"
+            "                attn.total_num_kv_heads // ckpt_tp\n"
+            "            ) * attn.v_head_dim\n"
+            "            rpg = qg + kg + vg\n"
+            "            qs, ks, vs = [], [], []\n"
+            "            for g in range(tp_rank * gpr, (tp_rank + 1) * gpr):\n"
+            "                off = g * rpg\n"
+            "                qs.append(tensor[off : off + qg])\n"
+            "                ks.append(tensor[off + qg : off + qg + kg])\n"
+            "                vs.append(tensor[off + qg + kg : off + rpg])\n"
+            "            w_rank = torch.cat(\n"
+            "                [torch.cat(qs), torch.cat(ks), torch.cat(vs)],\n"
+            "                dim=0,\n"
+            "            ).contiguous()\n"
+            "        param = params_dict[name]\n"
+            "        if w_rank.shape[0] > param.shape[0]:\n"
+            "            w_rank = w_rank[: param.shape[0]]\n"
+            "        default_weight_loader(param, w_rank)\n"
+            "        loaded_params.add(name)\n"
+            "        return True\n"
+            "\n"
+            "    def _try_load_fp8_qkv_proj(\n",
+        ),
+    ],
+    "vllm/model_executor/models/mimo_v2.py",
 )
 PY
 
