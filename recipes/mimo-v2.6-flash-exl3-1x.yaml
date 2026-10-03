@@ -40,8 +40,11 @@ defaults:
   port: 8000
   host: 0.0.0.0
   tensor_parallel: 1
-  # (confirm) experts-only EXL3 ~83 GiB + fp8 KV + runtime on 121.6 GiB.
-  gpu_memory_utilization: 0.9
+  # Co-tenancy on the node: the bge-m3 embed service reserves gpu-memory
+  # utilization 0.10 (12.05 GiB) plus ~5 GiB driver/context baseline, so the
+  # EXL3 engine must fit inside ~103 GiB of the 120.5 GiB unified pool.
+  # 0.82 (98.8 GiB) leaves ~4 GiB margin over the observed free memory.
+  gpu_memory_utilization: 0.82
   max_model_len: 1048576
   block_size: 128
   max_num_seqs: 32
