@@ -99,4 +99,6 @@ command: |
       --enable-prefix-caching \
       --generation-config vllm \
       --reasoning-parser mimo \
+      --tool-call-parser mimo \
+      --enable-auto-tool-choice \
       --kv-cache-metrics
