@@ -73,4 +73,7 @@ command: |
       --enable-prefix-caching \
       --generation-config vllm \
       --reasoning-parser mimo \
-      --kv-cache-metrics
+      --tool-call-parser mimo \
+      --enable-auto-tool-choice \
+      --kv-cache-metrics \
+      --enable-mfu-metrics
