@@ -6,6 +6,7 @@ build-metadata.yaml
 .litho
 .kilo
 .opencode
+.omp
 
 # Python bytecode and tool caches
 **/__pycache__/
