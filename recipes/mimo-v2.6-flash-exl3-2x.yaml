@@ -101,4 +101,5 @@ command: |
       --reasoning-parser mimo \
       --tool-call-parser mimo \
       --enable-auto-tool-choice \
-      --kv-cache-metrics
+      --kv-cache-metrics \
+      --enable-mfu-metrics
