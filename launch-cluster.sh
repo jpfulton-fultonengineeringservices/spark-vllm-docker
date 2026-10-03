@@ -383,7 +383,12 @@ if [[ -z "$CONTAINER_NAME" || "$CONTAINER_NAME" == "vllm_node" ]] && [[ -n "$DOT
     CONTAINER_NAME="$DOTENV_CONTAINER_NAME"
 fi
 
-if [[ -n "$DOTENV_LOCAL_IP" ]]; then
+# The shared .env on the fork checkout is node-specific (it was written by
+# autodiscovery on whichever node first ran --setup), so its LOCAL_IP is only a
+# fallback: a caller-provided LOCAL_IP (e.g. the cluster-config serve wrapper
+# exporting the resolved head rank's IP) must win, otherwise launching on any
+# other node as head fails the "head IP not in -n" check.
+if [[ -z "${LOCAL_IP:-}" && -n "$DOTENV_LOCAL_IP" ]]; then
     export LOCAL_IP="$DOTENV_LOCAL_IP"
 fi
 
