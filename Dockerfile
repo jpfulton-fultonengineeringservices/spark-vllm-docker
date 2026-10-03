@@ -864,7 +864,14 @@ COPY docker/pin_cutlass_dsl.py /tmp/pin_cutlass_dsl.py
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     if [ -n "$B12X_REPO" ]; then \
         echo "Refreshing B12X source (cache key: $B12X_CACHEBUST)" && \
-        git clone --depth 1 --branch "$B12X_REF" "$B12X_REPO" /tmp/b12x-source && \
+        if ! git clone --depth 1 --branch "$B12X_REF" "$B12X_REPO" /tmp/b12x-source 2>/dev/null; then \
+            echo "B12X_REF '$B12X_REF' is not a branch/tag; fetching it as a commit" && \
+            rm -rf /tmp/b12x-source && \
+            git init -q /tmp/b12x-source && \
+            git -C /tmp/b12x-source remote add origin "$B12X_REPO" && \
+            git -C /tmp/b12x-source fetch --depth 1 origin "$B12X_REF" && \
+            git -C /tmp/b12x-source checkout -q FETCH_HEAD; \
+        fi && \
         B12X_COMMIT=$(git -C /tmp/b12x-source rev-parse HEAD) && \
         python3 /tmp/pin_cutlass_dsl.py "$CUTLASS_DSL_VERSION" \
             --expected-count 5 /tmp/b12x-source/pyproject.toml && \

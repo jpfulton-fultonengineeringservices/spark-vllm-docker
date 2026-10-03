@@ -668,6 +668,7 @@ usage() {
     echo "  --tf5                         : Deprecated compatibility flag; tag defaults to 'vllm-node-tf5' (aliases: --pre-tf, --pre-transformers)"
     echo "  --exp-mxfp4, --experimental-mxfp4 : Build with experimental native MXFP4 support"
     echo "  --exp-b12x, --experimental-b12x   : Select B12X; pulls its prebuilt image unless a local wheel/image build is requested"
+  echo "  --b12x-ref <ref>              : Pin the B12X source ref (branch/tag/commit) instead of '${B12X_PACKAGE_REF}'"
     echo "  --apply-vllm-pr <pr-or-url>   : Apply a vLLM PR number or full GitHub PR URL to source. Can be specified multiple times."
     echo "  --apply-preset-vllm-prs       : Apply preset vLLM PRs even with --vllm-repo, --vllm-ref, or --apply-vllm-pr."
     echo "  --apply-flashinfer-pr <pr-num>: Apply a specific PR patch to FlashInfer source. Can be specified multiple times."
@@ -791,6 +792,7 @@ while [[ "$#" -gt 0 ]]; do
         --tf5|--pre-tf|--pre-transformers) PRE_TRANSFORMERS=true ;;
         --exp-mxfp4|--experimental-mxfp4) EXP_MXFP4=true ;;
         --exp-b12x|--experimental-b12x) EXP_B12X=true ;;
+        --b12x-ref) B12X_PACKAGE_REF="$2"; shift ;;
         --apply-vllm-pr)
             VLLM_PR_REFERENCE=""
             if [ -n "${2:-}" ]; then
