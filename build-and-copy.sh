@@ -68,6 +68,23 @@ TORCHVISION_VERSION_SET=false
 TORCHAUDIO_VERSION="2.11.0"
 TORCHAUDIO_VERSION_SET=false
 CUTLASS_DSL_VERSION="4.7.0"
+# CUDA train: cu130 keeps the upstream PyTorch cu130 wheel index and the
+# nvidia/cuda devel base. cu133 switches both the base image and the torch/
+# triton wheel index to the dgx-spark-wheels GB10 train (build-env:24.04-cu13.3
+# + the +cu13.3 simple index). cu133 is the only train that can carry the
+# NIXL/UCX host-staging stack (nixl-runtime is published cu13.3-only).
+DEFAULT_CUDA_TRAIN="cu130"
+CUDA_TRAIN="$DEFAULT_CUDA_TRAIN"
+DEFAULT_CUDA_IMAGE="nvidia/cuda:13.0.2-devel-ubuntu24.04"
+CU133_CUDA_IMAGE="ghcr.io/fulton-engineering-services/dgx-spark-wheels/build-env:24.04-cu13.3"
+CUDA_IMAGE="$DEFAULT_CUDA_IMAGE"
+DEFAULT_TORCH_INDEX_URL="https://download.pytorch.org/whl/cu130"
+CU133_TORCH_INDEX_URL="https://Fulton-Engineering-Services.github.io/dgx-spark-wheels/simple/"
+TORCH_INDEX_URL="$DEFAULT_TORCH_INDEX_URL"
+# NIXL/UCX overlay (GB10 host-staging stack). Only meaningful on cu133: the
+# patched UCX and the nixl package are cu13.3-built and image-only.
+WITH_NIXL=false
+NIXL_RUNTIME_IMAGE="ghcr.io/fulton-engineering-services/dgx-spark-wheels/nixl-runtime:24.04-cu13.3-sm121"
 NETWORK_ARG=""
 WHEELS_REPO="eugr/spark-vllm-docker"
 FLASHINFER_RELEASE_TAG="prebuilt-flashinfer-current"
@@ -628,6 +645,9 @@ usage() {
     echo "  -t, --tag <tag>               : Local image tag (default: 'vllm-node'; preset tags: 'vllm-node-tf5', 'vllm-node-mxfp4', or 'vllm-node-b12x')"
     echo "  --use-wheels                  : Build only the runner from precompiled wheels; never implicitly build source."
     echo "  --gpu-arch <arch>             : GPU architecture for NCCL, wheel, and source builds (default: '${DEFAULT_GPU_ARCH_LIST}')"
+  echo "  --cuda-train <cu130|cu133>    : CUDA/torch wheel train (default: '${DEFAULT_CUDA_TRAIN}'); cu133 uses the dgx-spark-wheels GB10 base + index and tags the image -cu133"
+  echo "  --with-nixl                   : Layer the GB10 NIXL/UCX host-staging stack onto the runner (requires --cuda-train cu133)"
+  echo "  --nixl-runtime-image <image>  : Override the nixl-runtime image that supplies the patched UCX (default: ${NIXL_RUNTIME_IMAGE})"
     echo "  --rebuild-flashinfer          : Force rebuild of FlashInfer wheels (ignore cached wheels)"
     echo "  --rebuild-vllm                : Force rebuild of vLLM wheels (ignore cached wheels)"
     echo "  --force-flashinfer-download   : Force download of FlashInfer wheels (skip cached wheel checks)"
@@ -684,6 +704,18 @@ while [[ "$#" -gt 0 ]]; do
         -t|--tag) IMAGE_TAG="$2"; IMAGE_TAG_SET=true; shift ;;
         --use-wheels) USE_WHEELS=true ;;
         --gpu-arch) GPU_ARCH_LIST="$2"; GPU_ARCH_SET=true; shift ;;
+        --cuda-train)
+            case "${2:-}" in
+                cu130) CUDA_TRAIN="cu130"; CUDA_IMAGE="$DEFAULT_CUDA_IMAGE"; TORCH_INDEX_URL="$DEFAULT_TORCH_INDEX_URL" ;;
+                cu133) CUDA_TRAIN="cu133"; CUDA_IMAGE="$CU133_CUDA_IMAGE"; TORCH_INDEX_URL="$CU133_TORCH_INDEX_URL" ;;
+                *) echo "Error: --cuda-train must be cu130 or cu133 (got '${2:-}')."; exit 1 ;;
+            esac
+            shift ;;
+        --with-nixl) WITH_NIXL=true ;;
+        --nixl-runtime-image)
+            if [ -n "$2" ] && [[ "$2" != -* ]]; then NIXL_RUNTIME_IMAGE="$2"; shift; else
+                echo "Error: --nixl-runtime-image requires an image reference."; exit 1
+            fi ;;
         --rebuild-flashinfer) REBUILD_FLASHINFER=true ;;
         --rebuild-vllm) REBUILD_VLLM=true ;;
         --force-flashinfer-download) FORCE_FLASHINFER_DOWNLOAD=true ;;
@@ -868,6 +900,12 @@ if [ "$IMAGE_TAG_SET" = false ]; then
     fi
 fi
 
+# Suffix the tag with the CUDA train so cu13.0 and cu13.3 images never collide.
+# An explicit -t wins; the suffix only applies to the derived default tag.
+if [ "$IMAGE_TAG_SET" = false ] && [ "$CUDA_TRAIN" != "$DEFAULT_CUDA_TRAIN" ]; then
+    IMAGE_TAG="${IMAGE_TAG}-${CUDA_TRAIN}"
+fi
+
 if [ "$PRE_TRANSFORMERS" = true ]; then
     echo "Warning: --tf5/--pre-tf/--pre-transformers is deprecated; vLLM now uses Transformers v5 by default."
     echo "         No Transformers override will be applied; image tag remains $IMAGE_TAG."
@@ -987,8 +1025,8 @@ elif [ "$CUSTOM_VLLM_REPO" = true ] || [ "$VLLM_REF_SET" = true ] || \
     VLLM_PROFILE="custom"
 fi
 
-FLASHINFER_WHEELS_DIR="$WHEEL_CACHE_ROOT/flashinfer/$FLASHINFER_PROFILE"
-VLLM_WHEELS_DIR="$WHEEL_CACHE_ROOT/vllm/$VLLM_PROFILE"
+FLASHINFER_WHEELS_DIR="$WHEEL_CACHE_ROOT/flashinfer/${FLASHINFER_PROFILE}-${CUDA_TRAIN}"
+VLLM_WHEELS_DIR="$WHEEL_CACHE_ROOT/vllm/${VLLM_PROFILE}-${CUDA_TRAIN}"
 
 # FlashInfer wheels are architecture-specific for every build flavor. Trust a
 # cache only when its marker matches the selected target. An absent marker
@@ -1042,6 +1080,23 @@ if [ "$FORCE_VLLM_DOWNLOAD" = true ]; then CUSTOM_BUILD_REQUESTED=true; fi
 if [ -n "$VLLM_PRS" ]; then CUSTOM_BUILD_REQUESTED=true; fi
 if [ "$APPLY_PRESET_VLLM_PRS" = true ]; then CUSTOM_BUILD_REQUESTED=true; fi
 if [ -n "$FLASHINFER_PRS" ]; then CUSTOM_BUILD_REQUESTED=true; fi
+
+# --with-nixl layers the cu13.3 NIXL/UCX stack; it cannot ride the cu13.0 train.
+if [ "$WITH_NIXL" = true ] && [ "$CUDA_TRAIN" != "cu133" ]; then
+    echo "Error: --with-nixl requires --cuda-train cu133 (the NIXL/UCX stack is cu13.3-built)."
+    exit 1
+fi
+if [ "$WITH_NIXL" = true ]; then CUSTOM_BUILD_REQUESTED=true; fi
+
+# A non-default CUDA train must be built locally, from source: the shipped
+# prebuilt runner image and prebuilt flashinfer/vLLM wheels are cu13.0-only.
+if [ "$CUDA_TRAIN" != "$DEFAULT_CUDA_TRAIN" ]; then
+    CUSTOM_BUILD_REQUESTED=true
+    # Do not pull the cu13.0 prebuilt wheels for a different train. Build them
+    # once from source, then reuse the train-keyed cache on subsequent runs.
+    [ -s "$FLASHINFER_WHEELS_DIR/.flashinfer-arch" ] || REBUILD_FLASHINFER=true
+    [ -s "$VLLM_WHEELS_DIR/.vllm-arch" ] || REBUILD_VLLM=true
+fi
 
 # Only local wheel/image builds consume the wheel cache. A normal default invocation
 # still pulls the prebuilt runner even if the local wheel cache targets another
@@ -1120,6 +1175,8 @@ if [ "$EXP_MXFP4" = false ]; then
 fi
 NCCL_NVCC_GENCODE="$(gpu_arch_to_nccl_gencode "$GPU_ARCH_LIST")"
 COMMON_BUILD_FLAGS+=("--build-arg" "NCCL_NVCC_GENCODE=$NCCL_NVCC_GENCODE")
+COMMON_BUILD_FLAGS+=("--build-arg" "CUDA_IMAGE=$CUDA_IMAGE")
+COMMON_BUILD_FLAGS+=("--build-arg" "TORCH_INDEX_URL=$TORCH_INDEX_URL")
 if [ -n "$NETWORK_ARG" ]; then
     COMMON_BUILD_FLAGS+=("--network" "$NETWORK_ARG")
 fi
@@ -1399,6 +1456,19 @@ if [ "$NO_BUILD" = false ]; then
         "${RUNNER_CMD[@]}"
         RUNNER_END=$(date +%s)
         RUNNER_BUILD_TIME=$((RUNNER_END - RUNNER_START))
+
+        # Optional NIXL/UCX overlay: a second build over the just-built runner,
+        # then retag so downstream copy/push use the NIXL-enabled image.
+        if [ "$WITH_NIXL" = true ]; then
+            echo "Building NIXL overlay (Dockerfile.nixl) over ${IMAGE_TAG}"
+            docker build -f Dockerfile.nixl \
+                --build-arg "BASE_IMAGE=${IMAGE_TAG}" \
+                --build-arg "NIXL_RUNTIME_IMAGE=${NIXL_RUNTIME_IMAGE}" \
+                -t "${IMAGE_TAG}-nixl" . || { echo "NIXL overlay build failed"; exit 1; }
+            docker tag "${IMAGE_TAG}-nixl" "${IMAGE_TAG}"
+            docker rmi "${IMAGE_TAG}-nixl" >/dev/null 2>&1 || true
+            echo "Retagged NIXL overlay as ${IMAGE_TAG}"
+        fi
     fi
 else
     echo "Skipping build (--no-build specified)"

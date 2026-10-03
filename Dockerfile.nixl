@@ -1,0 +1,48 @@
+# syntax=docker/dockerfile:1.6
+#
+# NIXL/UCX overlay for the GB10 cu13.3 runner.
+#
+# On GB10, GPU-VA RDMA registration is a dead end (ibv_reg_mr EFAULT, no
+# dma-buf/peermem). NIXL works only via host-pinned DRAM_SEG staging, and that
+# requires a three-part fix set: two nixl commits + the UCX patch
+# ucx-allow-host-mem-dev-api.patch (relaxes ucp_device_local_mem_list_params_check
+# so the sys_dev guard errors only for non-HOST memory). The UCX half ships
+# ONLY as prebuilt libs inside the nixl-runtime image -- wheels alone re-open
+# NIXL_ERR_BACKEND at create_backend. So this overlay layers that runtime
+# image's /opt/ucx (+ /opt/mooncake) and NVIDIA's nvda_nixl tree onto the
+# runner, and aliases the python package.
+#
+# Build (from a built runner image):
+#   docker build -f Dockerfile.nixl \
+#     --build-arg BASE_IMAGE=vllm-node-b12x-cu133 \
+#     -t vllm-node-b12x-cu133 .
+#
+# ARG NIXL_RUNTIME_IMAGE carries the patched UCX; base is expected to be the
+# cu13.3 runner (the runtime tree is cu13.3-built).
+
+ARG NIXL_RUNTIME_IMAGE=ghcr.io/fulton-engineering-services/dgx-spark-wheels/nixl-runtime:24.04-cu13.3-sm121
+ARG BASE_IMAGE
+FROM ${NIXL_RUNTIME_IMAGE} AS nixl_runtime
+
+FROM ${BASE_IMAGE}
+
+# Patched UCX + Mooncake libs (image-only; not in any wheel).
+COPY --from=nixl_runtime /opt/ucx /opt/ucx
+COPY --from=nixl_runtime /opt/mooncake /opt/mooncake
+# NVIDIA nixl Python package (nixl_cu13) + plugin C++ libs.
+COPY --from=nixl_runtime /opt/nvidia/nvda_nixl /opt/nvidia/nvda_nixl
+
+# vLLM's nixl_utils imports the module as `nixl` on CUDA; the GB10 wheel ships
+# as `nixl_cu13` (parallel to the ROCm `nixl_rocm`). Alias so `import nixl`
+# resolves to the GB10 build.
+RUN ln -sf /opt/nvidia/nvda_nixl/lib/python3/dist-packages/nixl_cu13 \
+           /usr/local/lib/python3.12/dist-packages/nixl
+
+# Mirror the nixl-runtime env exactly. UCX_TLS underscore form is load-bearing:
+# "cuda-copy" silently fails to match and UCX falls back to rc, which cannot
+# ibv_reg_mr GPU memory.
+ENV PYTHONPATH=/opt/nvidia/nvda_nixl/lib/python3/dist-packages
+ENV LD_LIBRARY_PATH=/opt/nvidia/nvda_nixl/lib/aarch64-linux-gnu:/opt/nvidia/nvda_nixl/lib:/opt/ucx/lib:/opt/mooncake/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64
+ENV UCX_TLS=cuda_copy,rc,sm,self,tcp
+ENV NIXL_DISABLE_CUDA_ADDR_WA=1
+ENV NIXL_EP_USE_HOST_RDMA_BUFFER=1
