@@ -37,6 +37,7 @@ EXP_B12X_VLLM_REPO="https://github.com/local-inference-lab/vllm"
 EXP_B12X_VLLM_REF="dev/karmic-kraken"
 B12X_PACKAGE_REPO="https://github.com/lukealonso/b12x.git"
 B12X_PACKAGE_REF="master"
+B12X_VLLM_REF=""
 EXP_B12X_TORCH_VERSION="2.13.0"
 EXP_B12X_TORCHVISION_VERSION="0.28.0"
 EXP_B12X_TORCHAUDIO_VERSION="2.11.0"
@@ -669,6 +670,7 @@ usage() {
     echo "  --exp-mxfp4, --experimental-mxfp4 : Build with experimental native MXFP4 support"
     echo "  --exp-b12x, --experimental-b12x   : Select B12X; pulls its prebuilt image unless a local wheel/image build is requested"
   echo "  --b12x-ref <ref>              : Pin the B12X source ref (branch/tag/commit) instead of '${B12X_PACKAGE_REF}'"
+  echo "  --b12x-vllm-ref <ref>         : Pin the vLLM fork ref for a B12X build (branch/tag/commit) instead of '${EXP_B12X_VLLM_REF}'"
     echo "  --apply-vllm-pr <pr-or-url>   : Apply a vLLM PR number or full GitHub PR URL to source. Can be specified multiple times."
     echo "  --apply-preset-vllm-prs       : Apply preset vLLM PRs even with --vllm-repo, --vllm-ref, or --apply-vllm-pr."
     echo "  --apply-flashinfer-pr <pr-num>: Apply a specific PR patch to FlashInfer source. Can be specified multiple times."
@@ -793,6 +795,7 @@ while [[ "$#" -gt 0 ]]; do
         --exp-mxfp4|--experimental-mxfp4) EXP_MXFP4=true ;;
         --exp-b12x|--experimental-b12x) EXP_B12X=true ;;
         --b12x-ref) B12X_PACKAGE_REF="$2"; shift ;;
+        --b12x-vllm-ref) B12X_VLLM_REF="$2"; shift ;;
         --apply-vllm-pr)
             VLLM_PR_REFERENCE=""
             if [ -n "${2:-}" ]; then
@@ -865,6 +868,15 @@ if [ "$EXP_B12X" = true ]; then
     TORCHVISION_VERSION="$EXP_B12X_TORCHVISION_VERSION"
     TORCHAUDIO_VERSION="$EXP_B12X_TORCHAUDIO_VERSION"
     PREBUILT_RUNNER_IMAGE="$PREBUILT_B12X_RUNNER_IMAGE"
+fi
+
+# A pinned B12X vLLM ref reproduces the era of the fork that matches a given
+# B12X source/pack (the pack's prepared-expert layout is b12x-version-specific,
+# and the fork tip may call a newer b12x API). Applied after the --exp-b12x
+# defaults; requires --rebuild-vllm so the pinned source is actually compiled.
+if [ -n "$B12X_VLLM_REF" ]; then
+    VLLM_REF="$B12X_VLLM_REF"
+    echo "B12X vLLM ref pinned to $VLLM_REF (B12X source ref: $B12X_PACKAGE_REF)"
 fi
 
 if [ "$VLLM_SOURCE_DIR_SET" = true ]; then
