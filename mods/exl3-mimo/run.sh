@@ -177,6 +177,38 @@ patch(
             "                rotation_dtype=torch.float16,\n"
             "            ),\n",
         ),
+        # 4) Exl3MoEMethod.apply: all-reduce the routed-expert output across TP
+        # ranks. The integrated b12x trellis (w4a16) MoE plan does not perform
+        # the TP output reduction itself, and the vLLM modular-MoE runner's own
+        # reduction is not reached for this path, so every rank returned only
+        # its rank-local intermediate-slice contribution and MiMo served
+        # garbage (flat logprobs ~ -3.9). MXFP4/DeepSeek/Kimi all reduce the
+        # routed output; this restores the same contract for EXL3.
+        (
+            "        assert self.moe_kernel is not None\n"
+            "        return self.moe_kernel.apply(\n"
+            "            hidden_states=x,\n",
+            "        assert self.moe_kernel is not None\n"
+            "        # spark-vllm-docker/mods/exl3-mimo: reduce the routed-expert\n"
+            "        # output across tensor-parallel ranks (see the module note).\n"
+            "        from vllm.distributed import (\n"
+            "            get_tensor_model_parallel_world_size as _exl3_tp_size,\n"
+            "            tensor_model_parallel_all_reduce as _exl3_tp_all_reduce,\n"
+            "        )\n"
+            "        _exl3_routed_out = self.moe_kernel.apply(\n"
+            "            hidden_states=x,\n",
+        ),
+        (
+            "            shared_experts_input=shared_experts_input,\n"
+            "            workspace=workspace,\n"
+            "        )\n",
+            "            shared_experts_input=shared_experts_input,\n"
+            "            workspace=workspace,\n"
+            "        )\n"
+            "        if _exl3_tp_size() > 1:\n"
+            "            _exl3_routed_out = _exl3_tp_all_reduce(_exl3_routed_out)\n"
+            "        return _exl3_routed_out\n",
+        ),
     ],
     "vllm/model_executor/layers/quantization/exl3.py",
 )
