@@ -38,6 +38,7 @@ EXP_B12X_VLLM_REF="dev/karmic-kraken"
 EXP_B12X_FLASHINFER_REPO="https://github.com/local-inference-lab/flashinfer.git"
 # Passing 2026-10-15 CI revision, before the expanded MLA tuning search.
 EXP_B12X_FLASHINFER_REF="9873d7a33f91aeb14c83286552e1f3d84efa2c2e"
+B12X_VLLM_REF=""
 EXP_B12X_TORCH_VERSION="2.13.0"
 EXP_B12X_TORCHVISION_VERSION="0.28.0"
 EXP_B12X_TORCHAUDIO_VERSION="2.11.0"
@@ -718,6 +719,7 @@ usage() {
     echo "  --tf5                         : Deprecated compatibility flag; tag defaults to 'vllm-node-tf5' (aliases: --pre-tf, --pre-transformers)"
     echo "  --exp-mxfp4, --experimental-mxfp4 : Build with experimental native MXFP4 support"
     echo "  --exp-b12x, --experimental-b12x   : Select B12X; pulls its prebuilt image unless a local wheel/image build is requested"
+    echo "  --b12x-vllm-ref <ref>         : Pin the vLLM fork ref for --exp-b12x and rebuild vLLM from source"
     echo "  --apply-vllm-pr <pr-or-url>   : Apply a vLLM PR number or full GitHub PR URL to source. Can be specified multiple times."
     echo "  --apply-preset-vllm-prs       : Apply preset vLLM PRs even with --vllm-repo, --vllm-ref, or --apply-vllm-pr."
     echo "  --apply-flashinfer-pr <pr-num>: Apply a PR from the selected FlashInfer repository. Can be specified multiple times."
@@ -841,6 +843,7 @@ while [[ "$#" -gt 0 ]]; do
         --tf5|--pre-tf|--pre-transformers) PRE_TRANSFORMERS=true ;;
         --exp-mxfp4|--experimental-mxfp4) EXP_MXFP4=true ;;
         --exp-b12x|--experimental-b12x) EXP_B12X=true ;;
+        --b12x-vllm-ref) B12X_VLLM_REF="$2"; shift ;;
         --apply-vllm-pr)
             VLLM_PR_REFERENCE=""
             if [ -n "${2:-}" ]; then
@@ -913,6 +916,17 @@ if [ "$EXP_B12X" = true ]; then
     TORCHVISION_VERSION="$EXP_B12X_TORCHVISION_VERSION"
     TORCHAUDIO_VERSION="$EXP_B12X_TORCHAUDIO_VERSION"
     PREBUILT_RUNNER_IMAGE="$PREBUILT_B12X_RUNNER_IMAGE"
+fi
+
+# An explicit B12X vLLM ref requires a source build, not a cached wheel.
+if [ -n "$B12X_VLLM_REF" ]; then
+    if [ "$EXP_B12X" != true ]; then
+        echo "Error: --b12x-vllm-ref requires --exp-b12x" >&2
+        exit 1
+    fi
+    VLLM_REF="$B12X_VLLM_REF"
+    VLLM_REF_SET=true
+    echo "B12X vLLM ref pinned to $VLLM_REF; vLLM will be rebuilt from source."
 fi
 
 if [ "$VLLM_SOURCE_DIR_SET" = true ]; then
