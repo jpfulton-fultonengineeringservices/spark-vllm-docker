@@ -32,7 +32,7 @@ description: vLLM serving a MiMo-V2.6-Flash-RL EXL3 pack (B12X exl3-v1 container
 
 # Local exl3-v1 serving checkpoint, staged by the FES weights path under this
 # hub id. Not a downloadable repo — use the staged launch (see header).
-model: XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3
+model: FES/MiMo-V2.6-Flash-RL-exl3-b12x
 
 # b12x fork (local-inference-lab/vllm@dev/karmic-kraken) with B12X paged
 # attention (DiffKV + fp8 KV + sinks + non-causal) and b12x linear. Build with:
@@ -80,7 +80,7 @@ env:
   MIMO_V26_MODEL_ID: "XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3"
 
 command: |
-  b12x-kcache exec vllm serve XiaomiMiMo/MiMo-V2.6-Flash-RL-exl3-b12x \
+  b12x-kcache exec vllm serve FES/MiMo-V2.6-Flash-RL-exl3-b12x \
       --trust-remote-code \
       --host {host} \
       --port {port} \
