@@ -80,7 +80,7 @@ env:
   MIMO_V26_MODEL_ID: "XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3"
 
 command: |
-  b12x-kcache exec vllm serve FES/MiMo-V2.6-Flash-RL-exl3-b12x \
+  b12x-kcache exec vllm serve XiaomiMiMo/MiMo-V2.6-Flash-RL-exl3-b12x \
       --trust-remote-code \
       --host {host} \
       --port {port} \
