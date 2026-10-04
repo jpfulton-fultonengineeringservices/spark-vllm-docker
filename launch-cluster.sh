@@ -480,6 +480,12 @@ if [[ "$MOUNT_CACHE_DIRS" == "true" ]]; then
     DOCKER_ARGS="$DOCKER_ARGS -v $HOME/.triton:/root/.triton"
     CACHE_DIRS_TO_CREATE+=("$HOME/.triton")
 
+
+    # B12X kernel-cache archive store (shared across nodes; on the head this
+    # is node-local ext4 behind /cluster-shared, peers reach it via NFS).
+    DOCKER_ARGS="$DOCKER_ARGS -v /cluster-shared/b12x-kcache:/cluster-shared/b12x-kcache"
+    CACHE_DIRS_TO_CREATE+=("/cluster-shared/b12x-kcache")
+
     # TileLang Cache
     DOCKER_ARGS="$DOCKER_ARGS -v $HOME/.tilelang:/root/.tilelang"
     CACHE_DIRS_TO_CREATE+=("$HOME/.tilelang")

@@ -1,7 +1,6 @@
 # ---------------------------------------------------------------- store
-
 # write_probe <dir>: mkdir -p, write .probe.$$ , read back, compare, unlink.
-# 0 when the dir is writable, 1 otherwise.
+# 0 when dir writable, 1 otherwise.
 write_probe() {
   local d="$1" tmp rd
   if ! mkdir -p "$d" 2>/dev/null; then
@@ -24,8 +23,28 @@ store_candidates() {
   if [ -n "${B12X_KCACHE_STORE:-}" ]; then
     echo "$B12X_KCACHE_STORE"
   fi
+  # /cluster-shared/b12x-kcache counts only when the launcher actually
+  # mounted it (host dir passed through) — a bare writable dir created by
+  # this probe on the container rootfs would be ephemeral and silently
+  # lose archives. require_b12x_kcache_mount() enforces the mount.
+  if require_b12x_kcache_mount; then
+    echo "/cluster-shared/b12x-kcache"
+  fi
   echo "/root/.cache/huggingface/.spark-vllm/b12x-kcache"
   echo "/root/.cache/b12x/_archives"
+}
+
+# require_b12x_kcache_mount: 0 when /cluster-shared/b12x-kcache exists on a
+# device DIFFERENT from the container rootfs, i.e. it is a real bind mount,
+# not a dir mkdir'd on the ephemeral image layer. When the host dir does not
+# exist, the path is simply absent (probe skip).
+require_b12x_kcache_mount() {
+  [ -d /cluster-shared/b12x-kcache ] || return 1
+  local dir_dev root_dev
+  dir_dev=$(stat -c %d /cluster-shared/b12x-kcache 2>/dev/null || \
+            stat -f %d /cluster-shared/b12x-kcache 2>/dev/null) || return 1
+  root_dev=$(stat -c %d / 2>/dev/null || stat -f %d / 2>/dev/null) || return 1
+  [ "$dir_dev" != "$root_dev" ]
 }
 
 # resolve_store <mode>: mode "write" (first writable candidate) or "read"

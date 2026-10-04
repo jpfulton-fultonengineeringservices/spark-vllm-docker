@@ -35,14 +35,17 @@ layout change.
 Candidates, in priority order:
 
 1. `$B12X_KCACHE_STORE` — explicit operator-owned path
-2. `/root/.cache/huggingface/.spark-vllm/b12x-kcache` — default; in-container
-   this path sits on the `/cluster-shared` NFS filesystem (host path:
-   `/cluster-shared/models/hf_cache/.spark-vllm/b12x-kcache`). The head rank
-   can write it; root-squashed peers can only read.
-3. `/root/.cache/b12x/_archives` — per-node fallback inside the b12x mount
+2. `/cluster-shared/b12x-kcache` — dedicated store directory on the
+   `/cluster-shared` filesystem, mounted in-container by `launch-cluster.sh`
+   (host path is the same on the head, which serves it to peers via NFS).
+   Both the head and peers can write it.
+3. `/root/.cache/huggingface/.spark-vllm/b12x-kcache` — fallback inside the
+   HF-cache mount (host: `/cluster-shared/models/hf_cache/.spark-vllm/b12x-kcache`).
+   The head rank can write it; root-squashed peers can only read.
+4. `/root/.cache/b12x/_archives` — per-node fallback inside the b12x mount
 
-`save` uses the first candidate that passes an actual write probe (peers fail
-(2) and land on (3) automatically). `restore`/`verify` search all candidates
+`save` uses the first candidate that passes an actual write probe (peers fall
+through candidates automatically). `restore`/`verify` search all candidates
 and use the first existing archive, so peers restore the head's archive from
 the shared store. Every resolution logs `[b12x-kcache] store=<path>
 shared=yes|no`.
