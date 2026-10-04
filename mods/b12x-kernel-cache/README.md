@@ -37,8 +37,9 @@ Candidates, in priority order:
 1. `$B12X_KCACHE_STORE` — explicit operator-owned path
 2. `/cluster-shared/b12x-kcache` — dedicated store directory on the
    `/cluster-shared` filesystem, mounted in-container by `launch-cluster.sh`
-   (host path is the same on the head, which serves it to peers via NFS).
-   Both the head and peers can write it.
+   (effective from the next launcher relaunch). Peer write depends on the
+   NFS root-squash policy; a probe run after the relaunch decides whether
+   peers can save directly or fall through to (3)/(4).
 3. `/root/.cache/huggingface/.spark-vllm/b12x-kcache` — fallback inside the
    HF-cache mount (host: `/cluster-shared/models/hf_cache/.spark-vllm/b12x-kcache`).
    The head rank can write it; root-squashed peers can only read.
