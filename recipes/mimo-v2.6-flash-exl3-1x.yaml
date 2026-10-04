@@ -66,6 +66,7 @@ env:
   CUTE_DSL_ARCH: "sm_121a"
   VLLM_USE_V2_MODEL_RUNNER: "1"
   VLLM_SKIP_KV_CACHE_MEMORY_CHECK: "1"
+  MIMO_V26_MODEL_ID: "XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3"
 
 command: |
   vllm serve FES/MiMo-V2.6-Flash-RL-exl3-b12x \
