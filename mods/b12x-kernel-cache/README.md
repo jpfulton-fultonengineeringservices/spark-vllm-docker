@@ -20,12 +20,15 @@ if one exists, starts the serve, polls `/health`, and after the first healthy
 poll saves a fresh archive. A serve never fails because of the wrapper: any
 restore/save problem degrades to a log line and the cold path continues.
 
-Archive roots (see `roots.txt`): `compile` → `/root/.cache/b12x/compile`
-(includes the tuning-selection `preparation/` dir, which b12x nests INSIDE
-`compile/` on the live nodes — not a sibling as upstream
-`_cute_compile_cache_dir()` suggests) and `preparation` →
-`/root/.cache/b12x/preparation` (kept for a future upstream layout change;
-empty on current images).
+## Cache layout
+
+`roots.txt` lists `compile` → `/root/.cache/b12x/compile` plus a sibling
+`preparation` → `/root/.cache/b12x/preparation`. On current images b12x
+writes the tuning-selection `preparation/` INSIDE `compile/` (not a sibling
+as upstream `_cute_compile_cache_dir()` suggests), so the sibling entry is a
+benign no-op: save's directory check skips it and the `compile/` archive
+already carries `preparation/`. The entry is kept for a future upstream
+layout change.
 
 ## Store
 
