@@ -23,13 +23,28 @@ image's B12X reads and writes the **`exl3-v1`** container that the fork's
 
 ## What this mod changes (anchored, idempotent, fail-loud)
 
+0. `Exl3Config.__init__` — extends `exclude_modules` with the fused dense names
+   (`gate_up_proj`, `qkv_proj`) whenever their unfused checkpoint parts appear in
+   `ignored_layers`. Required because `is_layer_skipped` can only expand a fused
+   name via `quant_config.packed_modules_mapping`, and the resolved top-level
+   class (`MiMoV2OmniForCausalLM`) defines no mapping — so at runtime that
+   mapping is empty and `gate_up_proj` matched nothing. Without this, MiMo's
+   dense layer-0 MLP is handed the MXFP8 method over BF16 weights that have no
+   `weight_scale_inv`, and its output comes back exactly zero.
 1. `Exl3Config.from_config` — drops the DeepSeek KDA/MLA arrangement checks
    (`dense_format == "mxfp8"`, the KDA ignore-list, the `q/k/v_proj`
    exclusion); keeps the `exl3-manifest.json` requirement and a fail-closed
-   `ignored_layers` list check; accepts `fp8` or `mxfp8` dense.
+   `ignored_layers` list check; accepts `bf16`, `fp8`, or `mxfp8` dense.
 2. `Exl3MoEMethod.__init__` — admits `MoEActivation.SILU` (MiMo) alongside
    DeepSeek's SiTU(4/25); BF16 + bias-free still enforced.
 3. The fused-MoE weight plan is built with `nonlinearity="silu"`.
+4. `mimo_v2.py` — adds `MiMoV2Model._try_load_bf16_qkv_proj` and intercepts the
+   fused `qkv_proj` before the generic fused loader. The assembled checkpoint
+   keeps the source's interleaved `[Q_i|K_i|V_i]` layout but stores it in BF16,
+   so the fork's FP8-only `_shard_fp8_qkv_proj` never fires and the generic
+   loader assumes a simple `[Q|K|V]` layout — at TP>1 that selects half the
+   wrong rows. This mirrors `_shard_fp8_qkv_proj`'s de-interleave without its
+   FP8 dequant/requant steps (verified row-exact against it).
 
 ## Pack contract (`EXL3_MIMO_PACK.md`)
 

@@ -10,8 +10,14 @@ weights — a ModelOpt-FP8 block checkpoint (``weight_scale_inv``) cannot pass
 through it. So the assembly:
 
   1. strips the routed-expert tensors (they live in the exl3 container),
-  2. dequantizes dense FP8-block weights to BF16 (exact: every e4m3 value is
-     representable in bf16; one rounding on the scale product),
+  2. dequantizes dense FP8-block weights to BF16. The value set is exact (every
+     e4m3 value is representable in bf16; one rounding on the scale product),
+     BUT the scale grid is not always one flat run of blocks: fused projections
+     stored interleaved as G groups ([Q|K|V] per group) give each group
+     ceil(rows_per_group/block) padded scale rows, so grid_rows == srg*G rather
+     than ceil(m/block). _dequant_fp8_block_dispatch detects this from the grid
+     shape and dequantizes per group; a flat expansion there misaligns every
+     scale row after group 0 and silently corrupts the tensor.
   3. copies the exl3 container next to the dense checkpoint,
   4. writes a config whose ``quantization_config`` declares the exl3 method with
      every non-routed linear module in ``ignored_layers`` (they load as plain

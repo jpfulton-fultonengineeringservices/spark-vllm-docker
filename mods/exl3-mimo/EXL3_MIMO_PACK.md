@@ -34,10 +34,11 @@ pack-build assemble <src> <exl3-v1> <serve-out>
 ```
 
 Output = `config.json` (`quant_method: exl3`, `exl3.manifest`,
-`dense_format: fp8`, `ignored_layers`), re-sharded dense weights +
-`model.safetensors.index.json`, copied tokenizer/modeling files, and the
-`exl3-v1` container. This is the artifact the FES weight-staging path stages
-and serves (see `NEW_MODEL.md`, and the fork's `docs/fes-weight-staging.md`).
+`dense_format: bf16`, `ignored_layers`), the non-routed weights re-emitted as
+BF16 (`weight_scale_inv` dropped), `model.safetensors.index.json`, copied
+tokenizer/modeling files, and the `exl3-v1` container. This artifact is what the
+FES weight-staging path stages and serves (see `NEW_MODEL.md`, and the fork's
+`docs/fes-weight-staging.md`).
 
 ## In-image writer (B12X 1.3.0)
 
@@ -86,15 +87,20 @@ numeric core + extension.
    write the manifest + per-layer safetensors (either reuse the in-tree writer
    helpers or reproduce the exact layout).
 5. Validate on CPU: `read_exl3_manifest` + `read_exl3_layer` (geometry/extent
-   legality), then boot `recipes/mimo-v2.6-flash-exl3-1x.yaml` and run greedy
-   parity + PPL (`README.md`).
+   legality), `pack-build/test_dispatch_fix.py` (dense dequant grid convention),
+   then boot `recipes/mimo-v2.6-flash-exl3-2x.yaml` and run greedy parity + PPL
+   (`README.md`). Note the fork's `plan_exl3_extent` rejects TP=1 outright
+   (`EXL3 experts require TP in 2..24`), so the `-1x` recipe cannot serve this
+   pack — validate on the 2-node recipe.
 
 ## Dense / non-routed
 
-Only routed experts are EXL3. Attention / dense-MLP / embeddings / head stay
-in the source format; the checkpoint `quantization_config` declares `exl3`
-with the manifest and an `ignored_layers` list naming the non-routed modules
-(the mod reads these).
+Only routed experts are EXL3. Attention / dense-MLP / embeddings / head are
+dequantized from the source FP8-block format to plain BF16, so the checkpoint
+`quantization_config` declares `exl3` with `dense_format: bf16`, the manifest,
+and an `ignored_layers` list naming the non-routed modules (the mod reads these).
+Fused projections must be dequantized per interleaved group — see
+`_dequant_fp8_block_dispatch` and `prove_dequant_bug.py`.
 
 ## Licensing
 
