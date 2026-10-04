@@ -43,6 +43,7 @@ mods:
   - mods/fes-weights
   - mods/mimo-v2.6-flash
   - mods/mimo-diffkv-fp8-kv
+  - mods/b12x-kernel-cache
 
 # Default settings (can be overridden via CLI where supported)
 # gpu_memory_utilization: the FES bge-m3 embed units stay resident on every
@@ -103,7 +104,7 @@ env:
 #   recipe combo). Valid only on the V2 model runner (pinned above); dynamic
 #   DFlash decoding stays on full graphs there.
 command: |
-  vllm serve XiaomiMiMo/MiMo-V2.6-Flash-RL \
+  b12x-kcache exec vllm serve XiaomiMiMo/MiMo-V2.6-Flash-RL \
       --trust-remote-code \
       --host {host} \
       --port {port} \
