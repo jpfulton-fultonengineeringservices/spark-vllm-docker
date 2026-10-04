@@ -84,6 +84,33 @@ def patch(path: Path, edits: list[tuple[str, str]], label: str) -> None:
 patch(
     exl3_path,
     [
+        # 0) Also exclude the fused dense projection names. ignored_layers
+        # names the CHECKPOINT modules (gate_proj/up_proj, q/k/v_proj), but
+        # vLLM instantiates them fused (gate_up_proj). is_layer_skipped can
+        # only expand a fused name through quant_config.packed_modules_mapping,
+        # and the resolved top-level class (MiMoV2OmniForCausalLM) defines no
+        # mapping, so at runtime that mapping is empty and "gate_up_proj"
+        # matched nothing: MiMo's dense layer-0 MLP was handed the MXFP8 method
+        # over BF16 weights with no weight_scale_inv, and its output came back
+        # exactly zero (observed delta=0.0000 at layer 0), silently dropping
+        # that layer's MLP contribution.
+        (
+            "            exclude_modules=[*ignored_layers, \"lm_head\", \"in_proj_gfab\"],\n",
+            "            exclude_modules=[\n"
+            "                *ignored_layers,\n"
+            "                \"lm_head\",\n"
+            "                \"in_proj_gfab\",\n"
+            "                # spark-vllm-docker/mods/exl3-mimo: fused dense modules.\n"
+            "                *(\n"
+            "                    fused\n"
+            "                    for fused, parts in (\n"
+            "                        (\"gate_up_proj\", (\"gate_proj\", \"up_proj\")),\n"
+            "                        (\"qkv_proj\", (\"q_proj\", \"k_proj\", \"v_proj\")),\n"
+            "                    )\n"
+            "                    if any(p in ignored_layers for p in parts)\n"
+            "                ),\n"
+            "            ],\n",
+        ),
         # 1) from_config: accept a model-shaped (non-DeepSeek) dense arrangement.
         (
             "        exl3 = config.get(\"exl3\")\n"

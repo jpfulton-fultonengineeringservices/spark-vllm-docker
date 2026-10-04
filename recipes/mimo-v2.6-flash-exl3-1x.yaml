@@ -15,7 +15,9 @@ description: vLLM serving a MiMo-V2.6-Flash-RL EXL3 pack (B12X exl3-v1 container
 
 # EXL3 pack produced per mods/exl3-mimo/EXL3_MIMO_PACK.md. Set to the local
 # path or Hub id of the finished B12X exl3-v1 pack.
-model: FES/MiMo-V2.6-Flash-RL-exl3-b12x   # (confirm) point at the real pack
+# Local exl3-v1 serving checkpoint, staged by the FES weights path under this
+# hub id. Not a downloadable repo — use the staged launch (see header).
+model: XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3
 
 # b12x fork (local-inference-lab/vllm@dev/karmic-kraken) with B12X paged
 # attention (DiffKV + fp8 KV + sinks + non-causal) and b12x linear. Build with:
@@ -32,8 +34,10 @@ solo_only: true
 # non-DeepSeek dense arrangement). mimo-v2.6-flash carries the model-support
 # patches; kv-cache-guard-override skips the single-request 1M KV guard.
 mods:
+  - mods/fes-weights
   - mods/mimo-v2.6-flash
   - mods/exl3-mimo
+  - mods/mimo-diffkv-fp8-kv
   - mods/kv-cache-guard-override
 
 defaults:

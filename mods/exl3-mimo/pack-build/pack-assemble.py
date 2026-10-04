@@ -98,6 +98,85 @@ def _dequant_fp8_block(weight: torch.Tensor, scale_inv: torch.Tensor,
     return (weight.to(torch.float32) * scale[:m, :n]).to(torch.bfloat16).contiguous()
 
 
+def _dequant_fp8_block_per_group(weight: torch.Tensor, scale_inv: torch.Tensor,
+                                 block: tuple[int, int],
+                                 num_groups: int) -> torch.Tensor:
+    """Dequant an interleaved fused projection group-by-group.
+
+    MiMo stores the fused ``qkv_proj`` as ``num_groups`` contiguous training
+    shards, each ordered ``[Q | K | V]``. The FP8 block-scale grid follows that
+    interleaving: each group owns ``ceil(rows_per_group / block_out)`` scale rows
+    (padded), so ``grid_rows == scale_rows_per_group * num_groups`` -- NOT
+    ``ceil(m / block_out)``. The fork's ``_shard_fp8_qkv_proj`` relies on exactly
+    this (``scale_rows_per_group = (rows_per_group + block - 1) // block``).
+
+    ``_dequant_fp8_block`` expands the grid as one flat run of blocks, which is
+    equivalent only when ``rows_per_group`` is an exact multiple of ``block_out``.
+    For MiMo's kv=4 full-attention layers ``rows_per_group = 3392 = 26.5 * 128``,
+    so a flat expansion misaligns every scale row after group 0 and corrupts
+    those layers (cos 0.82-0.98 vs the correct per-group result). Dequantizing
+    per group reproduces the fork's semantics for every layer.
+    """
+    m, n = weight.shape
+    so, _si = scale_inv.shape
+    bs_out, bs_in = block
+    if m % num_groups:
+        raise SystemExit(
+            f"fp8 per-group dequant: weight rows {m} not divisible by "
+            f"{num_groups} groups"
+        )
+    rows_per_group = m // num_groups
+    scale_rows_per_group = -(-rows_per_group // bs_out)  # ceil
+    if so != scale_rows_per_group * num_groups:
+        raise SystemExit(
+            f"fp8 per-group dequant: scale grid rows {so} != "
+            f"{scale_rows_per_group} * {num_groups} groups "
+            f"(rows_per_group={rows_per_group}, block={bs_out})"
+        )
+    out = torch.empty((m, n), dtype=torch.float32)
+    wf = weight.to(torch.float32)
+    sf = scale_inv.to(torch.float32)
+    for g in range(num_groups):
+        row_start = g * rows_per_group
+        scale_start = g * scale_rows_per_group
+        w_g = wf[row_start:row_start + rows_per_group]
+        s_g = (sf[scale_start:scale_start + scale_rows_per_group]
+               .repeat_interleave(bs_out, dim=0)
+               .repeat_interleave(bs_in, dim=1)[:rows_per_group, :n])
+        out[row_start:row_start + rows_per_group] = w_g * s_g
+    return out.to(torch.bfloat16).contiguous()
+
+
+def _dequant_fp8_block_dispatch(base: str, weight: torch.Tensor,
+                                scale_inv: torch.Tensor,
+                                block: tuple[int, int],
+                                num_groups: int) -> tuple[torch.Tensor, bool]:
+    """Pick flat vs per-group FP8 dequant from the scale-grid geometry.
+
+    Returns ``(tensor, used_per_group)``. The grid rows are decisive: a flat run
+    of ``ceil(m/bs_out)`` blocks suits ordinary projections, while an interleaved
+    fused projection pads per group, giving ``ceil((m/g)/bs_out)*g`` rows. When
+    ``rows_per_group`` is an exact multiple of ``bs_out`` both formulas coincide
+    and flat is used (they are numerically identical). When they differ -- e.g.
+    MiMo's kv=4 qkv_proj, flat=106 vs per-group=27*4=108 -- the grid picks the
+    correct one. Any grid matching neither is a hard error, not a silent guess.
+    """
+    m = weight.shape[0]
+    bs_out = block[0]
+    so = scale_inv.shape[0]
+    flat_rows = -(-m // bs_out)
+    if so == flat_rows or num_groups <= 1:
+        return _dequant_fp8_block(weight, scale_inv, block), False
+    group_rows = -(-(m // num_groups) // bs_out) * num_groups
+    if m % num_groups == 0 and so == group_rows:
+        return _dequant_fp8_block_per_group(weight, scale_inv, block, num_groups), True
+    raise SystemExit(
+        f"{base}: fp8 scale grid rows {so} matches neither flat "
+        f"({flat_rows}) nor per-group ({group_rows} for {num_groups} groups); "
+        f"weight rows={m} block={bs_out}"
+    )
+
+
 def _copy_aux(source: Path, out: Path) -> list[str]:
     """Copy everything except the weights/index/pdf (config written separately)."""
     copied: list[str] = []
@@ -122,9 +201,9 @@ def _copy_aux(source: Path, out: Path) -> list[str]:
 
 
 def _write_shards(source: Path, out: Path, weight_map: dict[str, str],
-                  kept_keys: list[str], fp8_bases: set[str],
-                  fp8_block: tuple[int, int],
-                  max_bytes: int) -> tuple[dict[str, str], int]:
+                 kept_keys: list[str], fp8_bases: set[str],
+                 fp8_block: tuple[int, int], ckpt_groups: int,
+                 max_bytes: int) -> tuple[dict[str, str], int]:
     """Write kept tensors (fp8 pairs dequantized) to fresh shards."""
     out_keys = [k for k in kept_keys if not k.endswith(SCALE_INV_SUFFIX)]
 
@@ -154,16 +233,18 @@ def _write_shards(source: Path, out: Path, weight_map: dict[str, str],
         by_source.setdefault(weight_map[key], []).append(key)
 
     dequanted = 0
+    per_group = 0
     for src_shard in sorted(by_source):
         with safe_open(str(source / src_shard), framework="pt") as handle:
             for key in sorted(by_source[src_shard]):
                 if key.endswith(WEIGHT_SUFFIX) and key[:-len(WEIGHT_SUFFIX)] in fp8_bases:
-                    scale_key = key[:-len(WEIGHT_SUFFIX)] + SCALE_INV_SUFFIX
-                    tensor = _dequant_fp8_block(
-                        handle.get_tensor(key),
-                        load(scale_key),
-                        fp8_block,
-                    )
+                    base = key[:-len(WEIGHT_SUFFIX)]
+                    weight = handle.get_tensor(key)
+                    scale = load(base + SCALE_INV_SUFFIX)
+                    tensor, used_per_group = _dequant_fp8_block_dispatch(
+                        base, weight, scale, fp8_block, ckpt_groups)
+                    if used_per_group:
+                        per_group += 1
                     dequanted += 1
                 else:
                     tensor = handle.get_tensor(key).contiguous()
@@ -185,7 +266,8 @@ def _write_shards(source: Path, out: Path, weight_map: dict[str, str],
                 new_map[key] = new.name
     total = sum((out / name).stat().st_size for name in set(new_map.values()))
     print(f"  dense: {len(out_keys)} tensor(s), {dequanted} fp8-block pair(s) "
-          f"dequanted to bf16, {total / 1e9:.1f} GB across {total_files} shard(s)")
+          f"dequanted to bf16 ({per_group} per-group interleaved), "
+          f"{total / 1e9:.1f} GB across {total_files} shard(s)")
     return new_map, total
 
 
@@ -258,18 +340,24 @@ def main(argv: list[str] | None = None) -> int:
         {k[:-len(WEIGHT_SUFFIX)] for k in kept if k.endswith(WEIGHT_SUFFIX)}
         & {k[:-len(SCALE_INV_SUFFIX)] for k in kept if k.endswith(SCALE_INV_SUFFIX)}
     )
-    src_qc = _load_json(args.source / "config.json").get("quantization_config", {}) or {}
+    src_cfg = _load_json(args.source / "config.json")
+    src_qc = src_cfg.get("quantization_config", {}) or {}
     block_raw = src_qc.get("weight_block_size") or [128, 128]
     fp8_block = (int(block_raw[0]), int(block_raw[1]))
     dense_format = args.dense_format or ("bf16" if fp8_bases else "fp8")
+    src_tc = src_cfg.get("text_config", src_cfg)
+    # The fused qkv_proj checkpoint is interleaved into this many contiguous
+    # training shards (the model's global-attention KV count). It drives the
+    # per-group scale-grid geometry in _dequant_fp8_block_dispatch.
+    ckpt_groups = int(src_tc.get("num_key_value_heads") or 1)
 
     print(f"assemble: source={args.source} pack={args.pack} out={args.out}")
     print(f"  tensors: keep={len(kept)} drop_routed_experts={dropped} "
           f"fp8_block_pairs={len(fp8_bases)} block={list(fp8_block)} "
-          f"dense_format={dense_format}")
+          f"dense_format={dense_format} ckpt_groups={ckpt_groups}")
 
     new_map, total = _write_shards(args.source, args.out, wm, kept, fp8_bases,
-                                   fp8_block, args.max_shard_bytes)
+                                   fp8_block, ckpt_groups, args.max_shard_bytes)
     (args.out / "model.safetensors.index.json").write_text(
         json.dumps({"metadata": {"total_size": total}, "weight_map": new_map}, indent=2) + "\n"
     )
