@@ -30,12 +30,12 @@ cmd_exec() {
 
   port=$(argv_value --port)
   [ -n "$port" ] || port=8000
-
-  # Poll readiness every 5 s, max 120 attempts (10 min). Never kill the serve
-  # on timeout: skip save and keep supervising.
-  local i=0 code
+  # Poll readiness ~every 5 s, max 120 attempts (~10 min). Never kill the
+  # serve on timeout: skip save and keep supervising.
+  local i=0 code exited="0"
   while [ "$i" -lt 120 ]; do
     if ! kill -0 "$child" 2>/dev/null; then
+      exited="1"
       break  # child exited early; skip to wait
     fi
     code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 \
@@ -53,7 +53,11 @@ cmd_exec() {
       cmd_save "$key"
     fi
   else
-    log "readiness not observed within 10 min; skipping save (serve continues)"
+    if [ "$exited" = "1" ]; then
+      log "readiness not observed (serve exited); skipping save"
+    else
+      log "readiness not observed within 10 min; skipping save (serve continues)"
+    fi
   fi
 
   wait "$child"
