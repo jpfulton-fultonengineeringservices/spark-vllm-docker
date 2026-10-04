@@ -47,8 +47,9 @@ and use the first existing archive, so peers restore the head's archive from
 the shared store. Every resolution logs `[b12x-kcache] store=<path>
 shared=yes|no`.
 
-Archive: `<store>/<key>.tar.zst` (zstd, gzip fallback) plus `INDEX.tsv`
-(`key<TAB>created_iso<TAB>node<TAB>bytes<TAB>sha256`).
+Archive: `<store>/<key>.tar.zst` plus `INDEX.tsv`
+(`key<TAB>created_iso<TAB>node<TAB>bytes<TAB>sha256`). zstd is used when
+available; gzip is the fallback otherwise (the sniffer accepts either).
 
 ## Key inputs
 
