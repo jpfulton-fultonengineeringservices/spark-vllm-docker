@@ -58,7 +58,7 @@ defaults:
   port: 8000
   host: 0.0.0.0
   tensor_parallel: 4
-  gpu_memory_utilization: 0.75
+  gpu_memory_utilization: 0.68
   max_model_len: 1048576
   block_size: 128
   max_num_seqs: 32
