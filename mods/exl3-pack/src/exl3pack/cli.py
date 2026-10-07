@@ -377,7 +377,7 @@ def _cmd_dist_coordinator(args: argparse.Namespace) -> int:
     """Run the distributed quantization coordinator in-process.
 
     Resolves the per-node work roots from the node map, builds
-    ``WorkerEndpoint`` records under ``<work>/dist/mod<N>/inbox/<node>``,
+    ``WorkerEndpoint`` records under ``<work>/dist/inbox/<node>``,
     and hands the loop to :class:`exl3pack.distributed.Coordinator`.
     """
     from .dist_types import WorkerEndpoint
@@ -405,8 +405,8 @@ def _cmd_dist_coordinator(args: argparse.Namespace) -> int:
         dist_args["codebook"] = int(args.codebook)
 
     endpoints: list[WorkerEndpoint] = []
-    for idx, node in enumerate(nodes):
-        inbox = work / "dist" / f"mod{idx}" / "inbox" / node
+    for node in nodes:
+        inbox = work / "dist" / "inbox" / node
         endpoints.append(WorkerEndpoint(node=node, inbox=str(inbox), device=0))
 
     coord = Coordinator(dist_args, endpoints, work)

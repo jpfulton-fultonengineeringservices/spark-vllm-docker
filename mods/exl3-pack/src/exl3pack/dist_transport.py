@@ -207,14 +207,8 @@ class _TransportMixin:
                 raise ValueError(
                     f"shard_idx {spec.shard_idx} has no endpoint"
                 )
-            node = self.endpoints[spec.shard_idx].node
-            inbox = (
-                self.work
-                / "dist"
-                / f"mod{spec.module_idx}"
-                / "inbox"
-                / node
-            )
+            ep = self.endpoints[spec.shard_idx]
+            inbox = Path(ep.inbox)
             payload = spec.to_json()
 
             def _write(tmp: Path, p: str = payload) -> None:
