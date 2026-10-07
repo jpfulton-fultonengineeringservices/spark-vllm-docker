@@ -116,10 +116,13 @@ ensure_recipe() {
 # Emit one "index<TAB>module_start<TAB>module_end<TAB>layers_csv" line per shard
 # via the torch-free planner (exl3pack.shard).
 plan_shards_tsv() {
-    local model="$1" shards="$2"
+    local model="$1" shards="$2" alias="$3"
     local src_path="${NAS_ROOT}/models/mimo/${model}"
-    PYTHONPATH="${EXL3_SRC}${PYTHONPATH:+:$PYTHONPATH}" \
-        python3 -m exl3pack.shard --model "$src_path" --shards "$shards" --tsv
+    # The planner reads config.json/index.json from the NAS source, which only
+    # exists on the nodes (the workstation has no /nas-1). Run it in the image
+    # on a node; stdout is the TSV the caller parses.
+    ssh "$alias" "docker run --rm -v ${NAS_ROOT}:${NAS_ROOT} --entrypoint python3 '${TAG}' \
+        -m exl3pack.shard --model '${src_path}' --shards ${shards} --tsv"
 }
 
 # Stage the source checkpoint onto each node's local NVMe staging dir.
@@ -181,7 +184,7 @@ cmd_run() {
     first_alias="$(node_alias "$first_node")"
     ensure_recipe "$model" "$in_recipe" "$first_alias"
     local plan
-    plan="$(plan_shards_tsv "$model" "$shards")"
+    plan="$(plan_shards_tsv "$model" "$shards" "$first_alias")"
 
     local i=0
     local idx start end layers_csv
