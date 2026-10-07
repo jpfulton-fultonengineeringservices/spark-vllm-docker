@@ -302,12 +302,6 @@ status_file_for() {
     echo "${LOCAL_ROOT}/fes-projects/exl3-mimo-build/${model}-work-${work_k}/node${i}/${STATUS_NAME}"
 }
 
-shard_container_state() {
-    local alias="$1" model="$2" i="$3"
-    ssh "$alias" "docker inspect -f '{{.State.Status}}' 'exl3-pack-job-${model}-${i}' 2>/dev/null" \
-        2>/dev/null || echo "gone"
-}
-
 cmd_watch() {
     local model="" nodes="" interval=5 interval_set=false
     while [ $# -gt 0 ]; do
@@ -339,7 +333,7 @@ cmd_watch() {
         loop=false
     fi
 
-    local first=true saw_any=false
+    local first=true
     while :; do
         if [ "$loop" = true ]; then
             if [ "$first" = true ]; then
@@ -349,39 +343,23 @@ cmd_watch() {
                 printf '\033[H'
             fi
         fi
-        local terminal=0 i=0 node
+        local i=0 node
         for node in $node_list; do
-            local alias path tmp st
+            local alias path tmp
             alias="$(node_alias "$node")" || { err "watch: unknown node '${node}'"; return 2; }
             path="$(status_file_for "$model" "$work_k" "$i")"
             tmp="$(mktemp "${TMPDIR:-/tmp}/pack-status.XXXXXX")"
             echo "--- ${node} (${alias}) node${i} ---"
             if ssh "$alias" "cat '${path}' 2>/dev/null" >"$tmp" 2>/dev/null && [ -s "$tmp" ]; then
-                saw_any=true
                 python3 "$PACK_STATUS_BIN" "$tmp" || true
-                if grep -qE '"phase"[[:space:]]*:[[:space:]]*"(done|error)"' "$tmp"; then
-                    terminal=$((terminal + 1))
-                else
-                    st="$(shard_container_state "$alias" "$model" "$i")"
-                    case "$st" in
-                        exited*|gone*) terminal=$((terminal + 1)) ;;
-                    esac
-                fi
             else
-                echo "waiting for ${path} ..."
-                st="$(shard_container_state "$alias" "$model" "$i")"
-                case "$st" in
-                    exited*|gone*) if [ "$saw_any" = true ]; then terminal=$((terminal + 1)); fi ;;
-                esac
+                echo "no status yet (not started): ${path}"
             fi
             rm -f "$tmp"
             i=$((i + 1))
         done
 
         if [ "$loop" = false ]; then
-            break
-        fi
-        if [ "$saw_any" = true ] && [ "$terminal" -ge "$node_count" ]; then
             break
         fi
         sleep "$interval"
