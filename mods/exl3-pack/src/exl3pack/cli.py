@@ -242,9 +242,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--work", default=None)
         p.add_argument("--exl3-out", default=None)
         p.add_argument("--v1-out", default=None)
-        # Shard range + shared recipe (parallel packing; see exl3-pack-shard.sh).
-        p.add_argument("--module-start", type=int, default=None)
-        p.add_argument("--max_module", type=int, default=None)
+        # Shared recipe (model-global quantization plan).
         p.add_argument("--recipe", default=None)
         p.add_argument("--cleanup", choices=("none", "work", "all"), default="all")
         p.set_defaults(func=_cmd_run_stage, stage=name)
@@ -318,8 +316,6 @@ def _cmd_run_stage(args: argparse.Namespace) -> int:
             work,
             bits=spec.bits,
             codebook=spec.codebook,
-            module_start=getattr(args, "module_start", None),
-            max_module=getattr(args, "max_module", None),
             extra_args=extra_args,
         )
         return 0
