@@ -28,3 +28,8 @@ wheels
 
 # Scratch findings/notes (local only)
 tmp/
+
+# Model-metadata snapshots (derived copies of the on-node HF checkpoint;
+# LFS-tracked and unpushable to the public fork). Regenerate from the source.
+mods/exl3-mimo/pro-source/model-metadata/
+mods/exl3-mimo/uncensored-source/model-metadata/

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Thin pack-build shim for mimo-v2.6-pro-rl-uncensored.
+# Delegates to the shared exl3pack CLI with this model's spec.
+set -euo pipefail
+SPEC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 -m exl3pack.cli --spec "${SPEC_DIR}/spec.py" "$@"

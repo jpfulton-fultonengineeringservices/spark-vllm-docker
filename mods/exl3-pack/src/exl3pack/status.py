@@ -1,14 +1,15 @@
-#!/usr/bin/env python3
 """Read and display the pack-build progress status file.
+
+Faithful port of the original ``pack-status.py``.
 
 Usage::
 
-    pack-status [--json] [--watch [INTERVAL]] [--delta N] [--interval S] [<status-file>]
+    status [--json] [--watch [INTERVAL]] [--delta N] [--interval S] [<status-file>]
 
-Default status file: ``/work/.pack-status.json`` (configurable via env
-``PACK_STATUS_FILE`` or as positional argument).
-
---watch mode refreshes every INTERVAL seconds (default 2). Press Ctrl-C to exit.
+Default status file: ``/work/.pack-status.json`` (env ``PACK_STATUS_FILE`` or a
+positional argument). ``--watch`` refreshes every INTERVAL seconds (default 2).
+The driver's ``poll()`` calls this as
+``status.py --delta <n> --interval <s> <file>``, so those flags MUST be parsed.
 """
 
 from __future__ import annotations
@@ -18,16 +19,15 @@ import os
 import signal
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
-def _status_path(args: list[str]) -> Path:
-    for a in args:
+def _status_path(pos_args: list[str]) -> Path:
+    for a in pos_args:
         if not a.startswith("-"):
             return Path(a)
-    env = os.environ.get("PACK_STATUS_FILE", "/work/.pack-status.json")
-    return Path(env)
+    return Path(os.environ.get("PACK_STATUS_FILE", "/work/.pack-status.json"))
 
 
 def _human_duration(seconds: float) -> str:
@@ -45,10 +45,10 @@ def _live_elapsed(started: str) -> float | None:
     if not started:
         return None
     try:
-        t = datetime.strptime(started, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        t = datetime.strptime(started, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
     except ValueError:
         return None
-    return max(0.0, (datetime.now(timezone.utc) - t).total_seconds())
+    return max(0.0, (datetime.now(UTC) - t).total_seconds())
 
 
 def _progress_bar(done: int, total: int, width: int = 30) -> str:
@@ -60,7 +60,22 @@ def _progress_bar(done: int, total: int, width: int = 30) -> str:
     return f"{bar} {done}/{total} {pct * 100:.0f}%"
 
 
-def _render(st: dict, delta: int = 0, interval: float = 0) -> str:
+def _coerce_float(value: object) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def _coerce_int(value: object) -> int:
+    return int(_coerce_float(value))
+
+
+def _render(st: dict[str, object], delta: int = 0, interval: float = 0) -> str:
     B = "\033[1m"
     G = "\033[32m"
     Y = "\033[33m"
@@ -80,18 +95,22 @@ def _render(st: dict, delta: int = 0, interval: float = 0) -> str:
 
     lines: list[str] = []
     stage = st.get("stage", "unknown")
-    lines.append(f"{B}    stage:{N} {color}{stage}"
-                 + (f" / {phase}" if phase else "")
-                 + f"{N}")
+    lines.append(
+        f"{B}    stage:{N} {color}{stage}" + (f" / {phase}" if phase else "") + f"{N}"
+    )
 
-    started = st.get("started_at", "")
+    started = str(st.get("started_at", ""))
     if started:
         lines.append(f"  started: {started}")
     last = st.get("last_update", "")
     if last:
         lines.append(f"  updated: {last}")
 
-    elapsed = st.get("elapsed_seconds")
+    elapsed: float | None = (
+        _coerce_float(st["elapsed_seconds"])
+        if st.get("elapsed_seconds") is not None
+        else None
+    )
     live = _live_elapsed(started)
     if live is not None:
         elapsed = live
@@ -101,16 +120,16 @@ def _render(st: dict, delta: int = 0, interval: float = 0) -> str:
     total = st.get("layers_total")
     done = st.get("layers_completed")
     if elapsed and elapsed > 0 and total and done is not None:
-        lpm = done / (elapsed / 60)
+        lpm = _coerce_int(done) / (elapsed / 60)
         lines.append(f"    rate: {lpm:.1f} layers/min")
 
     if total and done is not None:
-        pbar = _progress_bar(done, total)
+        pbar = _progress_bar(_coerce_int(done), _coerce_int(total))
         lines.append(f"progress: {pbar}")
 
     eta = st.get("eta_seconds")
-    if eta is not None and eta > 0:
-        lines.append(f"     ETA: {_human_duration(eta)} remaining")
+    if eta is not None and _coerce_float(eta) > 0:
+        lines.append(f"     ETA: {_human_duration(_coerce_float(eta))} remaining")
 
     if delta > 0 and interval > 0:
         rate = delta / (interval / 60)
@@ -135,7 +154,7 @@ def _render(st: dict, delta: int = 0, interval: float = 0) -> str:
     gpu = st.get("gpu_memory_used_mb")
     gpu_tot = st.get("gpu_memory_total_mb")
     if gpu is not None:
-        pct_g = f"({(gpu / gpu_tot * 100):.0f}%)" if gpu_tot else ""
+        pct_g = f"({(_coerce_float(gpu) / _coerce_float(gpu_tot) * 100):.0f}%)" if gpu_tot else ""
         lines.append(f" GPU mem: {gpu} MB / {gpu_tot or '?'} MB {pct_g}")
     disk = st.get("disk_free_gb")
     if disk is not None:
@@ -144,11 +163,11 @@ def _render(st: dict, delta: int = 0, interval: float = 0) -> str:
     errs = st.get("errors", [])
     if errs:
         lines.append(f"\n{R}errors:{N}")
-        for e in errs:
+        for e in errs if isinstance(errs, list) else [errs]:
             lines.append(f"  - {e}")
 
     model_info = st.get("model_info")
-    if model_info:
+    if isinstance(model_info, dict):
         lines.append("")
         lines.append("detected model geometry:")
         lines.append(f"  architecture:  {model_info.get('architecture', '?')}")
@@ -161,9 +180,10 @@ def _render(st: dict, delta: int = 0, interval: float = 0) -> str:
     return "\n".join(lines)
 
 
-def _load_status(path):
+def _load_status(path: Path) -> dict[str, object] | None:
     try:
-        return json.loads(path.read_text())
+        data = json.loads(path.read_text())
+        return data if isinstance(data, dict) else None
     except (OSError, ValueError):
         return None
 
@@ -222,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
                     if json_flag:
                         print(json.dumps(st, indent=2))
                     else:
-                        done = st.get("layers_completed", 0) or 0
+                        done = _coerce_int(st.get("layers_completed", 0) or 0)
                         delta = done - prev_done if prev_done >= 0 and done >= prev_done else 0
                         prev_done = done
                         print("\033[H\033[J", end="")

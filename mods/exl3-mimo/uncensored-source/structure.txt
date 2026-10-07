@@ -1,0 +1,394 @@
+SOURCE: /nas-1/models/mimo/mimo-v2.6-flash-rl-uncensored
+WORKING SOURCE (4x recipe): /nas-1/models/mimo/mimo-v2.6-flash-rl
+config.json identical to working source: True
+
+=== GEOMETRY (pack-model-info.py detect-equivalent) ===
+{
+  "source": "/nas-1/models/mimo/mimo-v2.6-flash-rl-uncensored",
+  "architecture": "MiMoV2ForCausalLM",
+  "hidden_size": 4096,
+  "intermediate_size": 2048,
+  "num_experts": 256,
+  "num_slots": 64,
+  "moe_layer_count": 47,
+  "moe_layers": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47
+  ],
+  "dense_layers": [
+    0
+  ],
+  "num_hidden_layers": 48,
+  "num_nextn_predict_layers": 3,
+  "n_shared_experts": null,
+  "num_experts_per_tok": 8,
+  "moe_layer_freq": [
+    0,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+  ],
+  "quantization_config": {
+    "activation_scheme": "dynamic",
+    "fmt": "e4m3",
+    "ignored_layers": [
+      "model.layers.0.self_attn.o_proj",
+      "model.layers.1.self_attn.o_proj",
+      "model.layers.10.self_attn.o_proj",
+      "model.layers.11.self_attn.o_proj",
+      "model.layers.12.self_attn.o_proj",
+      "model.layers.13.self_attn.o_proj",
+      "model.layers.14.self_attn.o_proj",
+      "model.layers.15.self_attn.o_proj",
+      "model.layers.16.self_attn.o_proj",
+      "model.layers.17.self_attn.o_proj",
+      "model.layers.18.self_attn.o_proj",
+      "model.layers.19.self_attn.o_proj",
+      "model.layers.2.self_attn.o_proj",
+      "model.layers.20.self_attn.o_proj",
+      "model.layers.21.self_attn.o_proj",
+      "model.layers.22.self_attn.o_proj",
+      "model.layers.23.self_attn.o_proj",
+      "model.layers.24.self_attn.o_proj",
+      "model.layers.25.self_attn.o_proj",
+      "model.layers.26.self_attn.o_proj",
+      "model.layers.27.self_attn.o_proj",
+      "model.layers.28.self_attn.o_proj",
+      "model.layers.29.self_attn.o_proj",
+      "model.layers.3.self_attn.o_proj",
+      "model.layers.30.self_attn.o_proj",
+      "model.layers.31.self_attn.o_proj",
+      "model.layers.32.self_attn.o_proj",
+      "model.layers.33.self_attn.o_proj",
+      "model.layers.34.self_attn.o_proj",
+      "model.layers.35.self_attn.o_proj",
+      "model.layers.36.self_attn.o_proj",
+      "model.layers.37.self_attn.o_proj",
+      "model.layers.38.self_attn.o_proj",
+      "model.layers.39.self_attn.o_proj",
+      "model.layers.4.self_attn.o_proj",
+      "model.layers.40.self_attn.o_proj",
+      "model.layers.41.self_attn.o_proj",
+      "model.layers.42.self_attn.o_proj",
+      "model.layers.43.self_attn.o_proj",
+      "model.layers.44.self_attn.o_proj",
+      "model.layers.45.self_attn.o_proj",
+      "model.layers.46.self_attn.o_proj",
+      "model.layers.47.self_attn.o_proj",
+      "model.layers.5.self_attn.o_proj",
+      "model.layers.6.self_attn.o_proj",
+      "model.layers.7.self_attn.o_proj",
+      "model.layers.8.self_attn.o_proj",
+      "model.layers.9.self_attn.o_proj",
+      "model.decoder.self_attn.o_proj"
+    ],
+    "mxfp4_block_size": 32,
+    "quant_method": "fp8",
+    "store_dtype": "mxfp4",
+    "weight_block_size": [
+      128,
+      128
+    ]
+  },
+  "index_metadata": {
+    "save_format": "mxfp4",
+    "total_size": 172923364096,
+    "tp_size": 4
+  },
+  "weight_map_tensor_count": 73081,
+  "weight_map_shard_count": 65
+}
+
+=== SHARD SUMMARY ===
+model_mtp.safetensors                         tensors=   48 bytes=1189405960
+model_pp0_ep0_shard0.safetensors              tensors= 1969 bytes=13387692416
+model_pp0_ep10_shard0.safetensors             tensors= 1128 bytes=2513577216
+model_pp0_ep11_shard0.safetensors             tensors= 1128 bytes=2513577216
+model_pp0_ep12_shard0.safetensors             tensors= 1128 bytes=2513577216
+model_pp0_ep13_shard0.safetensors             tensors= 1128 bytes=2513577216
+model_pp0_ep14_shard0.safetensors             tensors= 1128 bytes=2513577216
+model_pp0_ep15_shard0.safetensors             tensors= 1128 bytes=2513577216
+model_pp0_ep16_shard0.safetensors             tensors= 1128 bytes=2513577216
+model_pp0_ep17_shard0.safetensors             tensors= 1128 bytes=2513577216
+model_pp0_ep18_shard0.safetensors             tensors= 1128 bytes=2513577216
+model_pp0_ep19_shard0.safetensors             tensors= 1128 bytes=2513577216
+model_pp0_ep1_shard0.safetensors              tensors= 1128 bytes=2513576088
+model_pp0_ep20_shard0.safetensors             tensors= 1128 bytes=2513577216
+model_pp0_ep21_shard0.safetensors             tensors= 1128 bytes=2513577216
+model_pp0_ep22_shard0.safetensors             tensors= 1128 bytes=2513577216
+model_pp0_ep23_shard0.safetensors             tensors= 1128 bytes=2513577216
+model_pp0_ep24_shard0.safetensors             tensors= 1128 bytes=2513577216
+model_pp0_ep25_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep26_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep27_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep28_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep29_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep2_shard0.safetensors              tensors= 1128 bytes=2513576656
+model_pp0_ep30_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep31_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep32_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep33_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep34_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep35_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep36_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep37_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep38_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep39_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep3_shard0.safetensors              tensors= 1128 bytes=2513577216
+model_pp0_ep40_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep41_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep42_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep43_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep44_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep45_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep46_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep47_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep48_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep49_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep4_shard0.safetensors              tensors= 1128 bytes=2513577216
+model_pp0_ep50_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep51_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep52_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep53_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep54_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep55_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep56_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep57_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep58_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep59_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep5_shard0.safetensors              tensors= 1128 bytes=2513577216
+model_pp0_ep60_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep61_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep62_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep63_shard0.safetensors             tensors= 1128 bytes=2513578344
+model_pp0_ep6_shard0.safetensors              tensors= 1128 bytes=2513577216
+model_pp0_ep7_shard0.safetensors              tensors= 1128 bytes=2513577216
+model_pp0_ep8_shard0.safetensors              tensors= 1128 bytes=2513577216
+model_pp0_ep9_shard0.safetensors              tensors= 1128 bytes=2513577216
+
+=== EXPERT SHARD MAP ===
+model_pp0_ep0_shard0.safetensors: experts=4 range=0..3 layers=47
+model_pp0_ep2_shard0.safetensors: experts=4 range=8..11 layers=47
+model_pp0_ep25_shard0.safetensors: experts=4 range=100..103 layers=47
+model_pp0_ep26_shard0.safetensors: experts=4 range=104..107 layers=47
+model_pp0_ep27_shard0.safetensors: experts=4 range=108..111 layers=47
+model_pp0_ep28_shard0.safetensors: experts=4 range=112..115 layers=47
+model_pp0_ep29_shard0.safetensors: experts=4 range=116..119 layers=47
+model_pp0_ep3_shard0.safetensors: experts=4 range=12..15 layers=47
+model_pp0_ep30_shard0.safetensors: experts=4 range=120..123 layers=47
+model_pp0_ep31_shard0.safetensors: experts=4 range=124..127 layers=47
+model_pp0_ep32_shard0.safetensors: experts=4 range=128..131 layers=47
+model_pp0_ep33_shard0.safetensors: experts=4 range=132..135 layers=47
+model_pp0_ep34_shard0.safetensors: experts=4 range=136..139 layers=47
+model_pp0_ep35_shard0.safetensors: experts=4 range=140..143 layers=47
+model_pp0_ep36_shard0.safetensors: experts=4 range=144..147 layers=47
+model_pp0_ep37_shard0.safetensors: experts=4 range=148..151 layers=47
+model_pp0_ep38_shard0.safetensors: experts=4 range=152..155 layers=47
+model_pp0_ep39_shard0.safetensors: experts=4 range=156..159 layers=47
+model_pp0_ep4_shard0.safetensors: experts=4 range=16..19 layers=47
+model_pp0_ep40_shard0.safetensors: experts=4 range=160..163 layers=47
+model_pp0_ep41_shard0.safetensors: experts=4 range=164..167 layers=47
+model_pp0_ep42_shard0.safetensors: experts=4 range=168..171 layers=47
+model_pp0_ep43_shard0.safetensors: experts=4 range=172..175 layers=47
+model_pp0_ep44_shard0.safetensors: experts=4 range=176..179 layers=47
+model_pp0_ep45_shard0.safetensors: experts=4 range=180..183 layers=47
+model_pp0_ep46_shard0.safetensors: experts=4 range=184..187 layers=47
+model_pp0_ep47_shard0.safetensors: experts=4 range=188..191 layers=47
+model_pp0_ep48_shard0.safetensors: experts=4 range=192..195 layers=47
+model_pp0_ep49_shard0.safetensors: experts=4 range=196..199 layers=47
+model_pp0_ep5_shard0.safetensors: experts=4 range=20..23 layers=47
+model_pp0_ep50_shard0.safetensors: experts=4 range=200..203 layers=47
+model_pp0_ep51_shard0.safetensors: experts=4 range=204..207 layers=47
+model_pp0_ep52_shard0.safetensors: experts=4 range=208..211 layers=47
+model_pp0_ep53_shard0.safetensors: experts=4 range=212..215 layers=47
+model_pp0_ep54_shard0.safetensors: experts=4 range=216..219 layers=47
+model_pp0_ep55_shard0.safetensors: experts=4 range=220..223 layers=47
+model_pp0_ep56_shard0.safetensors: experts=4 range=224..227 layers=47
+model_pp0_ep57_shard0.safetensors: experts=4 range=228..231 layers=47
+model_pp0_ep58_shard0.safetensors: experts=4 range=232..235 layers=47
+model_pp0_ep59_shard0.safetensors: experts=4 range=236..239 layers=47
+model_pp0_ep6_shard0.safetensors: experts=4 range=24..27 layers=47
+model_pp0_ep60_shard0.safetensors: experts=4 range=240..243 layers=47
+model_pp0_ep61_shard0.safetensors: experts=4 range=244..247 layers=47
+model_pp0_ep62_shard0.safetensors: experts=4 range=248..251 layers=47
+model_pp0_ep63_shard0.safetensors: experts=4 range=252..255 layers=47
+model_pp0_ep7_shard0.safetensors: experts=4 range=28..31 layers=47
+model_pp0_ep8_shard0.safetensors: experts=4 range=32..35 layers=47
+model_pp0_ep9_shard0.safetensors: experts=4 range=36..39 layers=47
+model_pp0_ep1_shard0.safetensors: experts=4 range=4..7 layers=47
+model_pp0_ep10_shard0.safetensors: experts=4 range=40..43 layers=47
+model_pp0_ep11_shard0.safetensors: experts=4 range=44..47 layers=47
+model_pp0_ep12_shard0.safetensors: experts=4 range=48..51 layers=47
+model_pp0_ep13_shard0.safetensors: experts=4 range=52..55 layers=47
+model_pp0_ep14_shard0.safetensors: experts=4 range=56..59 layers=47
+model_pp0_ep15_shard0.safetensors: experts=4 range=60..63 layers=47
+model_pp0_ep16_shard0.safetensors: experts=4 range=64..67 layers=47
+model_pp0_ep17_shard0.safetensors: experts=4 range=68..71 layers=47
+model_pp0_ep18_shard0.safetensors: experts=4 range=72..75 layers=47
+model_pp0_ep19_shard0.safetensors: experts=4 range=76..79 layers=47
+model_pp0_ep20_shard0.safetensors: experts=4 range=80..83 layers=47
+model_pp0_ep21_shard0.safetensors: experts=4 range=84..87 layers=47
+model_pp0_ep22_shard0.safetensors: experts=4 range=88..91 layers=47
+model_pp0_ep23_shard0.safetensors: experts=4 range=92..95 layers=47
+model_pp0_ep24_shard0.safetensors: experts=4 range=96..99 layers=47
+
+=== KEY TEMPLATES ===
+     6  audio_encoder.input_local_transformer.layers.<N>.input_layernorm.weight
+     6  audio_encoder.input_local_transformer.layers.<N>.mlp.down_proj.weight
+     6  audio_encoder.input_local_transformer.layers.<N>.mlp.gate_proj.weight
+     6  audio_encoder.input_local_transformer.layers.<N>.mlp.up_proj.weight
+     6  audio_encoder.input_local_transformer.layers.<N>.post_attention_layernorm.weight
+     6  audio_encoder.input_local_transformer.layers.<N>.self_attn.k_proj.bias
+     6  audio_encoder.input_local_transformer.layers.<N>.self_attn.k_proj.weight
+     6  audio_encoder.input_local_transformer.layers.<N>.self_attn.o_proj.weight
+     6  audio_encoder.input_local_transformer.layers.<N>.self_attn.q_proj.bias
+     6  audio_encoder.input_local_transformer.layers.<N>.self_attn.q_proj.weight
+     6  audio_encoder.input_local_transformer.layers.<N>.self_attn.v_proj.bias
+     6  audio_encoder.input_local_transformer.layers.<N>.self_attn.v_proj.weight
+     1  audio_encoder.input_local_transformer.norm.weight
+     2  audio_encoder.projection.mlp.<N>.weight
+     1  lm_head.weight
+     1  model.embed_tokens.weight
+    48  model.layers.<N>.input_layernorm.weight
+     1  model.layers.<N>.mlp.down_proj.weight
+     1  model.layers.<N>.mlp.down_proj.weight_scale_inv
+ 12032  model.layers.<N>.mlp.experts.<E>.down_proj.weight
+ 12032  model.layers.<N>.mlp.experts.<E>.down_proj.weight_scale
+ 12032  model.layers.<N>.mlp.experts.<E>.gate_proj.weight
+ 12032  model.layers.<N>.mlp.experts.<E>.gate_proj.weight_scale
+ 12032  model.layers.<N>.mlp.experts.<E>.up_proj.weight
+ 12032  model.layers.<N>.mlp.experts.<E>.up_proj.weight_scale
+    47  model.layers.<N>.mlp.gate.e_score_correction_bias
+    47  model.layers.<N>.mlp.gate.weight
+     1  model.layers.<N>.mlp.gate_proj.weight
+     1  model.layers.<N>.mlp.gate_proj.weight_scale_inv
+     1  model.layers.<N>.mlp.up_proj.weight
+     1  model.layers.<N>.mlp.up_proj.weight_scale_inv
+    48  model.layers.<N>.post_attention_layernorm.weight
+    39  model.layers.<N>.self_attn.attention_sink_bias
+    48  model.layers.<N>.self_attn.o_proj.weight
+    48  model.layers.<N>.self_attn.qkv_proj.weight
+    48  model.layers.<N>.self_attn.qkv_proj.weight_scale_inv
+     3  model.mtp.layers.<N>.eh_proj.weight
+     3  model.mtp.layers.<N>.enorm.weight
+     3  model.mtp.layers.<N>.final_layernorm.weight
+     3  model.mtp.layers.<N>.hnorm.weight
+     3  model.mtp.layers.<N>.input_layernorm.weight
+     3  model.mtp.layers.<N>.mlp.down_proj.weight
+     3  model.mtp.layers.<N>.mlp.down_proj.weight_scale_inv
+     3  model.mtp.layers.<N>.mlp.gate_proj.weight
+     3  model.mtp.layers.<N>.mlp.gate_proj.weight_scale_inv
+     3  model.mtp.layers.<N>.mlp.up_proj.weight
+     3  model.mtp.layers.<N>.mlp.up_proj.weight_scale_inv
+     3  model.mtp.layers.<N>.pre_mlp_layernorm.weight
+     3  model.mtp.layers.<N>.self_attn.attention_sink_bias
+     3  model.mtp.layers.<N>.self_attn.o_proj.weight
+     3  model.mtp.layers.<N>.self_attn.qkv_proj.weight
+     3  model.mtp.layers.<N>.self_attn.qkv_proj.weight_scale_inv
+     1  model.norm.weight
+    20  speech_embeddings.<N>.weight
+    28  visual.blocks.<N>.attn.proj.bias
+    28  visual.blocks.<N>.attn.proj.weight
+    28  visual.blocks.<N>.attn.qkv.bias
+    28  visual.blocks.<N>.attn.qkv.weight
+    24  visual.blocks.<N>.attn.sinks
+    28  visual.blocks.<N>.mlp.down_proj.bias
+    28  visual.blocks.<N>.mlp.down_proj.weight
+    28  visual.blocks.<N>.mlp.gate_proj.bias
+    28  visual.blocks.<N>.mlp.gate_proj.weight
+    28  visual.blocks.<N>.mlp.up_proj.bias
+    28  visual.blocks.<N>.mlp.up_proj.weight
+    28  visual.blocks.<N>.norm1.weight
+    28  visual.blocks.<N>.norm2.weight
+     1  visual.merger.ln_q.weight
+     2  visual.merger.mlp.<N>.weight
+     1  visual.patch_embed.proj.weight
