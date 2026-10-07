@@ -46,6 +46,8 @@ def run(
     *,
     bits: int,
     codebook: str,
+    module_start: int | None = None,
+    max_module: int | None = None,
     extra_args: list[str] | None = None,
     status_file: Path | None = None,
     progress: Callable[[str], None] = lambda s: print(s, flush=True),
@@ -76,6 +78,12 @@ def run(
         layers_total=total_layers,
     )
 
+    range_flags: list[str] = []
+    if module_start is not None:
+        range_flags += ["--module-start", str(module_start)]
+    if max_module is not None:
+        range_flags += ["--max_module", str(max_module)]
+
     cmd = [
         sys.executable,
         "-u",
@@ -92,6 +100,7 @@ def run(
         "-cb",
         codebook,
         *resume_flag,
+        *range_flags,
         *(extra_args or []),
     ]
     proc = subprocess.Popen(

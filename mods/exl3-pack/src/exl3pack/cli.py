@@ -1,6 +1,6 @@
 """exl3-pack CLI.
 
-Subcommands: ``detect | convert | repack | assemble | pipeline | status |
+Subcommands: ``detect | convert | repack | assemble | pipeline | recipe | status |
 selftest | plan``. A model is selected with ``--spec <spec.py>`` or
 ``--model <slug> --specs-root <dir>``. ``--dry-run`` (or ``plan``) prints the
 resolved paths + docker mount plan without executing anything.
@@ -80,6 +80,57 @@ def _cmd_plan(args: argparse.Namespace) -> int:
         "note": "output written to NAS; work/intermediate on node-local NVMe and removed after",
     }
     print(json.dumps(plan, indent=2))
+    return 0
+
+
+def _cmd_recipe(args: argparse.Namespace) -> int:
+    spec = _resolve_spec(args)
+    if spec is None:
+        print("recipe requires --spec or --model", file=sys.stderr)
+        return 2
+
+    node_map = paths.load_node_map(Path(args.node_map))
+    source = Path(args.source) if args.source else paths.resolve_source(
+        node_map, args.node or "", spec.node_map_key or spec.slug
+    )
+    work_root = paths.resolve_work_root(
+        node_map,
+        args.node or "",
+        local_root=Path(args.local_root) if args.local_root else None,
+    )
+    work = Path(args.work) if args.work else work_root / f"{spec.slug}-work-k{spec.bits}"
+    out = Path(args.out) if args.out else work / "recipe.yaml"
+
+    if args.dry_run:
+        from . import recipe
+
+        print(json.dumps(
+            recipe.dry_run_plan(
+                source,
+                work,
+                slug=spec.slug,
+                codebook=spec.codebook,
+                bits=spec.bits,
+                out=out,
+            ),
+            indent=2,
+        ))
+        return 0
+    if source is None:
+        print("could not resolve a source checkpoint", file=sys.stderr)
+        return 2
+
+    from . import recipe
+
+    result = recipe.emit(
+        source,
+        out,
+        bits=spec.bits,
+        codebook=spec.codebook,
+        head_bits=args.head_bits,
+        hq=args.hq,
+    )
+    print(f"recipe written: {result}")
     return 0
 
 
@@ -176,12 +227,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--v1-out", default=None)
     p.set_defaults(func=_cmd_plan)
 
+    p = sub.add_parser("recipe")
+    p.add_argument("--source", default=None)
+    p.add_argument("--work", default=None)
+    p.add_argument("--out", default=None)
+    p.add_argument("--head-bits", type=float, default=None)
+    p.add_argument("--hq", action="store_true")
+    p.add_argument("--dry-run", action="store_true", default=argparse.SUPPRESS)
+    p.set_defaults(func=_cmd_recipe)
+
     for name in ("convert", "repack", "assemble", "pipeline"):
         p = sub.add_parser(name)
         p.add_argument("--source", default=None)
         p.add_argument("--work", default=None)
         p.add_argument("--exl3-out", default=None)
         p.add_argument("--v1-out", default=None)
+        # Shard range + shared recipe (parallel packing; see exl3-pack-shard.sh).
+        p.add_argument("--module-start", type=int, default=None)
+        p.add_argument("--max_module", type=int, default=None)
+        p.add_argument("--recipe", default=None)
         p.add_argument("--cleanup", choices=("none", "work", "all"), default="all")
         p.set_defaults(func=_cmd_run_stage, stage=name)
 
@@ -247,7 +311,17 @@ def _cmd_run_stage(args: argparse.Namespace) -> int:
     if args.stage == "convert":
         from . import convert
 
-        convert.run(source, exl3_out, work, bits=spec.bits, codebook=spec.codebook)
+        extra_args = ["--recipe", args.recipe] if getattr(args, "recipe", None) else None
+        convert.run(
+            source,
+            exl3_out,
+            work,
+            bits=spec.bits,
+            codebook=spec.codebook,
+            module_start=getattr(args, "module_start", None),
+            max_module=getattr(args, "max_module", None),
+            extra_args=extra_args,
+        )
         return 0
     if args.stage == "repack":
         from . import repack
