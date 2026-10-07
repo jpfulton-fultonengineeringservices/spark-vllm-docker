@@ -1,0 +1,98 @@
+# Recipe: PD-disaggregated MiMo-V2.6 EXL3 prefill + source decode (3-node GB10)
+#
+# Concept: one rank-0 prefill instance serves the EXL3-v1 MiMo pack with
+# tensor-parallel=1 (kv_role kv_producer); ranks 1..2 run the source-precision
+# decode instance tensor-parallel=2 (kv_role kv_consumer). NIXL moves KV from
+# prefill to decode. A toy_proxy_server on the shared rank-0 node routes
+# completions.
+#
+# This recipe is a cluster-only, research target. It is intentionally
+# conservative: it defines the minimum viable PD shape for the 3-node cap
+# described in tmp/spark-vllm-docker/3node-serving-config-proposals.md.
+#
+# Required runtime mods (applied via `mods:` list below):
+#   - mods/fes-weights              staged-weight hub-cache shim
+#   - mods/mimo-v2.6-flash          DFlash drafter staging
+#   - mods/mimo-diffkv-fp8-kv       DiffKV + fp8 KV layout fix
+#   - mods/kv-cache-guard-override  skip 1M-token single-request guard
+#   - mods/exl3-mimo                EXL3-to-MiMo runtime patch
+#   - mods/pd-disagg                this mod (NIXL + role dispatcher)
+#   - mods/b12x-kernel-cache        B12X kernel cache wrapper
+# PENDING (parity track):
+#   - {{mods/exl3-tp1}}             EXL3 TP=1 fork patch; not yet authored
+#
+# Acceptance gate (before accepting PD traffic):
+#   - nixl_bytes_transferred > 0 on decode side AND no nixl_num_failed_transfers.
+#   - toy_proxy_server reachable on PD_ROUTER_PORT, /v1/models lists both.
+
+recipe_version: "1"
+name: MiMo-V2.6-Flash-RL PD-Disaggregated EXL3
+
+# Model field points to the source-precision hub id used by --setup/--download-model.
+# The actual decode weights are staged by mods/fes-weights; prefill weights are
+# the EXL3-v1 pack referenced via PD_EXL3_MODEL_ID in env below.
+model: XiaomiMiMo/MiMo-V2.6-Flash-RL
+
+container: vllm-node-b12x
+
+build_args:
+ - --exp-b12x
+
+cluster_only:
+
+mods:
+ - mods/fes-weights
+ - mods/mimo-v2.6-flash
+ - mods/mimo-diffkv-fp8-kv
+ - mods/kv-cache-guard-override
+ - mods/exl3-mimo
+ - mods/pd-disagg
+ - mods/b12x-kernel-cache
+
+defaults:
+ # router / API ports
+ port: 8000
+ pd_router_port: 8000
+ pd_prefill_port: 8100
+ pd_decode_port: 8200
+ pd_nixl_port: 5600
+ pd_decode_master_port: 29502
+ # TP values are intentionally NOT inline integers in `command:` to avoid
+ # launch-cluster.sh's parse_parallelism_from_text() footgun.  They travel
+ # via env as variables.
+ pd_tp_prefill: 1
+ pd_tp_decode: 2
+ # decode-master IP must be set to the first worker node (rank 1) IP.
+ pd_decode_master_addr: ""
+ # DFlash speculative-decoding depth; hash-enforced between prefill and decode.
+ num_speculative_tokens: 7
+ # common args shared across roles
+ max_model_len: 1048576
+ block_size: 128
+ max_num_seqs: 32
+ max_num_batched_tokens: 16384
+
+env:
+ # Enable this mod and dispatcher.
+ PD_DISAGG_ENABLED: "1"
+ # Router runs on the shared rank-0 node.
+ PD_ROUTER_ENABLED: "1"
+ # Use the B12X kernel-cache wrapper (provided by mods/b12x-kernel-cache).
+ PD_VLLM_SERVE: "b12x-kcache exec vllm serve"
+ # Source checkpoint for decode instance and drafter staging.
+ MIMO_V26_MODEL_ID: "XiaomiMiMo/MiMo-V2.6-Flash-RL"
+ # EXL3 assembled pack served on the prefill node.
+ PD_EXL3_MODEL: "XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3"
+ # b12x / MiMo runtime flags (mirrors mimo-v2.6-flash-4x.yaml).
+ CUTE_DSL_ARCH: "sm_121a"
+ VLLM_USE_V2_MODEL_RUNNER: "1"
+ VLLM_SKIP_KV_CACHE_MEMORY_CHECK: "1"
+ # Offline hub cache only (fes-weights shim provides the files).
+ HF_HUB_OFFLINE: "1"
+
+# Single-line command on purpose: launch-cluster.sh appends the outer-engine
+# multi-node args to the LAST line of the generated launch script.  The actual
+# per-role vLLM command is assembled inside dispatch.sh, where tensor-parallel
+# values are variables (PD_TP_PREFILL / PD_TP_DECODE), NOT literal integers in
+# this recipe text.  This avoids parse_parallelism_from_text() mis-trimming.
+command: PD_NIXL_PORT={pd_nixl_port} PD_PREFILL_PORT={pd_prefill_port} PD_DECODE_PORT={pd_decode_port} PD_ROUTER_PORT={pd_router_port} PD_NUM_SPECULATIVE_TOKENS={num_speculative_tokens} PD_TP_PREFILL={pd_tp_prefill} PD_TP_DECODE={pd_tp_decode} PD_DECODE_MASTER_PORT={pd_decode_master_port} PD_DECODE_MASTER_ADDR='{pd_decode_master_addr}' bash /workspace/mods/pd-disagg/dispatch.sh
