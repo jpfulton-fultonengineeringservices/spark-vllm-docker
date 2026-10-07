@@ -61,7 +61,6 @@ RUN set -eux; \
 # --- shared library (importable via PYTHONPATH; no build backend needed)
 COPY mods/exl3-pack/src /opt/exl3-pack/src
 COPY mods/exl3-pack/tools /opt/exl3-pack/tools
-RUN python3 /opt/exl3-pack/tools/patch_convert_shard.py
 
 # --- per-model specs baked under the specs root
 COPY mods/mimo-v2.6-flash-rl-uncensored/pack-build /opt/exl3-specs/mimo-v2.6-flash-rl-uncensored/pack-build
