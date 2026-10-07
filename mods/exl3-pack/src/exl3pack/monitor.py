@@ -105,6 +105,11 @@ def write_status(
         except (json.JSONDecodeError, OSError):
             current = {}
     current.update(fields)
+    # `errors` is transient: the original monitor rewrote the whole file each
+    # call, so a surviving `errors` from a prior failed run must not linger once
+    # a new write omits it (otherwise a healthy re-run shows a stale error).
+    if "errors" not in fields:
+        current.pop("errors", None)
     current["started_at"] = started_at
     current["last_update"] = _utc_now()
     mem = _gpu_memory_mb()
