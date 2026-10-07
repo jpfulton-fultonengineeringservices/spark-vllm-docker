@@ -83,5 +83,21 @@ def test_merge_missing_shared_fails(tmp_path) -> None:
         )
 
 
+def test_merge_ignores_non_tensor_artifacts(tmp_path) -> None:
+    d0 = tmp_path / "node0"
+    d1 = tmp_path / "node1"
+    _make_shard(d0, [0], ["model.embed_tokens.safetensors"])
+    _make_shard(d1, [1])
+    # Each shard writes its own manifest/recipe JSON; these are not tensors and
+    # must be skipped (not promoted, not overlap-aborted), even when duplicated.
+    for d in (d0, d1):
+        (d / "qtensors" / "manifest.json").write_text('{"layers": 1}')
+        (d / "qtensors" / "recipe.yaml").write_text("tensors: {}\n")
+    receipt = merge([d0, d1], tmp_path / "out", expected_layers={0, 1})
+    assert set(receipt["shared"]) == {"model.embed_tokens.safetensors"}
+    assert not (tmp_path / "out" / "qtensors" / "manifest.json").exists()
+    assert not (tmp_path / "out" / "qtensors" / "recipe.yaml").exists()
+
+
 def test_parse_layer_spec() -> None:
     assert parse_layer_spec("0-2,5") == {0, 1, 2, 5}

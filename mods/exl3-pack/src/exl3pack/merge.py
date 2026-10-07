@@ -44,6 +44,11 @@ def collect(work_dirs: list[Path]) -> tuple[dict[int, FileRecord], dict[str, Fil
             if not p.is_file():
                 continue
             name = p.name
+            # Only safetensors files are tensors the merge promotes; non-tensor
+            # artifacts (manifest/job/recipe JSON, etc.) carry no ownership and
+            # must be skipped, not promoted, and never trip the overlap check.
+            if not name.endswith(".safetensors"):
+                continue
             m = _LAYER_FILE_RE.match(name)
             if m:
                 layer_num = int(m.group(1))

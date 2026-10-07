@@ -55,16 +55,11 @@ def plan_shards(
     return result
 
 
-def module_args(shard_or_start: Shard | int, end: int | None = None) -> list[str]:
+def module_args(shard: Shard) -> list[str]:
     """Return convert_model's absolute inclusive module-range arguments."""
-    if isinstance(shard_or_start, Shard):
-        start, last = shard_or_start.module_start, shard_or_start.module_end
-    else:
-        if end is None:
-            raise TypeError("end is required when start is an integer")
-        start, last = shard_or_start, end
+    start, last = shard.module_start, shard.module_end
     if start < 0 or last < start:
-        raise ValueError("invalid module range")
+        raise ValueError("invalid module range in shard")
     return ["--module-start", str(start), "--max_module", str(last)]
 
 
