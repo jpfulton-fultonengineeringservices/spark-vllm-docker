@@ -64,13 +64,16 @@ the source model (minus routed experts) + the `exl3-v1` container + an
 `exl3` `quantization_config`:
 
 ```bash
-pack-build assemble <src> <exl3-v1> <serve-out>
+exl3-pack --model <model> assemble --source <src> --exl3-out <exl3-v1> --v1-out <serve-out>
+# or via the node driver:
+scripts/exl3-pack-drive.sh assemble --host <node> --model <model> <src> <exl3-v1> <serve-out>
 ```
 
 The output is a normal-looking HF checkpoint that the FES weight-staging path
 (`model-weights.sh stage` → `/opt/llm/models/<slug>` → `mods/fes-weights` hub
 shim) stages and the recipe serves. See `EXL3_MIMO_PACK.md` and
-`pack-build/NEW_MODEL.md`.
+`../exl3-pack/NEW_MODEL.md` (the builder now lives in the shared
+`mods/exl3-pack/` library + per-model `mods/<model>/pack-build/` specs).
 
 ## Provenance / licensing
 

@@ -1,0 +1,104 @@
+{
+  "schema": "node-model-map/v1",
+  "probed_at": "2026-10-07",
+  "local_root": "/opt/llm",
+  "notes": "Only node3 and node4 hold a complete new-source checkpoint (Flash-uncensored / Pro-uncensored). node1's uncensored copy is a 2.3 GB partial; node1/node2 hold only the Flash base + existing packs. No Pro checkpoint exists on node1/node2 or on /nas-1 beyond node4's local copy's NAS twin.",
+  "nodes": {
+    "gx10-becc": {
+      "alias": "home-gx10-node3",
+      "cluster_node": "node3",
+      "local_root": "/opt/llm",
+      "checkpoints": {
+        "mimo-v2.6-flash-rl-uncensored": {
+          "path": "/opt/llm/staging/mimo-v2.6-flash-rl-uncensored",
+          "role": "source",
+          "shards": 65,
+          "save_format": "mxfp4",
+          "tp_size": 4,
+          "bytes": 177767700349
+        },
+        "mimo-v2.6-flash-rl": {
+          "path": "/opt/llm/models/mimo-v2.6-flash-rl",
+          "role": "source",
+          "shards": 65,
+          "save_format": "mxfp4",
+          "tp_size": 4,
+          "bytes": 177767644228
+        },
+        "mimo-v2.6-flash-rl-exl3-v1": {
+          "path": "/opt/llm/models/mimo-v2.6-flash-rl-exl3-v1",
+          "role": "pack",
+          "shards": 54,
+          "bytes": 146802930856
+        }
+      }
+    },
+    "gx10-9273": {
+      "alias": "home-gx10-node4",
+      "cluster_node": "node4",
+      "local_root": "/opt/llm",
+      "checkpoints": {
+        "mimo-v2.6-pro-rl-uncensored": {
+          "path": "/opt/llm/staging/mimo-v2.6-pro-rl-uncensored",
+          "role": "source",
+          "shards": 130,
+          "save_format": "mxfp4",
+          "tp_size": 8,
+          "bytes": 573492122232
+        },
+        "mimo-v2.6-flash-rl": {
+          "path": "/opt/llm/models/mimo-v2.6-flash-rl",
+          "role": "source",
+          "shards": 65,
+          "save_format": "mxfp4",
+          "tp_size": 4,
+          "bytes": 177767644228
+        },
+        "mimo-v2.6-flash-rl-exl3-v1": {
+          "path": "/opt/llm/models/mimo-v2.6-flash-rl-exl3-v1",
+          "role": "pack",
+          "shards": 54,
+          "bytes": 146802930856
+        }
+      }
+    },
+    "gx10-cb11": {
+      "alias": "home-gx10-node1",
+      "cluster_node": "node1",
+      "local_root": "/opt/llm",
+      "checkpoints": {
+        "mimo-v2.6-flash-rl": {
+          "path": "/opt/llm/models/mimo-v2.6-flash-rl",
+          "role": "source",
+          "shards": 65,
+          "save_format": "mxfp4",
+          "tp_size": 4
+        },
+        "mimo-v2.6-flash-rl-exl3-v1": {
+          "path": "/opt/llm/models/mimo-v2.6-flash-rl-exl3-v1",
+          "role": "pack",
+          "shards": 54
+        }
+      }
+    },
+    "gx10-f1d8": {
+      "alias": "home-gx10-node2",
+      "cluster_node": "node2",
+      "local_root": "/opt/llm",
+      "checkpoints": {
+        "mimo-v2.6-flash-rl": {
+          "path": "/opt/llm/models/mimo-v2.6-flash-rl",
+          "role": "source",
+          "shards": 65,
+          "save_format": "mxfp4",
+          "tp_size": 4
+        },
+        "mimo-v2.6-flash-rl-exl3-v1": {
+          "path": "/opt/llm/models/mimo-v2.6-flash-rl-exl3-v1",
+          "role": "pack",
+          "shards": 54
+        }
+      }
+    }
+  }
+}

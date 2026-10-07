@@ -21,16 +21,19 @@
 #   watch     <output>                      live progress, refresh each poll
 #   help
 #
-# Global options (before or after the subcommand):
-#   -H, --host <alias>       SSH host alias; REQUIRED (no default)
-#   -u, --user <user>        remote user (default: ssh_config alias's user)
-#   --tag <tag>              image tag (default: exl3-pack:cu13.0)
-#   --status-file <path>     override derived status file path
-#   --name <name>            container name (default: exl3-pack-job)
-#   --no-sync                skip rsync of build context
-#   --no-build               skip docker build (assume image exists)
-#   --detach                 don't stream progress; print container + status
-#   --interval <sec>         poll interval (default: 5)
+# Global options (before or after subcommand):
+#   -H, --host <alias>      SSH host alias; REQUIRED (no default)
+#   -u, --user <user>       remote user (default: ssh_config alias's user)
+#   --tag <tag>             image tag (default: exl3-pack:cu13.0)
+#   --model <slug>          per-model spec to select (e.g. mimo-v2.6-pro-rl-uncensored)
+#   --local-root <path>     node-local checkpoint root to mount (default: /opt/llm)
+#   --status-file <path>    override derived status file path
+#   --name <name>           container name (default: exl3-pack-job)
+#   --no-sync               skip rsync of build context
+#   --no-build              skip docker build (assume image exists)
+#   --detach                don't stream progress; print container + status
+#   --dry-run               print the docker run command + mounts; do not run
+#   --interval <sec>        poll interval (default: 5)
 #
 # The progress status file defaults to <output>/.pack-status.json, where
 # <output> is the exl3 pack dir (convert) or the exl3-v1 dir (repack/pipeline).
@@ -39,7 +42,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-PACK_STATUS_BIN="${REPO_ROOT}/mods/exl3-mimo/pack-build/pack-status.py"
+PACK_STATUS_BIN="${REPO_ROOT}/mods/exl3-pack/src/exl3pack/status.py"
 
 # --- defaults -----------------------------------------------------------------
 HOST=""
@@ -52,6 +55,10 @@ NO_BUILD=false
 DETACH=false
 POLL_INTERVAL=5
 CONTEXT_DIR="/tmp/spark-vllm-docker-context"
+MODEL=""
+LOCAL_ROOT="/opt/llm"
+DRY_RUN=false
+NAS_ROOT="/nas-1"
 
 # --- helpers ------------------------------------------------------------------
 
@@ -90,22 +97,48 @@ derive_status_file() {
   fi
 }
 
+# Print a docker run command (no side effects) and return 0 when --dry-run.
+# Args: <status_file> <stage-arg-vector...>
+dry_run_echo() {
+  local status_file="$1"; shift
+  local mounts=(-v /nas-1:/nas-1 -v "${LOCAL_ROOT}:/opt/llm")
+  if [ "$status_file" = "(none)" ]; then
+    echo "docker run --rm --gpus all --name ${NAME} ${mounts[*]} ${TAG} $*"
+  else
+    echo "docker run --rm --gpus all --name ${NAME} ${mounts[*]} -e PACK_STATUS_FILE=${status_file} ${TAG} $*"
+  fi
+}
+
+model_arg() {
+  if [ -n "$MODEL" ]; then printf -- '--model %s' "$MODEL"; fi
+}
+
 # --- stages -------------------------------------------------------------------
 
 do_sync() {
   echo "syncing build context to $(ssh_target):${CONTEXT_DIR}/ ..."
-  # Explicit source -> destination rsyncs so the layout the Dockerfile COPYs
-  # (./Dockerfile.exl3-pack, mods/exl3-mimo/...) is preserved. Also clears any
-  # stale root entries from older syncs.
-  ssh "$(ssh_target)" "mkdir -p '${CONTEXT_DIR}/mods' && rm -rf '${CONTEXT_DIR}/Users' '${CONTEXT_DIR}/exl3-mimo'"
+  # The generalized image COPYs: Dockerfile.exl3-pack, the shared lib
+  # (mods/exl3-pack/), and every per-model spec dir (mods/<model>/pack-build/).
+  # Mirror that subset of mods/ so the image build finds exactly what it COPYs.
+  ssh "$(ssh_target)" "mkdir -p '${CONTEXT_DIR}/mods/exl3-pack' '${CONTEXT_DIR}/mods/mimo-v2.6-flash-rl-uncensored' '${CONTEXT_DIR}/mods/mimo-v2.6-pro-rl-uncensored'"
   rsync -a \
-    --exclude '*.pyc' --exclude '__pycache__' --exclude '.DS_Store' \
+    --exclude '*.pyc' --exclude '__pycache__' --exclude '.DS_Store' --exclude '.venv' \
+    --exclude 'tests' --exclude 'fixtures' \
     "${REPO_ROOT}/Dockerfile.exl3-pack" \
     "$(ssh_target):${CONTEXT_DIR}/Dockerfile.exl3-pack"
   rsync -a --delete \
+    --exclude '*.pyc' --exclude '__pycache__' --exclude '.DS_Store' --exclude '.venv' \
+    --exclude '.pytest_cache' --exclude '.mypy_cache' --exclude '.ruff_cache' \
+    "${REPO_ROOT}/mods/exl3-pack/" \
+    "$(ssh_target):${CONTEXT_DIR}/mods/exl3-pack/"
+  local m
+  for m in mimo-v2.6-flash-rl-uncensored mimo-v2.6-pro-rl-uncensored; do
+  rsync -a --delete \
     --exclude '*.pyc' --exclude '__pycache__' --exclude '.DS_Store' \
-    "${REPO_ROOT}/mods/exl3-mimo/" \
-    "$(ssh_target):${CONTEXT_DIR}/mods/exl3-mimo/"
+      --exclude '.pytest_cache' --exclude '.mypy_cache' --exclude '.ruff_cache' \
+      "${REPO_ROOT}/mods/${m}/pack-build/" \
+      "$(ssh_target):${CONTEXT_DIR}/mods/${m}/pack-build/"
+  done
   echo "sync complete."
 }
 
@@ -205,16 +238,27 @@ cmd_pipeline() {
   local status_file
   status_file="$(derive_status_file "$v1_out")"
 
+  if [ "$DRY_RUN" = true ]; then
+    dry_run_echo "$status_file" "$(model_arg)" "$@" \
+      pipeline --source "$src" --work "$work" --exl3-out "$exl3_out" --v1-out "$v1_out"
+    return 0
+  fi
+
   [ "$NO_SYNC" = true ] || do_sync
   [ "$NO_BUILD" = true ] || do_build
   ensure_dirs "$work" "$exl3_out" "$v1_out"
 
+  # ENTRYPOINT is `python3 -m exl3pack.cli`; do NOT repeat it here.
+  local model_arg=()
+  [ -n "$MODEL" ] && model_arg=(--model "$MODEL")
+  local mounts=(-v /nas-1:/nas-1 -v "${LOCAL_ROOT}:/opt/llm")
   ssh "$(ssh_target)" docker run -d --rm --gpus all \
     --name "$NAME" \
-    -v /nas-1:/nas-1 \
+    "${mounts[@]}" \
     -e "PACK_STATUS_FILE=${status_file}" \
     "$TAG" \
-    pipeline "$src" "$work" "$exl3_out" "$v1_out" "$bits" "$codebook" "$@"
+    "${model_arg[@]}" "$@" \
+      pipeline --source "$src" --work "$work" --exl3-out "$exl3_out" --v1-out "$v1_out"
 
   if [ "$DETACH" = true ]; then
     echo "started container ${NAME}; status: ${status_file}"
@@ -235,16 +279,24 @@ cmd_convert() {
   local status_file
   status_file="$(derive_status_file "$out")"
 
+  if [ "$DRY_RUN" = true ]; then
+    dry_run_echo "$status_file" "$(model_arg)" "$@" \
+      convert --source "$src" --exl3-out "$out" --work "$work"
+    return 0
+  fi
   [ "$NO_SYNC" = true ] || do_sync
   [ "$NO_BUILD" = true ] || do_build
   ensure_dirs "$out" "$work"
 
+  local model_arg=()
+  [ -n "$MODEL" ] && model_arg=(--model "$MODEL")
   ssh "$(ssh_target)" docker run -d --rm --gpus all \
     --name "$NAME" \
-    -v /nas-1:/nas-1 \
+    -v /nas-1:/nas-1 -v "${LOCAL_ROOT}:/opt/llm" \
     -e "PACK_STATUS_FILE=${status_file}" \
     "$TAG" \
-    convert "$src" "$out" "$work" "$bits" "$codebook" "$@"
+    "${model_arg[@]}" "$@" \
+      convert --source "$src" --exl3-out "$out" --work "$work"
 
   if [ "$DETACH" = true ]; then
     echo "started container ${NAME}; status: ${status_file}"
@@ -264,16 +316,24 @@ cmd_repack() {
   local status_file
   status_file="$(derive_status_file "$v1_out")"
 
+  if [ "$DRY_RUN" = true ]; then
+    dry_run_echo "$status_file" "$(model_arg)" "$@" \
+      repack --exl3-out "$pack" --v1-out "$v1_out"
+    return 0
+  fi
   [ "$NO_SYNC" = true ] || do_sync
   [ "$NO_BUILD" = true ] || do_build
   ensure_dirs "$v1_out"
 
+  local model_arg=()
+  [ -n "$MODEL" ] && model_arg=(--model "$MODEL")
   ssh "$(ssh_target)" docker run -d --rm --gpus all \
     --name "$NAME" \
-    -v /nas-1:/nas-1 \
+    -v /nas-1:/nas-1 -v "${LOCAL_ROOT}:/opt/llm" \
     -e "PACK_STATUS_FILE=${status_file}" \
     "$TAG" \
-    repack "$pack" "$v1_out" "$bits" "$@"
+    "${model_arg[@]}" "$@" \
+      repack --exl3-out "$pack" --v1-out "$v1_out"
 
   if [ "$DETACH" = true ]; then
     echo "started container ${NAME}; status: ${status_file}"
@@ -293,16 +353,24 @@ cmd_assemble() {
   local status_file
   status_file="$(derive_status_file "$serve_out")"
 
+  if [ "$DRY_RUN" = true ]; then
+    dry_run_echo "$status_file" "$(model_arg)" "$@" \
+      assemble --source "$src" --exl3-out "$pack" --v1-out "$serve_out"
+    return 0
+  fi
   [ "$NO_SYNC" = true ] || do_sync
   [ "$NO_BUILD" = true ] || do_build
   ensure_dirs "$serve_out"
 
+  local model_arg=()
+  [ -n "$MODEL" ] && model_arg=(--model "$MODEL")
   ssh "$(ssh_target)" docker run -d --rm --gpus all \
     --name "$NAME" \
-    -v /nas-1:/nas-1 \
+    -v /nas-1:/nas-1 -v "${LOCAL_ROOT}:/opt/llm" \
     -e "PACK_STATUS_FILE=${status_file}" \
     "$TAG" \
-    assemble "$src" "$pack" "$serve_out" "$@"
+    "${model_arg[@]}" "$@" \
+      assemble --source "$src" --exl3-out "$pack" --v1-out "$serve_out"
 
   if [ "$DETACH" = true ]; then
     echo "started container ${NAME}; status: ${status_file}"
@@ -319,12 +387,18 @@ cmd_detect() {
   [ $# -ge 1 ] || { err "detect needs <src>"; exit 2; }
   local src="$1"
   shift
+  if [ "$DRY_RUN" = true ]; then
+    dry_run_echo "(none)" "$(model_arg)" "$@" detect "$src"
+    return 0
+  fi
   [ "$NO_SYNC" = true ] || do_sync
   [ "$NO_BUILD" = true ] || do_build
+  local model_arg=()
+  [ -n "$MODEL" ] && model_arg=(--model "$MODEL")
   ssh "$(ssh_target)" docker run --rm \
-    -v /nas-1:/nas-1 \
+    -v /nas-1:/nas-1 -v "${LOCAL_ROOT}:/opt/llm" \
     "$TAG" \
-    detect "$src" "$@"
+    "${model_arg[@]}" "$@" detect "$src"
 }
 
 cmd_build() {
@@ -371,6 +445,9 @@ while [ $# -gt 0 ]; do
     --no-build) NO_BUILD=true; shift ;;
     --detach) DETACH=true; shift ;;
     --interval) POLL_INTERVAL="${2:-5}"; shift 2 ;;
+    --model) MODEL="${2:-}"; shift 2 ;;
+    --local-root) LOCAL_ROOT="${2:-/opt/llm}"; shift 2 ;;
+    --dry-run) DRY_RUN=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) POSITIONAL+=("$1"); shift ;;
   esac

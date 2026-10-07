@@ -30,7 +30,7 @@ therefore assembled from the source model (with the routed experts removed),
 this container, and a `quantization_config` that declares the exl3 method:
 
 ```bash
-pack-build assemble <src> <exl3-v1> <serve-out>
+exl3-pack --model <model> assemble --source <src> --exl3-out <exl3-v1> --v1-out <serve-out>
 ```
 
 Output = `config.json` (`quant_method: exl3`, `exl3.manifest`,
@@ -87,7 +87,7 @@ numeric core + extension.
    write the manifest + per-layer safetensors (either reuse the in-tree writer
    helpers or reproduce the exact layout).
 5. Validate on CPU: `read_exl3_manifest` + `read_exl3_layer` (geometry/extent
-   legality), `pack-build/test_dispatch_fix.py` (dense dequant grid convention),
+   legality), `mods/exl3-pack/tools/test_dispatch_fix.py` (dense dequant grid convention),
    then boot `recipes/mimo-v2.6-flash-exl3-2x.yaml` and run greedy parity + PPL
    (`README.md`). Note the fork's `plan_exl3_extent` rejects TP=1 outright
    (`EXL3 experts require TP in 2..24`), so the `-1x` recipe cannot serve this
