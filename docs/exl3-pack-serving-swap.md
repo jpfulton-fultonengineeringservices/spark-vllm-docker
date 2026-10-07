@@ -101,11 +101,11 @@ node, and streams progress (stage/layers/ETA/Δ poll).
 
 ```bash
 # detect first — confirm geometry BEFORE spending GPU hours
-./scripts/exl3-pack-drive.sh detect --host home-gx10-node4 \
+./scripts/exl3-pack-drive.sh detect --host gx10-node4 \
   --model mimo-v2.6-pro-rl-uncensored /opt/llm/staging/mimo-v2.6-pro-rl-uncensored
 
 # pipeline: convert → repack → NAS (foreground, streams progress)
-./scripts/exl3-pack-drive.sh pipeline --host home-gx10-node4 \
+./scripts/exl3-pack-drive.sh pipeline --host gx10-node4 \
   --model mimo-v2.6-pro-rl-uncensored \
   /opt/llm/staging/mimo-v2.6-pro-rl-uncensored \
   /opt/llm/fes-projects/exl3-mimo-build/mimo-v2.6-pro-rl-uncensored-work-k3 \
@@ -113,7 +113,7 @@ node, and streams progress (stage/layers/ETA/Δ poll).
   /nas-1/models/mimo/mimo-v2.6-pro-rl-uncensored-exl3-v1 3 mcg
 
 # assemble the servable checkpoint
-./scripts/exl3-pack-drive.sh assemble --host home-gx10-node4 \
+./scripts/exl3-pack-drive.sh assemble --host gx10-node4 \
   --model mimo-v2.6-pro-rl-uncensored \
   /opt/llm/staging/mimo-v2.6-pro-rl-uncensored \
   /nas-1/models/mimo/mimo-v2.6-pro-rl-uncensored-exl3-v1 \
@@ -122,11 +122,32 @@ node, and streams progress (stage/layers/ETA/Δ poll).
 
 ### 4b. node3 → `mimo-v2.6-flash-rl-uncensored`
 
-Same three commands with `--host home-gx10-node3`, slug
+Same three commands with `--host gx10-node3`, slug
 `mimo-v2.6-flash-rl-uncensored`, source
 `/opt/llm/staging/mimo-v2.6-flash-rl-uncensored`, work dirs
 `mimo-v2.6-flash-rl-uncensored-{work,mcg}-k3`, outputs
 `/nas-1/models/mimo/mimo-v2.6-flash-rl-uncensored-exl3-v1[-serve]`.
+
+```bash
+# detect first — confirm geometry BEFORE spending GPU hours
+./scripts/exl3-pack-drive.sh detect --host gx10-node3 \
+  --model mimo-v2.6-flash-rl-uncensored /opt/llm/staging/mimo-v2.6-flash-rl-uncensored
+
+# pipeline: convert → repack → NAS (foreground, streams progress)
+./scripts/exl3-pack-drive.sh pipeline --host gx10-node3 \
+  --model mimo-v2.6-flash-rl-uncensored \
+  /opt/llm/staging/mimo-v2.6-flash-rl-uncensored \
+  /opt/llm/fes-projects/exl3-mimo-build/mimo-v2.6-flash-rl-uncensored-work-k3 \
+  /opt/llm/fes-projects/exl3-mimo-build/mimo-v2.6-flash-rl-uncensored-mcg-k3 \
+  /nas-1/models/mimo/mimo-v2.6-flash-rl-uncensored-exl3-v1 3 mcg
+
+# assemble the servable checkpoint
+./scripts/exl3-pack-drive.sh assemble --host gx10-node3 \
+  --model mimo-v2.6-flash-rl-uncensored \
+  /opt/llm/staging/mimo-v2.6-flash-rl-uncensored \
+  /nas-1/models/mimo/mimo-v2.6-flash-rl-uncensored-exl3-v1 \
+  /nas-1/models/mimo/mimo-v2.6-flash-rl-uncensored-exl3-v1-serve
+```
 
 Run 4a and 4b sequentially if both use the same node's GPU; they use different
 nodes, so they can overlap — but both contend for the NAS. Sequential is safer.
@@ -136,6 +157,9 @@ nodes, so they can overlap — but both contend for the NAS. Sequential is safer
   (status file `<output>/.pack-status.json` via `PACK_STATUS_FILE`).
 - Failure modes (spec_parity mismatch, convert OOM on 128 GB unified memory,
   repack codebook mismatch) → `mods/exl3-pack/NEW_MODEL.md` §Failure modes.
+- The driver sets `--ulimit nofile=1048576:1048576` on the container (override
+  with `--nofile` or `EXL3_PACK_NOFILE`); without it, a 128-shard source dies
+  with `Too many open files (errno=24)` during convert.
 - Work/intermediate dirs live on node NVMe and are cleaned by the pipeline.
 
 ## 5. Verify outputs
