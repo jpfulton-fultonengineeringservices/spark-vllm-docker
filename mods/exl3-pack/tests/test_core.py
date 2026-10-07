@@ -172,3 +172,27 @@ def test_write_status_atomic_merge(tmp_path: Path) -> None:
     assert data["layers_total"] == 47
     assert "last_update" in data
     assert data["started_at"] == "2026-01-01T00:00:00Z"
+
+
+def test_write_status_clears_stale_errors(tmp_path: Path) -> None:
+    """A clean write must not retain errors from a prior failed run.
+
+    Regression: the port merged fields, so a re-run of the same output dir
+    showed the old `convert_model exited with code 1` while actually running.
+    """
+    sf = tmp_path / ".pack-status.json"
+    write_status(sf, "2026-01-01T00:00:00Z", stage="convert", phase="error",
+                 errors=["convert_model exited with code 1"])
+    assert json.loads(sf.read_text())["errors"]
+
+    # A subsequent clean update (no `errors`) must drop the stale list.
+    write_status(sf, "2026-01-01T00:00:00Z", stage="convert", phase="quantizing",
+                 layers_completed=5)
+    data = json.loads(sf.read_text())
+    assert "errors" not in data
+    assert data["phase"] == "quantizing"
+
+    # An explicit error is still recorded.
+    write_status(sf, "2026-01-01T00:00:00Z", stage="convert", phase="error",
+                 errors=["boom"])
+    assert json.loads(sf.read_text())["errors"] == ["boom"]
