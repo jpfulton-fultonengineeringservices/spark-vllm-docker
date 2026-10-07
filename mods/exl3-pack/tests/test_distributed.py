@@ -136,10 +136,14 @@ class _FakeModule:
         return iter(self._linears)
 
 
-def _make_endpoints() -> list[WorkerEndpoint]:
+def _make_endpoints(tmp_path: Path) -> list[WorkerEndpoint]:
     return [
-        WorkerEndpoint(node="node0", inbox="inbox/node0", device=0),
-        WorkerEndpoint(node="node1", inbox="inbox/node1", device=1),
+        WorkerEndpoint(
+            node="node0", inbox=str(tmp_path / "dist" / "inbox" / "node0"), device=0
+        ),
+        WorkerEndpoint(
+            node="node1", inbox=str(tmp_path / "dist" / "inbox" / "node1"), device=1
+        ),
     ]
 
 
@@ -166,7 +170,7 @@ def _make_coordinator(distributed: Any, tmp_path: Path, endpoints: list[WorkerEn
 
 
 def test_plan_shards_covers_every_linear_exactly_once(distributed: Any, tmp_path: Path) -> None:
-    endpoints = _make_endpoints()
+    endpoints = _make_endpoints(tmp_path)
     coord = _make_coordinator(distributed, tmp_path, endpoints)
     fake_linear = sys.modules["exllamav3.modules.linear"].Linear
     linears = [
@@ -207,7 +211,7 @@ def test_plan_shards_rejects_empty_endpoints(distributed: Any, tmp_path: Path) -
 def test_dispatch_writes_round_trippable_json_into_node_inbox(
     distributed: Any, tmp_path: Path
 ) -> None:
-    endpoints = _make_endpoints()
+    endpoints = _make_endpoints(tmp_path)
     coord = _make_coordinator(distributed, tmp_path, endpoints)
     coord._module_idx = 3
     fake_linear = sys.modules["exllamav3.modules.linear"].Linear
@@ -218,7 +222,7 @@ def test_dispatch_writes_round_trippable_json_into_node_inbox(
 
     for spec in specs:
         node = endpoints[spec.shard_idx].node
-        inbox = tmp_path / "dist" / "mod3" / "inbox" / node
+        inbox = tmp_path / "dist" / "inbox" / node
         shard_json = inbox / f"shard-{spec.shard_idx}.json"
         assert shard_json.exists(), f"missing inbox spec for {node}"
         # The inbox JSON must round-trip back to an identical ShardSpec.
@@ -230,7 +234,7 @@ def test_dispatch_writes_round_trippable_json_into_node_inbox(
 def test_dispatch_rejects_shard_idx_beyond_endpoints(
     distributed: Any, tmp_path: Path
 ) -> None:
-    endpoints = _make_endpoints()
+    endpoints = _make_endpoints(tmp_path)
     coord = _make_coordinator(distributed, tmp_path, endpoints)
     spec = ShardSpec(
         job_id="job-1",
@@ -287,7 +291,7 @@ def _spec_to(result: Path, *, idx: int, cfg: str) -> ShardSpec:
 def test_gather_merges_disjoint_shards_and_checks_cfg_echo(
     distributed: Any, tmp_path: Path
 ) -> None:
-    endpoints = _make_endpoints()
+    endpoints = _make_endpoints(tmp_path)
     coord = _make_coordinator(distributed, tmp_path, endpoints)
     cfg = "c" * 64
     out0 = tmp_path / "out" / "node0" / "shard-0.safetensors"
@@ -314,7 +318,7 @@ def test_gather_merges_disjoint_shards_and_checks_cfg_echo(
 
 
 def test_gather_times_out_without_done_marker(distributed: Any, tmp_path: Path) -> None:
-    endpoints = _make_endpoints()
+    endpoints = _make_endpoints(tmp_path)
     coord = _make_coordinator(distributed, tmp_path, endpoints)
     coord.gather_timeout = 0.2
     missing = tmp_path / "out" / "node0" / "shard-0.safetensors"
@@ -325,7 +329,7 @@ def test_gather_times_out_without_done_marker(distributed: Any, tmp_path: Path) 
 def test_gather_rejects_hash_mismatch_between_marker_and_file(
     distributed: Any, tmp_path: Path
 ) -> None:
-    endpoints = _make_endpoints()
+    endpoints = _make_endpoints(tmp_path)
     coord = _make_coordinator(distributed, tmp_path, endpoints)
     cfg = "c" * 64
     out = tmp_path / "out" / "node0" / "shard-0.safetensors"
@@ -337,7 +341,7 @@ def test_gather_rejects_hash_mismatch_between_marker_and_file(
 
 
 def test_gather_rejects_cfg_hash_echo_mismatch(distributed: Any, tmp_path: Path) -> None:
-    endpoints = _make_endpoints()
+    endpoints = _make_endpoints(tmp_path)
     coord = _make_coordinator(distributed, tmp_path, endpoints)
     out = tmp_path / "out" / "node0" / "shard-0.safetensors"
     _write_shard_output(out, {"k.weight": [1.0]}, "d" * 64)
@@ -362,7 +366,7 @@ def test_gather_rejects_cfg_hash_echo_mismatch(distributed: Any, tmp_path: Path)
 def test_gather_rejects_duplicate_tensor_keys_across_shards(
     distributed: Any, tmp_path: Path
 ) -> None:
-    endpoints = _make_endpoints()
+    endpoints = _make_endpoints(tmp_path)
     coord = _make_coordinator(distributed, tmp_path, endpoints)
     cfg = "c" * 64
     out0 = tmp_path / "out" / "node0" / "shard-0.safetensors"
@@ -395,7 +399,7 @@ def test_gather_rejects_duplicate_tensor_keys_across_shards(
 def test_commit_writes_qtensors_file_after_coverage_assert(
     distributed: Any, tmp_path: Path
 ) -> None:
-    endpoints = _make_endpoints()
+    endpoints = _make_endpoints(tmp_path)
     coord = _make_coordinator(distributed, tmp_path, endpoints)
     fake_tensor_cls = sys.modules["torch"].Tensor
     import numpy as np
@@ -418,7 +422,7 @@ def test_commit_writes_qtensors_file_after_coverage_assert(
 
 
 def test_commit_rejects_incomplete_coverage(distributed: Any, tmp_path: Path) -> None:
-    endpoints = _make_endpoints()
+    endpoints = _make_endpoints(tmp_path)
     coord = _make_coordinator(distributed, tmp_path, endpoints)
     coord._planned_keys = {"a", "b"}
     with pytest.raises(ValueError, match="coverage mismatch"):
@@ -428,7 +432,7 @@ def test_commit_rejects_incomplete_coverage(distributed: Any, tmp_path: Path) ->
 def test_commit_rejects_incomplete_moe_expert_set(
     distributed: Any, tmp_path: Path
 ) -> None:
-    endpoints = _make_endpoints()
+    endpoints = _make_endpoints(tmp_path)
     coord = _make_coordinator(distributed, tmp_path, endpoints)
     fake_tensor_cls = sys.modules["torch"].Tensor
     import numpy as np

@@ -10,7 +10,7 @@ Transport contract (shared with ``worker.py``), all under ``<work>``:
 
 - ``dist/mod<N>/h/<qmap-hash>.safetensors`` — immutable H payload, one file
   per distinct qmap (``qmap-hash`` = sha256 hex of the qmap string).
-- ``dist/mod<N>/inbox/<node>/shard-<i>.json`` — ``ShardSpec.to_json()``.
+- ``dist/inbox/<node>/shard-<i>.json`` — ``ShardSpec.to_json()``.
 - ``dist/mod<N>/out/<node>/shard-<i>.safetensors`` + ``shard-<i>.done`` —
   worker output (atomic write, then a done-marker carrying the sha256).
 - ``qtensors/<module_key>.safetensors`` — coverage-asserted module merge.
