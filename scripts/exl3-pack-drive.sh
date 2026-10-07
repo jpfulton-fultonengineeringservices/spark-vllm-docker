@@ -27,6 +27,8 @@
 #   --tag <tag>             image tag (default: exl3-pack:cu13.0)
 #   --model <slug>          per-model spec to select (e.g. mimo-v2.6-pro-rl-uncensored)
 #   --local-root <path>     node-local checkpoint root to mount (default: /opt/llm)
+#   --nofile <n>            container nofile ulimit (default: 1048576; env
+#                           EXL3_PACK_NOFILE). Raise for highly sharded sources.
 #   --status-file <path>    override derived status file path
 #   --name <name>           container name (default: exl3-pack-job)
 #   --no-sync               skip rsync of build context
@@ -59,6 +61,12 @@ MODEL=""
 LOCAL_ROOT="/opt/llm"
 DRY_RUN=false
 NAS_ROOT="/nas-1"
+# Docker nofile ulimit for the pack container. Highly sharded checkpoints
+# (e.g. pro-rl-uncensored, 128 EP shards) exhaust Docker's default 1024-soft
+# limit during parallel safetensors loading ("Too many open files", errno=24).
+# Matches launch-cluster.sh / README's recommended 1048576. Override via
+# --nofile or EXL3_PACK_NOFILE.
+NOFILE_LIMIT="${EXL3_PACK_NOFILE:-1048576}"
 
 # --- helpers ------------------------------------------------------------------
 
@@ -102,10 +110,11 @@ derive_status_file() {
 dry_run_echo() {
   local status_file="$1"; shift
   local mounts=(-v /nas-1:/nas-1 -v "${LOCAL_ROOT}:/opt/llm")
+  local ulim="--ulimit nofile=${NOFILE_LIMIT}:${NOFILE_LIMIT}"
   if [ "$status_file" = "(none)" ]; then
-    echo "docker run --rm --gpus all --name ${NAME} ${mounts[*]} ${TAG} $*"
+    echo "docker run --rm --gpus all ${ulim} --name ${NAME} ${mounts[*]} ${TAG} $*"
   else
-    echo "docker run --rm --gpus all --name ${NAME} ${mounts[*]} -e PACK_STATUS_FILE=${status_file} ${TAG} $*"
+    echo "docker run --rm --gpus all ${ulim} --name ${NAME} ${mounts[*]} -e PACK_STATUS_FILE=${status_file} ${TAG} $*"
   fi
 }
 
@@ -179,7 +188,9 @@ poll() {
   tput civis 2>/dev/null || true
   cleanup_poll() {
     tput cnorm 2>/dev/null || true
-    rm -f "$tmp"
+    # `tmp` is local to poll(); the EXIT trap can fire after poll() returns,
+    # when that local is out of scope — guard it against `set -u`.
+    rm -f "${tmp:-}"
   }
   trap cleanup_poll EXIT
 
@@ -227,6 +238,11 @@ print(d.get('layers_completed',0) or 0)
 
     sleep "$POLL_INTERVAL"
   done
+  # Normal exit: run cleanup now (restores cursor, removes tmp) rather than
+  # leaving it to the EXIT trap, which may fire later — and clear the trap so
+  # it does not refire on shell exit when poll()'s locals are gone.
+  cleanup_poll
+  trap - EXIT
 }
 
 # --- subcommands --------------------------------------------------------------
@@ -253,6 +269,7 @@ cmd_pipeline() {
   [ -n "$MODEL" ] && model_arg=(--model "$MODEL")
   local mounts=(-v /nas-1:/nas-1 -v "${LOCAL_ROOT}:/opt/llm")
   ssh "$(ssh_target)" docker run -d --rm --gpus all \
+    --ulimit nofile=${NOFILE_LIMIT}:${NOFILE_LIMIT} \
     --name "$NAME" \
     "${mounts[@]}" \
     -e "PACK_STATUS_FILE=${status_file}" \
@@ -291,6 +308,7 @@ cmd_convert() {
   local model_arg=()
   [ -n "$MODEL" ] && model_arg=(--model "$MODEL")
   ssh "$(ssh_target)" docker run -d --rm --gpus all \
+    --ulimit nofile=${NOFILE_LIMIT}:${NOFILE_LIMIT} \
     --name "$NAME" \
     -v /nas-1:/nas-1 -v "${LOCAL_ROOT}:/opt/llm" \
     -e "PACK_STATUS_FILE=${status_file}" \
@@ -328,6 +346,7 @@ cmd_repack() {
   local model_arg=()
   [ -n "$MODEL" ] && model_arg=(--model "$MODEL")
   ssh "$(ssh_target)" docker run -d --rm --gpus all \
+    --ulimit nofile=${NOFILE_LIMIT}:${NOFILE_LIMIT} \
     --name "$NAME" \
     -v /nas-1:/nas-1 -v "${LOCAL_ROOT}:/opt/llm" \
     -e "PACK_STATUS_FILE=${status_file}" \
@@ -365,6 +384,7 @@ cmd_assemble() {
   local model_arg=()
   [ -n "$MODEL" ] && model_arg=(--model "$MODEL")
   ssh "$(ssh_target)" docker run -d --rm --gpus all \
+    --ulimit nofile=${NOFILE_LIMIT}:${NOFILE_LIMIT} \
     --name "$NAME" \
     -v /nas-1:/nas-1 -v "${LOCAL_ROOT}:/opt/llm" \
     -e "PACK_STATUS_FILE=${status_file}" \
@@ -396,6 +416,7 @@ cmd_detect() {
   local model_arg=()
   [ -n "$MODEL" ] && model_arg=(--model "$MODEL")
   ssh "$(ssh_target)" docker run --rm \
+    --ulimit nofile=${NOFILE_LIMIT}:${NOFILE_LIMIT} \
     -v /nas-1:/nas-1 -v "${LOCAL_ROOT}:/opt/llm" \
     "$TAG" \
     "${model_arg[@]}" "$@" detect "$src"
@@ -447,6 +468,7 @@ while [ $# -gt 0 ]; do
     --interval) POLL_INTERVAL="${2:-5}"; shift 2 ;;
     --model) MODEL="${2:-}"; shift 2 ;;
     --local-root) LOCAL_ROOT="${2:-/opt/llm}"; shift 2 ;;
+    --nofile) NOFILE_LIMIT="${2:-}"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) POSITIONAL+=("$1"); shift ;;
