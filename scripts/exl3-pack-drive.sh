@@ -480,6 +480,12 @@ case "$subcommand" in
   help|-h|--help) usage; exit 0 ;;
 esac
 
+# Validate the nofile value before it is embedded into the remote docker run.
+case "$NOFILE_LIMIT" in
+  ''|*[!0-9]*) err "--nofile/EXL3_PACK_NOFILE must be a positive integer (got '${NOFILE_LIMIT}')"; exit 2 ;;
+  0) err "--nofile/EXL3_PACK_NOFILE must be > 0"; exit 2 ;;
+esac
+
 require_host
 
 case "$subcommand" in
