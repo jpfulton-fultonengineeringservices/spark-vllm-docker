@@ -6,10 +6,15 @@
 # format. This is the two-node sibling of
 # recipes/mimo-v2.6-flash-exl3-1x.yaml (same serve args, topology split).
 #
-# !!! FIRST DRAFT — flags marked (confirm) follow the b12x EXL3 design
-# (DeepSeek-V4.1 / Kimi-K3 lineage) and must be checked at first boot against
-# the actual MiMo pack. The EXL3 MoE path is driven by the `exl3` quant method
-# (Exl3Config/Exl3MoEMethod), not by --moe-backend.
+# COHERENT (2026-10-07): served at TP=2 against a correctly-assembled pack
+# (`mimo-v2.6-flash-rl-exl3-v1-fixed`); early logprobs not flat, wikitext-2
+# PPL 7.035, greedy output coherent. Receipt:
+# /nas-1/fes-projects/exl3-mimo-build/coherence-receipt.json. The EXL3 MoE path
+# is driven by the `exl3` quant method (Exl3Config/Exl3MoEMethod), not
+# --moe-backend. The earlier "flat/logprobs ~= -3.9 garbage" was a dense
+# FP8 qkv dequant bug (flat vs per-group), fixed by 3795b4f +
+# _dequant_fp8_block_dispatch; the "MCG codebook parity bug" is DISPROVEN
+# (parity_probe_v2 cos=1.0).
 #
 # Model: served via the FES staged-weights path. The slug holds the ASSEMBLED
 # serving checkpoint (source dense weights minus routed experts + the exl3-v1

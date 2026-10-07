@@ -6,17 +6,16 @@
 # format. Pro sibling of recipes/mimo-v2.6-flash-exl3-4x.yaml (same serve args
 # and mod set; different pack geometry and model id).
 #
-# !!! NOT PRODUCTION-READY — awaiting an end-to-end coherence receipt.
-# The prior "MCG codebook parity bug" is DISPROVEN: parity_probe_v2 shows the
-# container conversion and both MCG decodes are faithful (cos=1.0). The real
+# NOT YET PROVEN — a Pro-specific coherence receipt is still required.
+# The Flash EXL3 pack is now proven coherent (TP=2, PPL 7.035;
+# /nas-1/fes-projects/exl3-mimo-build/coherence-receipt.json). The prior "MCG
+# codebook parity bug" is DISPROVEN (parity_probe_v2 cos=1.0); the real
 # garbage-serving cause was a dense FP8 dequant bug in
 # assemble._dequant_fp8_block (flat vs per-group on the interleaved fused
-# qkv_proj, misaligned on the 9 kv=4 layers), fixed by 3795b4f +
-# _dequant_fp8_block_dispatch. NOTE: the same per-group hazard applies to the
-# Pro qkv geometry; verify its assembled qkv_proj dequant at first serve.
-# Mark this recipe ready only once a served Pro checkpoint is proven coherent
-# (greedy parity + finite wikitext-2 PPL). See .omp/plans/exl3-mimo-recipes.md
-# "Track P" / Track T step 7. Do NOT deploy the production route before then.
+# qkv_proj), fixed by 3795b4f + _dequant_fp8_block_dispatch. The SAME per-group
+# hazard applies to the Pro qkv geometry (hidden 6144, 128 q-heads), so verify
+# the Pro packed qkv_proj dequant and a served Pro checkpoint's coherence
+# (greedy parity + finite wikitext-2 PPL) before flipping the production route.
 #
 # Pro geometry (see mods/mimo-v2.6-pro-rl-uncensored/pack-build/spec.py):
 # hidden_size 6144, 384 routed experts, 70 layers (69 MoE, layer 0 dense),
