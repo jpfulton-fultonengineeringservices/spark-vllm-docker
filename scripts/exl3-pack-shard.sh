@@ -19,6 +19,8 @@
 #       one pack with -m exl3pack.merge (requires >=150GB free NVMe).
 #
 # Node rail IPs (rail-a 10.100.170.0/24): node1=.3 node2=.4 node3=.2 node4=.1.
+# MTP parity: every shard uses convert_model's default mtp_bits=4; cli.py has
+# no per-shard MTP override, so non-default MTP rates require cli.py wiring.
 #
 set -euo pipefail
 
@@ -107,7 +109,7 @@ ensure_recipe() {
     cmd="${cmd} '${TAG}'"
     cmd="${cmd} --model '${model}' recipe"
     cmd="${cmd} --source /opt/llm/staging/${model}"
-    cmd="${cmd} --out ${in_recipe}"
+    cmd="${cmd} --out $(printf '%q' "$in_recipe")"
     run_or_echo "ssh '${first_alias}' $(printf '%q' "$cmd")"
 }
 
@@ -141,7 +143,7 @@ cmd_stage() {
         alias="$(node_alias "$node")"
         dest="${LOCAL_ROOT}/staging/${model}/"
         echo "stage: ${src} -> ${alias}(${ip}):${dest}"
-        run_or_echo "rsync -a --delete '${src}/' '${alias}:${dest}'"
+        run_or_echo "rsync -a --delete -e 'ssh -o HostName=${ip}' '${src}/' '${alias}:${dest}'"
     done
 }
 
@@ -205,7 +207,7 @@ cmd_run() {
         cmd="${cmd} --work /opt/llm/${work_rel}"
         cmd="${cmd} --exl3-out /opt/llm/${out_rel}"
         cmd="${cmd} --module-start ${start} --max_module ${end}"
-        cmd="${cmd} --recipe ${in_recipe}"
+        cmd="${cmd} --recipe $(printf '%q' "$in_recipe")"
         echo "run: ${alias}(${ip}) ${name} modules ${start}-${end}"
         run_or_echo "ssh '${alias}' $(printf '%q' "$cmd")"
         i=$((i + 1))
@@ -237,25 +239,42 @@ cmd_merge() {
     local merge_root="${LOCAL_ROOT}/fes-projects/exl3-mimo-build/${model}-merge-${work_k}"
 
     # Fail early if the merge node lacks NVMe headroom (>=150GB free).
-    run_or_echo "ssh '${merge_alias}' 'df -BG --output=avail $(printf '%q' "${LOCAL_ROOT}") | tail -1 | tr -dc 0-9'"
+    if "$DRY_RUN"; then
+        echo "merge: require >=150GB free under ${LOCAL_ROOT} on ${merge_alias}"
+    else
+        local free_gb
+        free_gb="$(ssh "$merge_alias" "df -BG --output=avail '${LOCAL_ROOT}' | tail -1 | tr -dc '0-9'")"
+        case "$free_gb" in
+            ''|*[!0-9]*) err "could not determine free NVMe space on ${merge_alias}"; return 1 ;;
+        esac
+        [ "$free_gb" -ge 150 ] || {
+            err "merge node ${merge_alias} has ${free_gb}GB free; need at least 150GB"
+            return 1
+        }
+    fi
+
+    run_or_echo "ssh '${merge_alias}' 'mkdir -p \"${merge_root}\"'"
 
     local work_args=""
     local i=0 node
     for node in ${nodes//,/ }; do
-        local alias qsrc qdst
+        local alias ip qsrc qdst
         alias="$(node_alias "$node")"
+        ip="$(node_rail_ip "$node")"
         qsrc="${LOCAL_ROOT}/fes-projects/exl3-mimo-build/${model}-work-${work_k}/node${i}/qtensors/"
         qdst="${merge_root}/node${i}/qtensors/"
         echo "merge: rsync ${alias}:${qsrc} -> ${merge_alias}:${qdst}"
-        run_or_echo "ssh '${merge_alias}' $(printf '%q' "rsync -a '${alias}:${qsrc}' '${qdst}'")"
+        run_or_echo "ssh '${merge_alias}' $(printf '%q' "rsync -a -e 'ssh -o HostName=${ip}' '${alias}:${qsrc}' '${qdst}'")"
         work_args="${work_args} ${merge_root}/node${i}"
         i=$((i + 1))
     done
 
-    local merge_cmd="PYTHONPATH=/opt/exl3-pack/src python3 -m exl3pack.merge"
+    local merge_cmd="docker run --rm --ulimit nofile=${NOFILE_LIMIT}:${NOFILE_LIMIT}"
+    merge_cmd="${merge_cmd} -v ${NAS_ROOT}:${NAS_ROOT} -v ${LOCAL_ROOT}:/opt/llm"
+    merge_cmd="${merge_cmd} --entrypoint python3 '${TAG}' -m exl3pack.merge"
     merge_cmd="${merge_cmd} --work${work_args}"
     merge_cmd="${merge_cmd} --out /opt/llm/fes-projects/exl3-mimo-build/${model}-merge-${work_k}/out"
-    merge_cmd="${merge_cmd} --source /opt/llm/staging/${model}"
+    merge_cmd="${merge_cmd} --source ${NAS_ROOT}/models/mimo/${model}"
     merge_cmd="${merge_cmd} --required-shared model.embed_tokens.safetensors"
     echo "merge: running ${merge_alias}"
     run_or_echo "ssh '${merge_alias}' $(printf '%q' "$merge_cmd")"

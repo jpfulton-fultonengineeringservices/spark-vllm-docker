@@ -47,9 +47,12 @@ def test_plan_keeps_shards_roughly_even() -> None:
 
 
 def test_module_args_uses_absolute_inclusive_end() -> None:
-    shard = Shard(0, 0, 12, 48)
-    assert module_args(shard) == ["--module-start", "0", "--max_module", "12"]
-    assert module_args(13, 25) == ["--module-start", "13", "--max_module", "25"]
+    assert module_args(Shard(0, 0, 12, 48)) == [
+        "--module-start", "0", "--max_module", "12"
+    ]
+    assert module_args(Shard(1, 13, 25, 48)) == [
+        "--module-start", "13", "--max_module", "25"
+    ]
 
 
 def test_plan_rejects_bad_counts() -> None:
