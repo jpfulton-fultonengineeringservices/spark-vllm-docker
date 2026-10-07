@@ -14,7 +14,9 @@
 #   convert   <src> <out> <work> <bits> <codebook> [convert-args...]
 #   repack    <pack> <v1-out> <bits> [repack-args...]
 #   assemble  <src> <pack> <serve-out> [assemble-args...]
-#   detect    <src>
+#   detect <src>
+#   dist-coordinator <src> <work> <exl3-out> <recipe> <bits> <codebook> <nodes>
+#   dist-worker <inbox> <shared> <stop> [device]
 #   build                                   build the image on the node
 #   sync                                    rsync build context to the node
 #   status    <output>                      print current progress once
@@ -422,6 +424,95 @@ cmd_detect() {
     "${model_arg[@]}" "$@" detect "$src"
 }
 
+cmd_dist_coordinator() {
+  local src="" work="" exl3_out="" recipe="" bits="" codebook="" nodes="" node_map=""
+  local gather_timeout="" checkpoint_interval=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --source) src="${2:-}"; shift 2 ;;
+      --work) work="${2:-}"; shift 2 ;;
+      --exl3-out) exl3_out="${2:-}"; shift 2 ;;
+      --recipe) recipe="${2:-}"; shift 2 ;;
+      --bits) bits="${2:-}"; shift 2 ;;
+      --codebook) codebook="${2:-}"; shift 2 ;;
+      --nodes) nodes="${2:-}"; shift 2 ;;
+      --node-map) node_map="${2:-}"; shift 2 ;;
+      --gather-timeout) gather_timeout="${2:-}"; shift 2 ;;
+      --checkpoint-interval) checkpoint_interval="${2:-}"; shift 2 ;;
+      -h|--help)
+        printf '%s\n' 'usage: exl3-pack-drive.sh dist-coordinator --source <path> --work <path> --exl3-out <path> --recipe <path> --bits <n> --codebook <n> --nodes <node[,node...]> [--node-map <path>] [--gather-timeout <seconds>] [--checkpoint-interval <seconds>]'
+        return 0 ;;
+      *) err "dist-coordinator: unknown argument '$1'"; return 2 ;;
+    esac
+  done
+  [ -n "$src" ] || { err "dist-coordinator: --source required"; return 2; }
+  [ -n "$work" ] || { err "dist-coordinator: --work required"; return 2; }
+  [ -n "$exl3_out" ] || { err "dist-coordinator: --exl3-out required"; return 2; }
+  [ -n "$recipe" ] || { err "dist-coordinator: --recipe required"; return 2; }
+  [ -n "$nodes" ] || { err "dist-coordinator: --nodes required"; return 2; }
+  [ "$NO_SYNC" = true ] || do_sync
+  [ "$NO_BUILD" = true ] || do_build
+  local model_arg=()
+  [ -n "$MODEL" ] && model_arg=(--model "$MODEL")
+  if [ "$DRY_RUN" = true ]; then
+    echo "docker run --rm --gpus all \\"
+    echo "  --ulimit nofile=${NOFILE_LIMIT}:${NOFILE_LIMIT} \\"
+    echo "  --name \"${NAME}\" \\"
+    echo "  -v /nas-1:/nas-1:rw -v \"${LOCAL_ROOT}:/opt/llm\" \\"
+    echo "  \"${TAG}\" dist-coordinator ${model_arg[*]:-} \\"
+    echo "  --source \"$src\" --work \"$work\" --exl3-out \"$exl3_out\" \\"
+    echo "  --recipe \"$recipe\" --bits \"$bits\" --codebook \"$codebook\" --nodes \"$nodes\" \\"
+    [ -n "$node_map" ] && echo "  --node-map \"$node_map\" \\"
+    [ -n "$gather_timeout" ] && echo "  --gather-timeout \"$gather_timeout\" \\"
+    [ -n "$checkpoint_interval" ] && echo "  --checkpoint-interval \"$checkpoint_interval\" \\"
+    echo "(would ssh to $(ssh_target))"
+    return 0
+  fi
+  ssh "$(ssh_target)" docker run --rm --gpus all \
+    --ulimit nofile=${NOFILE_LIMIT}:${NOFILE_LIMIT} \
+    --name "$NAME" \
+    -v /nas-1:/nas-1:rw -v "${LOCAL_ROOT}:/opt/llm" \
+    "$TAG" dist-coordinator "${model_arg[@]}" --source "$src" --work "$work" --exl3-out "$exl3_out" \
+      --recipe "$recipe" --bits "$bits" --codebook "$codebook" --nodes "$nodes" \
+      ${node_map:+--node-map "$node_map"} ${gather_timeout:+--gather-timeout "$gather_timeout"} \
+      ${checkpoint_interval:+--checkpoint-interval "$checkpoint_interval"}
+}
+
+cmd_dist_worker() {
+  local inbox="" shared="" stop="" device="0"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --inbox) inbox="${2:-}"; shift 2 ;;
+      --shared) shared="${2:-}"; shift 2 ;;
+      --device) device="${2:-}"; shift 2 ;;
+      --stop) stop="${2:-}"; shift 2 ;;
+      -h|--help)
+        printf '%s\n' 'usage: exl3-pack-drive.sh dist-worker --inbox <path> --shared <path> --device <n> --stop <path>'
+        return 0 ;;
+      *) err "dist-worker: unknown argument '$1'"; return 2 ;;
+    esac
+  done
+  [ -n "$inbox" ] || { err "dist-worker: --inbox required"; return 2; }
+  [ -n "$shared" ] || { err "dist-worker: --shared required"; return 2; }
+  [ -n "$stop" ] || { err "dist-worker: --stop required"; return 2; }
+  [ "$NO_SYNC" = true ] || do_sync
+  [ "$NO_BUILD" = true ] || do_build
+  if [ "$DRY_RUN" = true ]; then
+    echo "docker run --rm --gpus all \\"
+    echo "  --ulimit nofile=${NOFILE_LIMIT}:${NOFILE_LIMIT} \\"
+    echo "  --name \"${NAME}\" \\"
+    echo "  -v /nas-1:/nas-1:rw -v \"${LOCAL_ROOT}:/opt/llm\" \\"
+    echo "  \"${TAG}\" dist-worker --inbox \"$inbox\" --shared \"$shared\" --device \"$device\" --stop \"$stop\""
+    echo "(would ssh to $(ssh_target))"
+    return 0
+  fi
+  ssh "$(ssh_target)" docker run --rm --gpus all \
+    --ulimit nofile=${NOFILE_LIMIT}:${NOFILE_LIMIT} \
+    --name "$NAME" \
+    -v /nas-1:/nas-1:rw -v "${LOCAL_ROOT}:/opt/llm" \
+    "$TAG" dist-worker --inbox "$inbox" --shared "$shared" --device "$device" --stop "$stop"
+}
+
 cmd_build() {
   do_sync
   do_build
@@ -470,7 +561,11 @@ while [ $# -gt 0 ]; do
     --local-root) LOCAL_ROOT="${2:-/opt/llm}"; shift 2 ;;
     --nofile) NOFILE_LIMIT="${2:-}"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
-    -h|--help) usage; exit 0 ;;
+    -h|--help)
+      case "$subcommand" in
+        dist-coordinator|dist-worker) POSITIONAL+=("$1"); shift ;;
+        *) usage; exit 0 ;;
+      esac ;;
     *) POSITIONAL+=("$1"); shift ;;
   esac
 done
@@ -486,7 +581,13 @@ case "$NOFILE_LIMIT" in
   0) err "--nofile/EXL3_PACK_NOFILE must be > 0"; exit 2 ;;
 esac
 
-require_host
+case "$subcommand" in
+  dist-coordinator|dist-worker)
+    case " ${POSITIONAL[*]} " in *" --help "*|*" -h "*) ;;
+    *) require_host ;; esac
+    ;;
+  *) require_host ;;
+esac
 
 case "$subcommand" in
   pipeline) cmd_pipeline "${POSITIONAL[@]}" ;;
@@ -494,6 +595,8 @@ case "$subcommand" in
   repack)   cmd_repack "${POSITIONAL[@]}" ;;
   assemble) cmd_assemble "${POSITIONAL[@]}" ;;
   detect)   cmd_detect "${POSITIONAL[@]}" ;;
+  dist-coordinator) cmd_dist_coordinator "${POSITIONAL[@]}" ;;
+  dist-worker) cmd_dist_worker "${POSITIONAL[@]}" ;;
   build)    cmd_build ;;
   sync)     cmd_sync ;;
   status)   cmd_status "${POSITIONAL[@]}" ;;

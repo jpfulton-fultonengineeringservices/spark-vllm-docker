@@ -260,6 +260,32 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("selftest")
     p.set_defaults(func=_cmd_selftest)
 
+    p = sub.add_parser("dist-coordinator")
+    p.add_argument("--source", required=True, type=Path)
+    p.add_argument("--work", required=True, type=Path)
+    p.add_argument("--exl3-out", required=True, type=Path)
+    p.add_argument("--recipe", required=True, type=Path)
+    p.add_argument("--bits", type=int, default=None)
+    p.add_argument("--codebook", type=int, default=None)
+    p.add_argument("--nodes", required=True, help="comma-separated node slugs/aliases")
+    p.add_argument(
+        "--gather-timeout", type=float, default=600.0,
+        help="per-shard gather timeout in seconds (default 600.0)",
+    )
+    p.add_argument(
+        "--checkpoint-interval", type=int, default=120,
+        help="checkpoint cadence in seconds (default 120)",
+    )
+    p.add_argument("--node-map", default=str(paths.default_map_path()))
+    p.set_defaults(func=_cmd_dist_coordinator)
+
+    p = sub.add_parser("dist-worker")
+    p.add_argument("--inbox", required=True, type=Path)
+    p.add_argument("--shared", required=True, type=Path)
+    p.add_argument("--device", type=int, default=0, help="GPU device index (default 0)")
+    p.add_argument("--stop", required=True, type=Path)
+    p.set_defaults(func=_cmd_dist_worker)
+
     p = sub.add_parser("help")
     p.set_defaults(func=_cmd_help)
     return ap
@@ -345,6 +371,68 @@ def _rmtree(path: Path) -> None:
 
     if path.exists():
         shutil.rmtree(path, ignore_errors=True)
+
+
+def _cmd_dist_coordinator(args: argparse.Namespace) -> int:
+    """Run the distributed quantization coordinator in-process.
+
+    Resolves the per-node work roots from the node map, builds
+    ``WorkerEndpoint`` records under ``<work>/dist/mod<N>/inbox/<node>``,
+    and hands the loop to :class:`exl3pack.distributed.Coordinator`.
+    """
+    from .dist_types import WorkerEndpoint
+    from .distributed import Coordinator
+
+
+    paths.load_node_map(Path(args.node_map))
+    nodes = [n.strip() for n in args.nodes.split(",") if n.strip()]
+    if not nodes:
+        print("error: --nodes must list at least one node", file=sys.stderr)
+        return 2
+
+    work = Path(args.work)
+    dist_args: dict[str, object] = {
+        "in_dir": str(args.source),
+        "out_dir": str(args.exl3_out),
+        "recipe": str(args.recipe),
+        "work_dir": str(work),
+        "gather_timeout": float(args.gather_timeout),
+        "checkpoint_interval": int(args.checkpoint_interval),
+    }
+    if args.bits is not None:
+        dist_args["bits"] = int(args.bits)
+    if args.codebook is not None:
+        dist_args["codebook"] = int(args.codebook)
+
+    endpoints: list[WorkerEndpoint] = []
+    for idx, node in enumerate(nodes):
+        inbox = work / "dist" / f"mod{idx}" / "inbox" / node
+        endpoints.append(WorkerEndpoint(node=node, inbox=str(inbox), device=0))
+
+    coord = Coordinator(dist_args, endpoints, work)
+    try:
+        coord.run()
+    except (RuntimeError, TimeoutError) as exc:
+        print(f"error: coordinator failed: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cmd_dist_worker(args: argparse.Namespace) -> int:
+    """Run a per-node quantization worker polling its inbox."""
+    from .worker import serve
+
+    try:
+        serve(
+            Path(args.inbox),
+            Path(args.shared),
+            int(args.device),
+            Path(args.stop),
+        )
+    except (RuntimeError, TimeoutError, OSError) as exc:
+        print(f"error: worker failed: {exc}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
