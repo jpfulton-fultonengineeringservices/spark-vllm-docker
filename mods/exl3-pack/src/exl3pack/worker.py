@@ -102,7 +102,7 @@ def _run_shard(spec: ShardSpec, device: int, work: Path) -> None:
     in_args["in_dir"] = str(in_dir)
     config, model, _mtp, _vis, _tok, _ref = convert_model.get_base_model(in_args)
 
-    modules = list(model.modules())
+    modules = list(model.modules)
     if spec.module_idx >= len(modules):
         raise RuntimeError(
             f"module_idx {spec.module_idx} out of range (model has {len(modules)} modules)"
@@ -121,7 +121,7 @@ def _run_shard(spec: ShardSpec, device: int, work: Path) -> None:
     wanted = set(spec.linear_keys)
     q_tensors: dict[str, Any] = {}
     found: set[str] = set()
-    for m in module.modules():
+    for m in module:
         if not isinstance(m, Linear):
             continue
         key = str(getattr(m, "key", ""))
@@ -141,7 +141,9 @@ def _run_shard(spec: ShardSpec, device: int, work: Path) -> None:
         quant_args = convert_model.make_quant_args(
             args, spec.module_idx, k_bits, [device], None
         )
-        m.convert_exl3(h_data, quant_args)
+        # Set H_swap_device before convert_exl3 (plan §6 contract mechanism).
+        h_data["H_swap_device"] = torch_device
+        m.convert_exl3(h_data, quant_args, override_swap_device=torch_device)
         found.add(key)
         for tkey, tval in m.get_tensors().items():
             if tkey in q_tensors:
