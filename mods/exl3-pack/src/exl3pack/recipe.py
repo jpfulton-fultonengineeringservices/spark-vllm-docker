@@ -49,15 +49,16 @@ class Recipe:
     achieved_bpw: float
     head_bits: float = DEFAULT_HEAD_BITS
     mtp_bits: float | None = None
+    codebook: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         """The exact mapping ``convert_model`` reads.
 
         ``tensors`` / ``achieved_bpw`` / ``head_bits`` are what ``convert_model``
-        reads. ``mtp_bits`` is emitted as a convenience for the shard driver
-        (``convert_model``'s ``--mtp_bits`` is *not* read from the recipe, so the
-        driver must pass ``-mb`` identically on every shard; extra top-level keys
-        are ignored by ``prepare()``).
+        reads. ``mtp_bits`` and ``codebook`` are emitted as conveniences for the
+        shard driver (``convert_model``'s ``--mtp_bits``/``--codebook`` are *not*
+        read from the recipe, so the driver must pass ``-mb``/``-cb`` identically
+        on every shard; extra top-level keys are ignored by ``prepare()``).
         """
         out: dict[str, object] = {
             "tensors": {k: self.tensors[k] for k in sorted(self.tensors)},
@@ -66,6 +67,8 @@ class Recipe:
         }
         if self.mtp_bits is not None:
             out["mtp_bits"] = self.mtp_bits
+        if self.codebook is not None:
+            out["codebook"] = self.codebook
         return out
 
 
@@ -95,6 +98,8 @@ def render_recipe(recipe: Recipe) -> str:
     ]
     if "mtp_bits" in data:
         lines.append(f"mtp_bits: {json.dumps(data['mtp_bits'])}")
+    if "codebook" in data:
+        lines.append(f"codebook: {json.dumps(data['codebook'])}")
     lines.append("tensors:")
     tensors = data["tensors"]
     assert isinstance(tensors, dict)
@@ -118,6 +123,7 @@ def parse_recipe(text: str) -> Recipe:
     achieved: float | None = None
     head_bits: float = DEFAULT_HEAD_BITS
     mtp_bits: float | None = None
+    codebook: str | None = None
     tensors: dict[str, float] = {}
     in_tensors = False
     for line in text.splitlines():
@@ -131,6 +137,8 @@ def parse_recipe(text: str) -> Recipe:
                 head_bits = _as_rate(line.split(":", 1)[1].strip())
             elif line.startswith("mtp_bits:"):
                 mtp_bits = _as_rate(line.split(":", 1)[1].strip())
+            elif line.startswith("codebook:"):
+                codebook = json.loads(line.split(":", 1)[1].strip())
             elif line.startswith("tensors:"):
                 in_tensors = True
             continue
@@ -145,7 +153,13 @@ def parse_recipe(text: str) -> Recipe:
         raise ValueError("recipe is missing 'achieved_bpw'")
     if not tensors:
         raise ValueError("recipe must contain a non-empty 'tensors' mapping")
-    return Recipe(tensors=tensors, achieved_bpw=achieved, head_bits=head_bits, mtp_bits=mtp_bits)
+    return Recipe(
+        tensors=tensors,
+        achieved_bpw=achieved,
+        head_bits=head_bits,
+        mtp_bits=mtp_bits,
+        codebook=codebook,
+    )
 
 
 def write_recipe(out: Path, recipe: Recipe) -> Path:
@@ -289,6 +303,7 @@ def build(
         achieved_bpw=float(achieved),
         head_bits=_as_rate(in_args["head_bits"]),
         mtp_bits=_as_rate(in_args["mtp_bits"]),
+        codebook=codebook,
     )
 
 

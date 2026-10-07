@@ -136,11 +136,13 @@ def test_recipe_half_rate_head_and_tensors() -> None:
         achieved_bpw=2.5,
         head_bits=2.5,
         mtp_bits=4.5,
+        codebook="mul1",
     )
     back = parse_recipe(render_recipe(r))
     assert back.tensors == {"a": 1.5, "b": 3.5}
     assert back.head_bits == 2.5
     assert back.mtp_bits == 4.5
+    assert back.codebook == "mul1"
 
 
 class _Mod:
