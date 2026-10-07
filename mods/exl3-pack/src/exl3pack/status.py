@@ -19,8 +19,12 @@ import os
 import signal
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
+
+# ``datetime.UTC`` is 3.11+; this renderer runs on the operator's workstation
+# (may be an older Python). ``timezone.utc`` is equivalent and always present.
+UTC = timezone.utc
 
 
 def _status_path(pos_args: list[str]) -> Path:
