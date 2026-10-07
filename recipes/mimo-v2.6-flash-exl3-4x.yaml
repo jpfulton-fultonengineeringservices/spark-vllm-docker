@@ -6,16 +6,16 @@
 # format. Four-node sibling of recipes/mimo-v2.6-flash-exl3-1x.yaml and
 # recipes/mimo-v2.6-flash-exl3-2x.yaml (same serve args, topology split).
 #
-# !!! NOT PRODUCTION-READY — awaiting an end-to-end coherence receipt.
-# The prior "MCG codebook parity bug" is DISPROVEN: parity_probe_v2 shows the
-# container conversion and both MCG decodes are faithful (cos=1.0). The real
-# garbage-serving cause was a dense FP8 dequant bug in
-# assemble._dequant_fp8_block (flat vs per-group on the interleaved fused
-# qkv_proj, misaligned on the 9 kv=4 layers), fixed by 3795b4f +
-# _dequant_fp8_block_dispatch. Mark this recipe ready only once a served
-# checkpoint from the correctly-assembled pack is proven coherent (greedy
-# parity + finite wikitext-2 PPL). See .omp/plans/exl3-mimo-recipes.md
-# "Track P" / Track T step 7. Do NOT deploy the production route before then.
+# COHERENT PACK PROVEN (2026-10-07). The prior "MCG codebook parity bug" is
+# DISPROVEN: parity_probe_v2 shows the container conversion and both MCG
+# decodes are faithful (cos=1.0). The real garbage-serving cause was a dense
+# FP8 dequant bug in assemble._dequant_fp8_block (flat vs per-group on the
+# interleaved fused qkv_proj, misaligned on the 9 kv=4 layers), fixed by
+# 3795b4f + _dequant_fp8_block_dispatch. A correctly-assembled pack served at
+# TP=2 is coherent: early logprobs not flat, wikitext-2 PPL 7.035
+# (/nas-1/fes-projects/exl3-mimo-build/coherence-receipt.json). This recipe is
+# TP=4 of the same artifact family; still verify coherent output at TP=4 and
+# for the UNcensored Flash pack before flipping the production route.
 #
 # EXL3 MoE path is driven by the `exl3` quant method (Exl3Config /
 # Exl3MoEMethod), NOT by --moe-backend. TP=4 is legal: the fork's
