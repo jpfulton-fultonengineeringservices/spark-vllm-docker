@@ -22,11 +22,17 @@
 # MTP parity: every shard uses convert_model's default mtp_bits=4; cli.py has
 # no per-shard MTP override, so non-default MTP rates require cli.py wiring.
 #
+#   watch|status --model <slug> --nodes <n1,n2,...> [--interval <sec>] [--bits <n>]
+#       Read-only: cat each node's .pack-status.json over ssh and render it with
+#       the shared status.py. Single pass then exit unless --interval is given
+#       on a tty.
+#
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 EXL3_SRC="${REPO_ROOT}/mods/exl3-pack/src"
+PACK_STATUS_BIN="${EXL3_SRC}/exl3pack/status.py"
 
 TAG="exl3-pack:cu13.0"
 NOFILE_LIMIT="${EXL3_PACK_NOFILE:-1048576}"
@@ -42,7 +48,9 @@ err() {
 }
 
 usage() {
-    sed -n '2,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    # Everything after the shebang up to the first non-comment line, with the
+    # '# ' prefix stripped.
+    awk 'NR==1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"
 }
 
 # Node -> rail-a IP (10.100.170.<x>).
@@ -188,7 +196,9 @@ cmd_run() {
 
     local i=0
     local idx start end layers_csv
-    while IFS="$(printf '\t')" read -r idx start end layers_csv; do
+    # The plan is read from fd 3 so the loop body's stdin (which the remote
+    # launch consumes) can't swallow plan lines and stop after the first shard.
+    while IFS="$(printf '\t')" read -r idx start end layers_csv <&3; do
         [ -n "$idx" ] || continue
         local node alias ip name work_rel out_rel status_file
         node="$(echo "$node_list" | cut -d' ' -f$((i + 1)))"
@@ -214,7 +224,7 @@ cmd_run() {
         echo "run: ${alias}(${ip}) ${name} modules ${start}-${end}"
         run_or_echo "ssh '${alias}' $(printf '%q' "$cmd")"
         i=$((i + 1))
-    done <<EOF
+    done 3<<EOF
 $plan
 EOF
 }
@@ -283,6 +293,101 @@ cmd_merge() {
     run_or_echo "ssh '${merge_alias}' $(printf '%q' "$merge_cmd")"
 }
 
+# Read-only status watch. The .pack-status.json files live on the node-local
+# NVMe (/opt/llm), invisible on the workstation, so each node's file is cat'd
+# over ssh and rendered by the shared status.py (same renderer the sibling
+# exl3-pack-drive.sh uses). Paths and shard indices mirror cmd_run exactly.
+status_file_for() {
+    local model="$1" work_k="$2" i="$3"
+    echo "${LOCAL_ROOT}/fes-projects/exl3-mimo-build/${model}-work-${work_k}/node${i}/${STATUS_NAME}"
+}
+
+shard_container_state() {
+    local alias="$1" model="$2" i="$3"
+    ssh "$alias" "docker inspect -f '{{.State.Status}}' 'exl3-pack-job-${model}-${i}' 2>/dev/null" \
+        2>/dev/null || echo "gone"
+}
+
+cmd_watch() {
+    local model="" nodes="" interval=5 interval_set=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --model) model="${2:-}"; shift 2 ;;
+            --nodes) nodes="${2:-}"; shift 2 ;;
+            --interval) interval="${2:-}"; interval_set=true; shift 2 ;;
+            --bits) BITS="${2:-}"; shift 2 ;;
+            -h|--help) usage; return 0 ;;
+            *) err "watch: unknown arg '$1'"; return 2 ;;
+        esac
+    done
+    [ -n "$model" ] || { err "watch: --model required"; return 2; }
+    [ -n "$nodes" ] || { err "watch: --nodes required"; return 2; }
+    case "$interval" in
+        ''|*[!0-9]*) err "watch: --interval must be a positive integer"; return 2 ;;
+        0) err "watch: --interval must be a positive integer"; return 2 ;;
+    esac
+
+    local work_k="k${BITS:-3}"
+    local node_list="${nodes//,/ }"
+    local node_count
+    node_count="$(echo "$node_list" | wc -w | tr -d ' ')"
+
+    # Loop only when explicitly asked (--interval) and stdout is a tty; a
+    # non-tty (pipe/CI) always does one pass and exits.
+    local loop=true
+    if [ ! -t 1 ] && [ "$interval_set" != true ]; then
+        loop=false
+    fi
+
+    local first=true saw_any=false
+    while :; do
+        if [ "$loop" = true ]; then
+            if [ "$first" = true ]; then
+                printf '\033[2J\033[H'
+                first=false
+            else
+                printf '\033[H'
+            fi
+        fi
+        local terminal=0 i=0 node
+        for node in $node_list; do
+            local alias path tmp st
+            alias="$(node_alias "$node")" || { err "watch: unknown node '${node}'"; return 2; }
+            path="$(status_file_for "$model" "$work_k" "$i")"
+            tmp="$(mktemp "${TMPDIR:-/tmp}/pack-status.XXXXXX")"
+            echo "--- ${node} (${alias}) node${i} ---"
+            if ssh "$alias" "cat '${path}' 2>/dev/null" >"$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+                saw_any=true
+                python3 "$PACK_STATUS_BIN" "$tmp" || true
+                if grep -qE '"phase"[[:space:]]*:[[:space:]]*"(done|error)"' "$tmp"; then
+                    terminal=$((terminal + 1))
+                else
+                    st="$(shard_container_state "$alias" "$model" "$i")"
+                    case "$st" in
+                        exited*|gone*) terminal=$((terminal + 1)) ;;
+                    esac
+                fi
+            else
+                echo "waiting for ${path} ..."
+                st="$(shard_container_state "$alias" "$model" "$i")"
+                case "$st" in
+                    exited*|gone*) if [ "$saw_any" = true ]; then terminal=$((terminal + 1)); fi ;;
+                esac
+            fi
+            rm -f "$tmp"
+            i=$((i + 1))
+        done
+
+        if [ "$loop" = false ]; then
+            break
+        fi
+        if [ "$saw_any" = true ] && [ "$terminal" -ge "$node_count" ]; then
+            break
+        fi
+        sleep "$interval"
+    done
+}
+
 # --- arg dispatch ---
 sub="${1:-help}"
 [ $# -gt 0 ] && shift
@@ -290,6 +395,7 @@ case "$sub" in
     stage) cmd_stage "$@" ;;
     run) cmd_run "$@" ;;
     merge) cmd_merge "$@" ;;
+    watch|status) cmd_watch "$@" ;;
     help|-h|--help) usage ;;
     *) err "unknown subcommand '$sub'"; usage; exit 2 ;;
 esac
