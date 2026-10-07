@@ -24,7 +24,7 @@ from pathlib import Path
 
 # ``datetime.UTC`` is 3.11+; this renderer runs on the operator's workstation
 # (may be an older Python). ``timezone.utc`` is equivalent and always present.
-UTC = timezone.utc
+UTC = timezone.utc  # noqa: UP017 — keep 3.9 compatibility on the workstation
 
 
 def _status_path(pos_args: list[str]) -> Path:
