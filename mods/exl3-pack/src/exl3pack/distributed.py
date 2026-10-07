@@ -132,10 +132,14 @@ class Coordinator:
         self._last_checkpoint_time = 0.0
         self._index_sha: str | None = None
         self._planned_keys: set[str] = set()
+        self._strategy: dict[str, float] = {}
         (self.work / "dist").mkdir(parents=True, exist_ok=True)
 
     def run(self) -> None:
         """Drive the full loop; return on success, raise on hard failure."""
+        # P1-e: crash-window restore must happen before prepare() reads ckpt/job.json.
+        self._restore_checkpoint_backup()
+
         in_args, job_state, ok, err = convert_model.prepare(
             argparse.Namespace(**self.args)
         )
@@ -158,9 +162,18 @@ class Coordinator:
         state, original_input_ids = convert_model.prepare_state(
             in_args, job_state, config, model, tokenizer
         )
+        # B2: upstream guard: fresh run copies state; resumed run materializes None
+        if original_input_ids is None:
+            original_input_ids = (
+                state.copy()
+                if int(job_state.get("next_module_idx", 0) or 0) == 0
+                else [None] * len(state)
+            )
 
         # Build the model-global bitrate strategy (plan §8).
         strategy = self._build_strategy(model, _mtp_model, _vision_model, config)
+        # Store strategy for later per-linear required-key checks (plan §9a)
+        self._strategy = strategy
 
         # One-shot publish of the resolved per-linear K map for workers
         # (job.json q_strategy is dead/None). Must precede any shard dispatch.
@@ -235,7 +248,8 @@ class Coordinator:
                             ref_params,
                         )
                         _put_preserve(quant_preserves, i, ref_params)
-                    if torch.isfinite(rs).all():
+                    # N1: parity-consistency with upstream: use .all().item()
+                    if torch.isfinite(rs).all().item():
                         ref_states[i] = rs.cpu()
                     else:
                         bad_rows.add(i)
@@ -262,6 +276,10 @@ class Coordinator:
                 for m in module
                 if isinstance(m, Linear) and m.qmap and m.device is not None
             ]
+            # M2: swap CPU weights pre-dispatch (upstream ~1360)
+            for linear in linears:
+               if getattr(linear, 'inner', None) is not None:
+                   linear.inner.swap_cpu()
             if linears:
                 groups = convert_model.group_quant_linears(
                     linears, strategy, capture_H
@@ -273,7 +291,11 @@ class Coordinator:
                 self._dispatch(specs)
                 try:
                     q_tensors = self._gather(specs)
-                except Exception:  # plan §10: one module-level re-dispatch
+                except Exception:
+                    # M3: clear stale partial results before retry (plan §5)
+                    for spec in specs:
+                        Path(spec.result_uri).unlink(missing_ok=True)
+                        Path(spec.result_uri).with_suffix('.done').unlink(missing_ok=True)
                     self._dispatch(specs)
                     q_tensors = self._gather(specs)
                 self._commit_module(module_key, q_tensors)
@@ -282,25 +304,26 @@ class Coordinator:
                     module.load(device, source=q_tensors, keep_source_weights=True)
                 finally:
                     config.stc.set_new_tensors(None)
+                # M2: unload module post-commit if not retaining during quant (upstream ~1500)
+                if not getattr(module, 'caps', {}).get('retain_during_quant'):
+                    module.unload()
 
             # -- advance state serially through the (quantized) module ---
             for i in range(len(state)):
                 if i in bad_rows:
                     continue
                 adv_params: dict[str, Any] = {
-                    "attn_mode": "flash_attn_nc",
-                    "input_ids": original_input_ids[i],
+                    'attn_mode': 'flash_attn_nc',
+                    'input_ids': original_input_ids[i],
                 }
                 state[i] = module.prepare_for_device(state[i], adv_params)
                 if i < _NUM_REF_STATES or idx < len(modules) - 1:
                     _get_preserve(quant_preserves, i, adv_params)
                     rs = module.forward(state[i], adv_params)
-                    if not torch.isfinite(rs).all():
+                    # N1: use .all().item() for boolean
+                    if not torch.isfinite(rs).all().item():
                         bad_rows.add(i)
-                        print(
-                            f" !! Non-finite hidden state in "
-                            f"calibration row {i}, excluding row"
-                        )
+                        print(f" !! Non-finite hidden state in calibration row {i}, excluding row")
                     state[i] = rs.cpu()
                     _put_preserve(quant_preserves, i, adv_params)
 
@@ -387,6 +410,7 @@ class Coordinator:
         the model. It is written before any shard spec is dispatched and
         holds the exact dict fed to ``group_quant_linears``/``make_quant_args``.
         """
+        self._strategy = dict(strategy)
         path = self.work / "dist" / "strategy.json"
         payload = json.dumps(strategy, sort_keys=True, separators=(",", ":"))
 
@@ -567,17 +591,21 @@ class Coordinator:
     def _gather(
         self, specs: list[ShardSpec]
     ) -> dict[str, torch.Tensor]:
-        """Wait for shard outputs (bounded), verify hashes, merge q_tensors."""
-        deadline = time.monotonic() + self.gather_timeout
+        """Wait for shard outputs (bounded), verify hashes, merge q_tensors.
+
+        P1-d: per-shard gather timeout window (plan §5).
+        """
         merged: dict[str, torch.Tensor] = {}
         for spec in specs:
+            # P1-d: per-shard deadline
+            deadline = time.monotonic() + self.gather_timeout
             data_path = Path(spec.result_uri)
             done_path = data_path.with_suffix(".done")
             while not done_path.exists():
                 if time.monotonic() > deadline:
                     raise TimeoutError(
                         f"{spec.module_key} shard {spec.shard_idx}: "
-                        f"no done marker within {self.gather_timeout:.0f}s"
+                        f"timeout after {self.gather_timeout:.0f}s"
                     )
                 time.sleep(1.0)
             expected = read_done_marker(done_path)
@@ -611,7 +639,14 @@ class Coordinator:
         module_key: str,
         q_tensors: dict[str, torch.Tensor],
     ) -> None:
-        """Coverage-assert gathered tensors, then write the module file."""
+        """Coverage-assert gathered tensors, then write the module file.
+
+        P1-a: per-linear required-key assertion (plan §9a):
+          - K == 16 → LinearEXL3 packed weight, require <key>.weight.
+          - K < 16 → trellis mode, require <key>.trellis.
+        Format-specific keys (su/sv/suh/svh) are NOT asserted here;
+        upstream merge.py or tensor-level code determines the exact set.
+        """
         coverage_assert(
             self._planned_keys,
             {_base_key(k) for k in q_tensors},
@@ -634,6 +669,19 @@ class Coordinator:
                         f"{module_key}: expected 256 expert down_proj keys "
                         f"(experts 0-255), got {len(experts)} distinct"
                     )
+
+        # P1-a: per-linear required-key assertion
+        strategy = getattr(self, '_strategy', {})
+        for key in self._planned_keys:
+            K = strategy.get(key)
+            if K is None:
+                continue
+            required = f"{key}.weight" if K == 16 else f"{key}.trellis"
+            if required not in q_tensors:
+                raise ValueError(
+                    f"{module_key}: missing required key '{required}' for linear {key}"
+                )
+
 
         out_path = self.work / "qtensors" / f"{module_key}.safetensors"
 
@@ -659,6 +707,11 @@ class Coordinator:
         """
         ckpt = self.work / "ckpt"
         stage = self.work / "ckpt_new"
+        backup = self.work / "ckpt_old"
+
+        if stage.exists():
+            shutil.rmtree(stage)
+
         stage.mkdir(parents=True, exist_ok=True)
         (stage / "job.json").write_text(
             json.dumps(job_state, indent=2, sort_keys=True),
@@ -683,6 +736,13 @@ class Coordinator:
         os.replace(stage, ckpt)
         if backup.exists():
             shutil.rmtree(backup)
+
+    def _restore_checkpoint_backup(self) -> None:
+        """Restore ``ckpt_old`` before prepare reads the checkpoint."""
+        ckpt = self.work / "ckpt"
+        backup = self.work / "ckpt_old"
+        if not ckpt.exists() and backup.exists():
+            os.replace(backup, ckpt)
 
     # ------------------------------------------------------------------ #
     #  Weights digest                                                     #
