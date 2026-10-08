@@ -22,8 +22,8 @@ import re
 import sys
 import urllib.request
 import zipfile
-from pathlib import Path
 from io import BytesIO
+from pathlib import Path
 
 TESTS = Path(__file__).parent
 REPO_ROOT = TESTS.parent.parent.parent  # spark-vllm-docker/
@@ -58,7 +58,11 @@ def attribute_reads(tree: ast.Module, function_name: str, seen: set[str] = ()) -
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == function_name:
             for inner in ast.walk(node):
-                if isinstance(inner, ast.Attribute) and isinstance(inner.value, ast.Name) and inner.value.id == "args":
+                if (
+                    isinstance(inner, ast.Attribute)
+                    and isinstance(inner.value, ast.Name)
+                    and inner.value.id == "args"
+                ):
                     seen.add(inner.attr)
     return seen
 
