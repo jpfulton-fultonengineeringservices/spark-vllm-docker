@@ -48,3 +48,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "image: needs the exl3-pack image (exllamav3 importable); excluded from default runs",
+]
+addopts = "-m 'not image'"
