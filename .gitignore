@@ -26,6 +26,7 @@ backup-wheels
 .codex
 wheels
 artifacts
+.git-worktrees/
 
 # Scratch findings/notes (local only)
 tmp/
