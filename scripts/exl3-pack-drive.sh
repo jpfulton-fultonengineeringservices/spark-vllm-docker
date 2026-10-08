@@ -105,6 +105,8 @@
 #   dist-worker distributed pack: worker role
 #   dist-run    distributed pack, one command: launches workers, runs the
 #               coordinator, then stops workers (also on Ctrl-C or failure)
+#   typecheck   in-image type safety: stubtest (stubs vs installed wheel)
+#               + mypy (src vs stubs). Read-only; needs --host only.
 #   build       build the image on the node
 #   sync        rsync the build context to the node
 #   status      print current progress once
@@ -354,6 +356,7 @@ case "$subcommand" in
   dist-worker) cmd_dist_worker ;;
   dist-run) cmd_dist_run ;;
   dist-preflight) cmd_dist_preflight ;;
+  typecheck) cmd_typecheck ;;
   build) cmd_build ;;
   sync)       cmd_sync ;;
   status)     cmd_status ;;
