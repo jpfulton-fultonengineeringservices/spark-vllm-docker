@@ -57,8 +57,35 @@ def load_parallel_calib_modules(
     replica_models: Any, idx: int, devices: Any, load_slice: Any, source: Any = None
 ) -> Any: ...
 def run_row_workers(title: Any, num_rows: int, workers: Any, progress_count: Any) -> Any: ...
-def capture_module_parallel(*args: Any, **kwargs: Any) -> Any: ...
-def advance_state_parallel(*args: Any, **kwargs: Any) -> Any: ...
+def capture_module_parallel(
+    model: Any,
+    modules: Any,
+    devices: Any,
+    device_ratios: Any,
+    state: Any,
+    original_input_ids: Any,
+    get_preserve: Any,
+    put_preserve: Any,
+    slicing: Any,
+    current_slice: Any,
+    title: Any,
+    bad_rows: Any,
+) -> Any: ...
+def advance_state_parallel(
+    model: Any,
+    modules: Any,
+    devices: Any,
+    device_ratios: Any,
+    state: Any,
+    original_input_ids: Any,
+    get_preserve: Any,
+    put_preserve: Any,
+    ref_states: Any,
+    have_linears: Any,
+    is_last_module: Any,
+    title: Any,
+    bad_rows: Any,
+) -> Any: ...
 def image_dump(args: Any, linears: Any) -> None: ...
 def host_rss_str() -> str: ...
 def feedback_module(
@@ -77,3 +104,12 @@ def main(args: Any, job_state: Any) -> Any: ...
 
 timed_blocks: int
 eta_window: deque[Any]
+
+col_default: str
+col_red: str
+curr_progress: int
+group: Any
+max_progress: int
+num_ref_states: int
+parser: Any
+progress_lock: Any
