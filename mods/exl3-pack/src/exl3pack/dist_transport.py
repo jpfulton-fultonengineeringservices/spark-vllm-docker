@@ -19,6 +19,7 @@ import torch
 from exllamav3.modules.linear import Linear
 from safetensors.torch import load_file
 
+from exl3pack.cli import CoordinatorArgs
 from exl3pack.dist_types import (
     ShardSpec,
     WorkerEndpoint,
@@ -49,7 +50,9 @@ _HEARTBEAT_STALE_S = 10.0
 class _TransportMixin:
     """Transport methods, mixed into ``Coordinator``."""
 
-    args: dict[str, Any]
+    # Union: pre-prepare CoordinatorArgs, post-prepare the merged in_args
+    # superset (prepare() adds derived keys).
+    args: CoordinatorArgs | dict[str, Any]
     work: Path
     endpoints: list[WorkerEndpoint]
     gather_timeout: float

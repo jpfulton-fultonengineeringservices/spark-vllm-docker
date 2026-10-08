@@ -12,6 +12,7 @@ from typing import Any
 
 from exllamav3.model.config import Config
 
+from exl3pack.cli import CoordinatorArgs
 from exl3pack.dist_types import write_atomic
 from exl3pack.recipe import DEFAULT_HEAD_BITS, DEFAULT_MTP_BITS
 
@@ -20,7 +21,9 @@ class _StrategyMixin:
     """Strategy methods, mixed into ``Coordinator``."""
 
     # Declared by ``Coordinator.__init__``.
-    args: dict[str, Any]
+    # Union: pre-prepare CoordinatorArgs, post-prepare the merged in_args
+    # superset (prepare() adds derived keys).
+    args: CoordinatorArgs | dict[str, Any]
     work: Path
     _strategy: dict[str, float]
 
@@ -42,6 +45,13 @@ class _StrategyMixin:
         """
         allocation = import_module("exllamav3.conversion.allocation")
         recipe_map = self.args.get("recipe_strategy")
+        # head_bits/mtp_bits are float | None at the boundary; None means
+        # "upstream default" (recipe/arg defaults apply), so coerce only
+        # when actually set.
+        head_bits = self.args.get("head_bits")
+        head_bits_eff = DEFAULT_HEAD_BITS if head_bits is None else float(head_bits)
+        mtp_bits = self.args.get("mtp_bits")
+        mtp_bits_eff = DEFAULT_MTP_BITS if mtp_bits is None else float(mtp_bits)
         if isinstance(recipe_map, dict):
             (
                 strategy,
@@ -51,8 +61,8 @@ class _StrategyMixin:
                 mtp_model,
                 config,
                 recipe_map,
-                float(self.args.get("head_bits", DEFAULT_HEAD_BITS)),
-                float(self.args.get("mtp_bits", DEFAULT_MTP_BITS)),
+                head_bits_eff,
+                mtp_bits_eff,
                 vision_model=vision_model,
                 vision_bpw=int(self.args.get("vision_bits", 16)),
             )
@@ -64,9 +74,9 @@ class _StrategyMixin:
                 model,
                 mtp_model,
                 config,
-                float(self.args.get("bits", 4)),
-                float(self.args.get("head_bits", DEFAULT_HEAD_BITS)),
-                float(self.args.get("mtp_bits", DEFAULT_MTP_BITS)),
+                float(self.args["bits"]),
+                head_bits_eff,
+                mtp_bits_eff,
                 bool(self.args.get("hq", False)),
                 vision_model=vision_model,
                 vision_bpw=int(self.args.get("vision_bits", 16)),
