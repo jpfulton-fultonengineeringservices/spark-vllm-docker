@@ -251,13 +251,17 @@ def _cmd_typecheck(args: argparse.Namespace) -> int:
         })
 
     # 1) stubtest: validate stubs against the installed runtime package
+    #    --custom-typeshed-dir expects the directory CONTAINING stubs/
     _run("stubtest_exllamav3", [sys.executable, "-m", "mypy.stubtest",
-                                 "--custom-typeshed-dir", str(root / "stubs"),
-                                 "--crash-on-error", "exllamav3.conversion.convert_model"])
+                                 "--custom-typeshed-dir", str(root),
+                                 "exllamav3.conversion.convert_model"])
 
     # 2) mypy: validate src/exl3pack against the stubs using repo config
+    #    (pyproject.toml baked alongside src/ in the image)
     _run("mypy_src", [sys.executable, "-m", "mypy",
-                        "--config-file", str(root / "pyproject.toml"), "--no-error-summary"])
+                        "--config-file", str(root / "pyproject.toml"),
+                        "--mypy-path", f"{root / 'src'}:{root / 'stubs'}",
+                        "--no-error-summary", str(root / "src" / "exl3pack")])
 
     report = {"checks": checks, "ok": all(c["ok"] for c in checks)}
     print(json.dumps(report, indent=2))
