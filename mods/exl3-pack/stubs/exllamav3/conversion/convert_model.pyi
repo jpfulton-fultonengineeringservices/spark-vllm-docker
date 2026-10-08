@@ -1,3 +1,4 @@
+from collections import deque
 from typing import Any
 
 import torch
@@ -75,4 +76,4 @@ def clear_temp_files(args: Any) -> None: ...
 def main(args: Any, job_state: Any) -> Any: ...
 
 timed_blocks: int
-eta_window: Any
+eta_window: deque[Any]
