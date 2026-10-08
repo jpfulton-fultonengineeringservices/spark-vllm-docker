@@ -42,6 +42,21 @@ cmd_dist_worker() {
   docker_run fg - dist-worker --inbox "$INBOX" --shared "$SHARED" --device "$DEVICE" --stop "$STOP"
 }
 
+# Emit <work>/recipe.yaml in-image before workers launch. The distributed
+# coordinator passes --recipe to convert_model.prepare(), which requires the
+# file to exist; unlike the single-node convert stage it is never emitted
+# implicitly, so dist-run must do it explicitly.
+_emit_dist_recipe() {
+  local src="$1" work="$2" recipe="$3"
+  [ -n "$src" ] && [ -n "$work" ] && [ -n "$recipe" ] \
+    || { err "dist-run: recipe emission needs --source/--work/--recipe"; exit 2; }
+  [ "$DRY_RUN" = true ] && { echo "[dry-run] dist-run: would emit ${recipe} via exl3-pack recipe"; return 0; }
+  build_global_args
+  docker_run_host "$HOST" "${NAME}-recipe" fg - recipe \
+    --source "$src" --work "$work" --out "$recipe" \
+    || { err "dist-run: recipe emission failed"; return 1; }
+}
+
 cmd_dist_run() {
   case "$CODEBOOK" in
     ""|mcg|lut_e4m3|lut_fp16) : ok ;;
@@ -79,6 +94,7 @@ cmd_dist_run() {
   # Guard BEFORE the EXIT trap is armed: a refusal must change nothing on any
   # node, and the trap's teardown writes stop-files on every node.
   preflight_dist_run || return 1
+  _emit_dist_recipe "$src" "$work" "$recipe" || return 1
   # Teardown runs on every exit path (normal return, set -e failure, Ctrl-C,
   # TERM): workers poll for the stop sentinel and otherwise never exit.
   dist_run_teardown_done=false
