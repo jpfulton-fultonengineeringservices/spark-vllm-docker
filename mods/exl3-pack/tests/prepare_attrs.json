@@ -1,0 +1,17 @@
+[
+  "bits",
+  "codebook",
+  "head_bits",
+  "hq",
+  "image_dump",
+  "in_dir",
+  "max_module",
+  "mtp_bits",
+  "out_dir",
+  "out_scales",
+  "override_anyway",
+  "recipe",
+  "resume",
+  "verbose",
+  "work_dir"
+]

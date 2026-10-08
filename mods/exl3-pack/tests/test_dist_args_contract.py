@@ -14,6 +14,8 @@ on a torch-free host.
 from __future__ import annotations
 
 import argparse
+import ast
+import json
 import importlib
 import importlib.util
 import os
@@ -29,7 +31,11 @@ from exl3pack.cli import _EXL3_CODEBOOKS, build_parser
 from exl3pack.spec import load_spec
 
 MODEL = "mimo-v2.6-flash-rl-uncensored"
-REQUIRED_BY_PREPARE = ("bits", "codebook", "in_dir", "out_dir", "recipe", "work_dir")
+# Every args.X attribute prepare() reads, generated from the pinned wheel
+# (see gen_prepare_attrs.py). Not hand-maintained.
+REQUIRED_BY_PREPARE: tuple[str, ...] = tuple(
+    json.loads(Path(__file__).with_name("prepare_attrs.json").read_text())
+)
 
 
 def _specs_root() -> Path:
@@ -90,8 +96,10 @@ def _built_coordinator_args(extra: list[str]) -> dict[str, object]:
 def test_coordinator_args_carry_every_attribute_prepare_reads(extra: list[str]) -> None:
     args = _built_coordinator_args(extra)
     for key in REQUIRED_BY_PREPARE:
-        assert key in args, f"coordinator args missing {key!r}; prepare() will raise"
-        assert args[key] is not None, f"{key!r} is None; prepare() will fail"
+        assert key in args, (
+            f"coordinator args missing {key!r}; prepare() will raise AttributeError. "
+            "Upstream defaults live in gen_prepare_attrs.py."
+        )
 
 
 def test_bits_default_comes_from_model_spec_when_flag_omitted() -> None:
@@ -110,3 +118,25 @@ def test_codebook_is_always_one_of_the_accepted_names() -> None:
 def test_bogus_codebook_is_rejected_at_parse_time() -> None:
     with pytest.raises(SystemExit):
         build_parser().parse_args(_dist_argv(["--codebook", "bogus"]))
+
+
+@pytest.mark.image
+def test_required_attrs_match_live_prepare_signature() -> None:
+    """In-image drift guard: the fixture must match what the pinned
+    exllamav3's prepare() actually reads. Runs only where exllamav3 is
+    importable (the exl3-pack image); host runs skip on the image marker."""
+    import exllamav3.conversion.convert_model as cm  # noqa: PLC0415
+    import inspect  # noqa: PLC0415
+
+    src = inspect.getsource(cm.prepare)
+    tree = ast.parse(src)
+    live = {
+        n.attr
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id == "args"
+    }
+    assert live == set(REQUIRED_BY_PREPARE), (
+        f"prepare() reads {sorted(live - set(REQUIRED_BY_PREPARE))} not in fixture; "
+        f"fixture has {sorted(set(REQUIRED_BY_PREPARE) - live)} prepare() no longer reads. "
+        "Regenerate with: uv run --extra hosttest python tests/gen_prepare_attrs.py"
+    )

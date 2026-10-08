@@ -404,6 +404,16 @@ def _cmd_dist_coordinator(args: argparse.Namespace) -> int:
         "work_dir": str(work),
         "gather_timeout": float(args.gather_timeout),
         "checkpoint_interval": int(args.checkpoint_interval),
+        # prepare() also reads these; supply upstream argparse defaults
+        "resume": False,
+        "head_bits": None,
+        "mtp_bits": None,
+        "hq": False,
+        "override_anyway": False,
+        "image_dump": False,
+        "verbose": False,
+        "out_scales": "always",
+        "max_module": None,
     }
     # bits: explicit flag wins; otherwise the model's PackSpec supplies it, the
     # same source every other subcommand uses. Without this, prepare() raises
