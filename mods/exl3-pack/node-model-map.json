@@ -5,7 +5,7 @@
   "notes": "Only node3 and node4 hold a complete new-source checkpoint (Flash-uncensored / Pro-uncensored). node1's uncensored copy is a 2.3 GB partial; node1/node2 hold only the Flash base + existing packs. No Pro checkpoint exists on node1/node2 or on /nas-1 beyond node4's local copy's NAS twin.",
   "nodes": {
     "gx10-becc": {
-      "alias": "home-gx10-node3",
+      "alias": "gx10-node3",
       "cluster_node": "node3",
       "local_root": "/opt/llm",
       "checkpoints": {
@@ -34,7 +34,7 @@
       }
     },
     "gx10-9273": {
-      "alias": "home-gx10-node4",
+      "alias": "gx10-node4",
       "cluster_node": "node4",
       "local_root": "/opt/llm",
       "checkpoints": {
@@ -63,7 +63,7 @@
       }
     },
     "gx10-cb11": {
-      "alias": "home-gx10-node1",
+      "alias": "gx10-node1",
       "cluster_node": "node1",
       "local_root": "/opt/llm",
       "checkpoints": {
@@ -82,7 +82,7 @@
       }
     },
     "gx10-f1d8": {
-      "alias": "home-gx10-node2",
+      "alias": "gx10-node2",
       "cluster_node": "node2",
       "local_root": "/opt/llm",
       "checkpoints": {
