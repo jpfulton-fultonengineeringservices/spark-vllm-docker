@@ -31,6 +31,7 @@ from exl3pack.logconfig import get_logger, log_event
 __all__ = ["serve"]
 
 _POLL_INTERVAL_S = 1.0
+_MAX_CONSECUTIVE_SPEC_FAILURES = 3
 
 def _lazy(name: str) -> Any:
     """Import *name* lazily (torch / exllamav3 are image-only)."""
@@ -57,6 +58,7 @@ def serve(
     inbox = Path(inbox)
     stop = Path(stop)
     log = get_logger("worker", log_dir=log_dir)
+    consecutive_failures: dict[str, int] = {}
     log_event(
         log,
         logging.INFO,
@@ -106,6 +108,21 @@ def serve(
             try:
                 _run_shard(spec, device, Path(shared))
             except Exception as exc:  # noqa: BLE001 — keep serving after a bad shard
+                key = str(spec_path)
+                consecutive_failures[key] = consecutive_failures.get(key, 0) + 1
+                if consecutive_failures[key] >= _MAX_CONSECUTIVE_SPEC_FAILURES:
+                    log_event(
+                        log,
+                        logging.CRITICAL,
+                        "worker.shard_failed_fatal",
+                        fields={
+                            "shard": spec.shard_idx,
+                            "module": spec.module_key,
+                            "consecutive_failures": consecutive_failures[key],
+                            "error": str(exc),
+                        },
+                    )
+                    raise SystemExit(1) from exc
                 log_event(
                     log,
                     logging.ERROR,
@@ -125,6 +142,7 @@ def serve(
                 "worker.shard_done",
                 fields={"shard": spec.shard_idx, "module": spec.module_key},
             )
+            consecutive_failures.pop(str(spec_path), None)
             try:
                 spec_path.unlink()
             except OSError as exc:
@@ -199,6 +217,12 @@ def _run_shard(spec: ShardSpec, device: int, work: Path) -> None:
         k_bits = strategy.get(key)
         if k_bits is None:
             raise RuntimeError(f"no strategy K for linear {key!r}")
+        # JSON round-trip keeps floats floats; the nanobind scratch ext requires a
+        # real int for K (SupportsInt does not auto-coerce 3.0 -> 3). True half-rates
+        # (2.5/3.5) must pass through untouched: quantize_tiles routes frac K to
+        # quantize_tiles_frac and only integral K reaches get_temp_buffers.
+        if isinstance(k_bits, float) and k_bits.is_integer():
+            k_bits = int(k_bits)
         quant_args = convert_model.make_quant_args(
             args, spec.module_idx, k_bits, [device], None
         )
