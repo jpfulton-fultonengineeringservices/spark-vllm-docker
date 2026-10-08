@@ -283,6 +283,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="checkpoint cadence in seconds (default 120)",
     )
     p.add_argument("--node-map", default=str(paths.default_map_path()))
+    p.add_argument(
+        "--log-dir", type=Path, default=None,
+        help="write structured JSONL lifecycle logs under this directory",
+    )
     p.set_defaults(func=_cmd_dist_coordinator)
 
     p = sub.add_parser("dist-worker")
@@ -290,6 +294,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--shared", required=True, type=Path)
     p.add_argument("--device", type=int, default=0, help="GPU device index (default 0)")
     p.add_argument("--stop", required=True, type=Path)
+    p.add_argument(
+        "--log-dir", type=Path, default=None,
+        help="write structured JSONL lifecycle logs under this directory",
+    )
     p.set_defaults(func=_cmd_dist_worker)
 
     p = sub.add_parser("help")
@@ -433,7 +441,7 @@ def _cmd_dist_coordinator(args: argparse.Namespace) -> int:
         inbox = work / "dist" / "inbox" / node
         endpoints.append(WorkerEndpoint(node=node, inbox=str(inbox), device=0))
 
-    coord = Coordinator(dist_args, endpoints, work)
+    coord = Coordinator(dist_args, endpoints, work, log_dir=getattr(args, "log_dir", None))
     try:
         coord.run()
     except (RuntimeError, TimeoutError) as exc:
@@ -452,6 +460,7 @@ def _cmd_dist_worker(args: argparse.Namespace) -> int:
             Path(args.shared),
             int(args.device),
             Path(args.stop),
+            log_dir=getattr(args, "log_dir", None),
         )
     except (RuntimeError, TimeoutError, OSError) as exc:
         print(f"error: worker failed: {exc}", file=sys.stderr)

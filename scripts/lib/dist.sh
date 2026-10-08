@@ -10,6 +10,13 @@ launch_workers() {
   for slug in $NODES; do
     slug="${slug// /}"
     [ -n "$slug" ] || continue
+    local log_dir="${WORK}/dist/logs/${slug}"
+    if [ "$DRY_RUN" != true ]; then
+      mkdir -p "$log_dir"
+    else
+      echo "[dist] DRY-RUN would create log dir: ${log_dir}"
+      echo "[dist] DRY-RUN log bind-mount: -v ${WORK}:${WORK} (log dir lives under WORK, cluster-visible via NFS)"
+    fi
     host="$(node_ssh_host "$slug")"
     cname="$(worker_container_name "$slug")"
     echo "launching worker on ${host} (container ${cname})"
@@ -17,7 +24,8 @@ launch_workers() {
       --inbox "${WORK}/dist/inbox/${slug}" \
       --shared "${WORK}" \
       --device "${DEVICE}" \
-      --stop "${WORK}/dist/stop-${slug}"
+      --stop "${WORK}/dist/stop-${slug}" \
+      --log-dir "${log_dir}"
     # `-d --rm` returns success even if the container dies at startup. Confirm
     # it is still running, or fail before the coordinator starts dispatching.
     if [ "$DRY_RUN" != true ]; then
