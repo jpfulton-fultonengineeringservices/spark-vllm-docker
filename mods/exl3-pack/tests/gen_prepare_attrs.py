@@ -67,6 +67,29 @@ def attribute_reads(tree: ast.Module, function_name: str, seen: set[str] = ()) -
     return seen
 
 
+def override_table_args(tree: ast.Module) -> set[str]:
+    """Names in the ``for arg_, can_override, default in [ ... ]`` table in prepare()."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "prepare":
+            for inner in ast.walk(node):
+                if (
+                    isinstance(inner, ast.For)
+                    and isinstance(inner.target, ast.Tuple)
+                    and len(inner.target.elts) >= 1
+                    and isinstance(inner.target.elts[0], ast.Name)
+                    and isinstance(inner.iter, ast.List)
+                ):
+                    for entry in inner.iter.elts:
+                        if (
+                            isinstance(entry, ast.Tuple)
+                            and entry.elts
+                            and isinstance(entry.elts[0], ast.Constant)
+                        ):
+                            names.add(str(entry.elts[0].value))
+    return names
+
+
 def main() -> None:
     src = load_convert_model_source()
     tree = ast.parse(src)
@@ -75,6 +98,7 @@ def main() -> None:
     names |= attribute_reads(tree, "prepare")
     names |= attribute_reads(tree, "override")
     names |= attribute_reads(tree, "prepare_env")
+    names |= override_table_args(tree)
     out = TESTS / "prepare_attrs.json"
     out.write_text(json.dumps(sorted(names), indent=2) + "\n")
     print(f"wrote {out.name}: {len(names)} attributes")
