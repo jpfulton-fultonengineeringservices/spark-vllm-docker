@@ -9,25 +9,84 @@
 # and the exllamav3 aarch64 wheel live there. Only the small build context
 # (Dockerfile + mods/) is rsynced over.
 #
-# Usage
+# ============================================================================
+# DIST-RUN PLAYBOOK (multi-node EXL3 pack)
+# ============================================================================
+#
+# One command starts a worker on every --nodes host, runs the coordinator on
+# --host, then stops the workers. Teardown also runs on Ctrl-C or failure.
+#
+# STEP 0  DRY-RUN FIRST. Prints the commands; launches nothing. (VERIFIED)
+#
+#   scripts/exl3-pack-drive.sh dist-run --model mimo-v2.6-flash-rl-uncensored \
+#     --host home-gx10-node1 --nodes gx10-cb11,gx10-f1d8 \
+#     --no-build --no-sync --dry-run
+#
+#   Prints "launching worker on <host> (container <name>)" per node, then
+#   the coordinator command. Nothing is synced, built, probed, or started.
+#
+# STEP 1  ARGUMENTS (VERIFIED)
+#
+#   --host    coordinator host. Runs the dist-coordinator container.
+#   --nodes   comma-separated node ids from mods/exl3-pack/node-model-map.json.
+#             Each id's "alias" is the ssh host for that node's worker.
+#             One worker container per id, on GPU --device (default 0).
+#             Containers: <name>-coord and <name>-worker-<node-id>.
+#   --codebook  optional: mcg (default), lut_e4m3, or lut_fp16. Validated by
+#             the driver and by the in-image CLI before any launch.
+#   --debug   keep worker containers after they exit (drops --rm), so a failed
+#             worker's logs survive for `docker logs <name>` on its host.
+#             Off by default. Remove stopped containers by hand when done.
+#
+# STEP 2  WORK, the shared data directory
+#
+#   Defaults to /nas-1/fes-projects/exl3-mimo-build/<model>-work-k3.
+#   It MUST be on /nas-1 (cluster-visible NFS). The coordinator writes every
+#   node's inbox and reads every node's outputs under WORK. Override with
+#   --work. --allow-node-local-work bypasses the check, single-node only.
+#   (Default path VERIFIED; node-local override UNVERIFIED.)
+#
+# STEP 3  BEFORE ANY CONTAINER STARTS
+#
+#   Prep    Sync and build on each host; skip with --no-sync / --no-build.
+#           The image was rebuilt on gx10-node1 with the codebook fix. (VERIFIED)
+#   Probe   Write+remove inside the image, to catch NFS root-squash before
+#           launch. Passes on gx10-node1. (VERIFIED)
+#   Launch  Workers start detached; each is checked Running, else the run
+#           aborts and prints its last 50 log lines. (failure path UNVERIFIED)
+#   Coord   Coordinator runs in the foreground and streams progress.
+#           (UNVERIFIED end-to-end: no real launch has completed yet.)
+#
+# STEP 4  STOP AND TEARDOWN
+#
+#   Workers poll for <WORK>/dist/stop-<node-id>. The driver writes those files
+#   and docker-stops the worker containers on normal exit, coordinator failure,
+#   and Ctrl-C/TERM (EXIT/INT/TERM trap). Exit code is the coordinator's.
+#   VERIFIED once: a failed run wrote both stop-files and stopped both workers.
+#   Ctrl-C and TERM paths are UNVERIFIED.
+#
+# KNOWN LIMITS (as of this revision)
+#   * The codebook blocker is FIXED: cli.py now takes --codebook as a validated
+#     string (default mcg). Parse-checked in the image; no real run yet.
+#   * The in-image code is baked at build time. Rebuild without --no-build
+#     after any mods/exl3-pack change.
+#   * Default runs use --rm, so a worker that exits takes its logs with it.
+#     Use --debug to keep them for inspection.
+#   * Do NOT launch without explicit approval: a real run starts GPU work for
+#     hours on both nodes.
+#
+# ============================================================================
+# OTHER SUBCOMMANDS
+# ============================================================================
 #
 # Single-node (the common case is one line):
 #
 #   exl3-pack-drive.sh pack --model mimo-v2.6-flash-rl-uncensored --host home-gx10-node1
 #
-# Distributed, one command (workers + coordinator + teardown):
-#
-#   exl3-pack-drive.sh dist-run --model mimo-v2.6-flash-rl-uncensored \
-#     --host home-gx10-node1 --nodes gx10-cb11,gx10-f1d8
-#
-#   --host   the coordinator host (runs the dist-coordinator container).
-#   --nodes  comma-separated node ids from mods/exl3-pack/node-model-map.json.
-#            Each id's "alias" is the ssh host for that node's dist-worker.
-#            One worker container per id, on GPU --device (default 0).
-#
 # No terminal environment variables are required. EXL3_PACK_NOFILE is optional.
-# Paths, bits and codebook are NOT required: they come from the model's
-# PackSpec and the node map (mods/exl3-pack/src/exl3pack/paths.py). The driver
+# Paths and bits are NOT required: they come from the model's PackSpec and the
+# node map (mods/exl3-pack/src/exl3pack/paths.py). Codebook is NOT yet
+# sourced from the spec for dist-run; see KNOWN BLOCKERS. The driver
 # is a thin launcher — the in-image CLI resolves:
 #
 #   source    = node-local checkpoint, else /nas-1/models/mimo/<slug>
@@ -127,6 +186,7 @@ DETACH=false
 POLL_INTERVAL=5
 CONTEXT_DIR="/tmp/spark-vllm-docker-context"
 DRY_RUN=false
+DEBUG=false
 NOFILE_LIMIT="${EXL3_PACK_NOFILE:-1048576}"
 dist_run_teardown_done=false
 
@@ -378,8 +438,7 @@ check_shared_work_writable() {
   for one in $hosts; do
     one="${one// /}"
     [ -n "$one" ] || continue
-    ssh "$(ssh_target "$one")" docker run --rm --entrypoint sh -v "${w}:/w" "${TAG}" \
-      -c 'touch /w/.exl3-write-probe && rm -f /w/.exl3-write-probe' || {
+    ssh "$(ssh_target "$one")" "docker run --rm --entrypoint sh -v '${w}:/w' '${TAG}' -c 'touch /w/.exl3-write-probe && rm -f /w/.exl3-write-probe'" || {
         err "${w} is not writable inside the container on ${one} (NFS root-squash?). Aborting."
         return 1
       }
@@ -477,13 +536,16 @@ docker_run_host() {
   local mode="$1" status_env="$2" verb="$3"
   shift 3
   build_global_args
+  # --rm removes the container and its logs on exit. --debug keeps it so a
+  # failed worker can be inspected with `docker logs` / `docker inspect`.
   local -a argv=(
-    --rm --gpus all
+    --gpus all
     --ulimit "nofile=${NOFILE_LIMIT}:${NOFILE_LIMIT}"
     --name "$cname"
     -v "${NAS_ROOT}:${NAS_ROOT}"
     -v "${LOCAL_ROOT}:/opt/llm"
   )
+  [ "$DEBUG" = true ] || argv=(--rm "${argv[@]}")
   if [ "$mode" = bg ]; then
     argv=(-d "${argv[@]}" -e "PACK_STATUS_FILE=${status_env}")
   fi
@@ -517,6 +579,18 @@ launch_workers() {
       --shared "${WORK}" \
       --device "${DEVICE}" \
       --stop "${WORK}/dist/stop-${slug}"
+    # `-d --rm` returns success even if the container dies at startup. Confirm
+    # it is still running, or fail before the coordinator starts dispatching.
+    if [ "$DRY_RUN" != true ]; then
+      local running
+      running="$(ssh "$(ssh_target "$host")" \
+        "docker inspect -f '{{.State.Running}}' '${cname}' 2>/dev/null" || true)"
+      if [ "$running" != "true" ]; then
+        err "worker ${cname} on ${host} is not running after launch; its logs:"
+        ssh "$(ssh_target "$host")" "docker logs --tail 50 '${cname}' 2>&1" >&2 || true
+        return 1
+      fi
+    fi
   done
 }
 
@@ -654,7 +728,6 @@ cmd_detect() {
 
 cmd_plan() {
   require_model
-  [ "$DRY_RUN" = true ] || prep
   _run_plan
 }
 
@@ -665,8 +738,8 @@ cmd_dist_coordinator() {
   # dist-coordinator requires --source/--work/--exl3-out/--recipe (required=True).
   # Resolve them from the plan unless the caller overrode every one.
   local src="$SRC" work="$WORK" exl3_out="$EXL3_OUT" recipe="$RECIPE"
+  local plan_json=""
   if [ -z "$src" ] || [ -z "$work" ] || [ -z "$exl3_out" ] || [ -z "$recipe" ]; then
-    local plan_json
     plan_json="$(_run_plan)"
     [ -n "$src" ]      || src="$(echo "$plan_json" | _plan_field source)"
     [ -n "$work" ]     || work="$(echo "$plan_json" | _plan_field work)"
@@ -716,7 +789,47 @@ validate_shared_work() {
   esac
 }
 
+# Pre-launch guard for dist-run. Fails closed if a worker or coordinator
+# container with this run's names is already alive on its host: a second copy
+# would race the same inbox. Also clears STALE stop-files for this run's nodes:
+# a leftover stop-file makes a new worker exit at once with status 0 and no
+# logs (the silent failure seen on gx10-node1). Dry-run reports, changes nothing.
+preflight_dist_run() {
+  local IFS=',' slug host cname running
+  for slug in $NODES; do
+    slug="${slug// /}"
+    [ -n "$slug" ] || continue
+    host="$(node_ssh_host "$slug")"
+    cname="$(worker_container_name "$slug")"
+    if [ "$DRY_RUN" = true ]; then
+      echo "preflight: would check ${cname} on ${host} and clear ${WORK}/dist/stop-${slug}"
+      continue
+    fi
+    running="$(ssh "$(ssh_target "$host")" \
+      "docker inspect -f '{{.State.Running}}' '${cname}' 2>/dev/null" || true)"
+    if [ "$running" = "true" ]; then
+      err "preflight: ${cname} is already running on ${host}. Stop it first (docker stop ${cname}); refusing to start a second copy."
+      return 1
+    fi
+    ssh "$(ssh_target "$host")" "rm -f '${WORK}/dist/stop-${slug}'" || {
+      err "preflight: could not clear stale ${WORK}/dist/stop-${slug} on ${host}."
+      return 1
+    }
+  done
+  local coord_running
+  coord_running="$(ssh "$(ssh_target "$HOST")" \
+    "docker inspect -f '{{.State.Running}}' '${NAME}-coord' 2>/dev/null" || true)"
+  if [ "$coord_running" = "true" ]; then
+    err "preflight: ${NAME}-coord is already running on ${HOST}. Stop it first; refusing to start a second copy."
+    return 1
+  fi
+}
+
 cmd_dist_run() {
+  case "$CODEBOOK" in
+    ""|mcg|lut_e4m3|lut_fp16) : ok ;;
+    *) err "dist-run: --codebook must be mcg, lut_e4m3, or lut_fp16 (got '$CODEBOOK')"; exit 2 ;;
+  esac
   require_model
   [ -n "$NODES" ] || { err "dist-run: --nodes required"; exit 2; }
   # Default WORK to cluster-visible shared storage so coordinator-written
@@ -762,6 +875,7 @@ cmd_dist_run() {
   [ -n "$GATHER_TIMEOUT" ]      && vargs+=(--gather-timeout "$GATHER_TIMEOUT")
   [ -n "$CHECKPOINT_INTERVAL" ] && vargs+=(--checkpoint-interval "$CHECKPOINT_INTERVAL")
   [ -n "$NODE_MAP" ] && vargs+=(--node-map "$NODE_MAP")
+  preflight_dist_run || return 1
   docker_run_host "$HOST" "$NAME-coord" fg - dist-coordinator "${vargs[@]}" || coord_rc=$?
   echo "dist-run: coordinator exited rc=${coord_rc}; tearing down workers."
   return "$coord_rc"
@@ -841,6 +955,7 @@ while [ $# -gt 0 ]; do
     --local-root) LOCAL_ROOT="${2:-/opt/llm}"; shift 2 ;;
     --nofile) NOFILE_LIMIT="${2:-}"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
+    --debug) DEBUG=true; shift ;;
     -h|--help)
       case "$subcommand" in
         "") usage; exit 0 ;;
