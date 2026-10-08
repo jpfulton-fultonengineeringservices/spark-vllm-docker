@@ -14,6 +14,7 @@ import hashlib
 import importlib
 import json
 import logging
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -45,6 +46,24 @@ def _touch_heartbeat(shared: Path, slug: str) -> None:
     except OSError:
         pass
 
+
+def _start_heartbeat(shared: Path, slug: str, stop: Path) -> threading.Thread:
+    """Touch the heartbeat every poll interval until the stop sentinel appears.
+
+    Runs on a daemon thread so a busy _run_shard (MoE shards run minutes)
+    never makes a live worker look dead; process liveness is the signal,
+    not busy status.
+    """
+
+    def _run() -> None:
+        while not stop.exists():
+            _touch_heartbeat(shared, slug)
+            time.sleep(_POLL_INTERVAL_S)
+
+    t = threading.Thread(target=_run, name="exl3-worker-heartbeat", daemon=True)
+    t.start()
+    return t
+
 def _lazy(name: str) -> Any:
     """Import *name* lazily (torch / exllamav3 are image-only)."""
     return importlib.import_module(name)
@@ -71,6 +90,7 @@ def serve(
     stop = Path(stop)
     log = get_logger("worker", log_dir=log_dir)
     consecutive_failures: dict[str, int] = {}
+    _start_heartbeat(shared, inbox.name, stop)
     log_event(
         log,
         logging.INFO,
@@ -83,7 +103,6 @@ def serve(
         },
     )
     while not stop.exists():
-        _touch_heartbeat(shared, inbox.name)
         try:
             spec_paths = sorted(inbox.glob("*.json"))
         except OSError as exc:
@@ -112,7 +131,6 @@ def serve(
                 )
                 time.sleep(_POLL_INTERVAL_S)
                 continue
-            _touch_heartbeat(shared, inbox.name)
             log_event(
                 log,
                 logging.INFO,
