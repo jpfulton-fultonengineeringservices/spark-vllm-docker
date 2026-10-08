@@ -10,13 +10,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
+import traceback
 from pathlib import Path
 from typing import TypedDict
 
 from . import paths
 from .geometry import detect
+from .logconfig import log_event
 from .spec import PackSpec, load_spec, load_spec_from_file
 
 # Codebooks exl3-v1 accepts (see repack.py). Shared by --codebook validation.
@@ -561,9 +564,19 @@ def _cmd_dist_coordinator(args: argparse.Namespace) -> int:
     coord = Coordinator(dist_args, endpoints, work, log_dir=getattr(args, "log_dir", None))
     try:
         coord.run()
-    except (RuntimeError, TimeoutError) as exc:
+    except Exception as exc:
+        # Evidence: the exception must land in the coordinator JSONL with a
+        # full traceback before the process dies (--rm destroys the container
+        # and stdout with it). Narrow excepts here previously let crashes
+        # escape with zero trace in the log (rc=1, blind rerun).
+        log_event(
+            coord.log,
+            logging.ERROR,
+            "coordinator.error",
+            fields={"error": str(exc), "traceback": traceback.format_exc()},
+        )
         print(f"error: coordinator failed: {exc}", file=sys.stderr)
-        return 1
+        raise
     return 0
 
 
