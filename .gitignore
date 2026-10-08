@@ -25,6 +25,7 @@ memory-profiles/
 backup-wheels
 .codex
 wheels
+.git-worktrees/
 
 # Scratch findings/notes (local only)
 tmp/
