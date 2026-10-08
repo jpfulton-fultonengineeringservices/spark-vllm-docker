@@ -19,7 +19,10 @@ import torch
 from exllamav3.modules.linear import Linear
 from safetensors.torch import load_file
 
-from exl3pack.cli import CoordinatorArgs
+if TYPE_CHECKING:
+    from exl3pack.cli import CoordinatorArgs
+else:
+    CoordinatorArgs = dict[str, Any]  # type: ignore[misc,assignment]
 from exl3pack.dist_types import (
     ShardSpec,
     WorkerEndpoint,
