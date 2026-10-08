@@ -306,7 +306,7 @@ class _TransportMixin:
                 )
             wt = lin.inner.get_weight_tensor()
             pairs.append(
-                [key, hashlib.sha256(wt.tobytes()).hexdigest()]
+                [key, hashlib.sha256(wt.cpu().numpy().tobytes()).hexdigest()]
             )
         blob = json.dumps(pairs, separators=(",", ":"))
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()

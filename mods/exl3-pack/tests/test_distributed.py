@@ -41,6 +41,12 @@ def _fake_gpu_modules() -> Any:
             self.arr = np.ascontiguousarray(arr)
             self.is_meta = False
 
+        def cpu(self) -> FakeTensor:
+            return self
+
+        def numpy(self) -> np.ndarray[Any, Any]:
+            return self.arr
+
         def tobytes(self) -> bytes:
             return self.arr.tobytes()
 
