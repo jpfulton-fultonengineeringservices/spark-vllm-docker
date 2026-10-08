@@ -292,9 +292,6 @@ class Coordinator(_StrategyMixin, _TransportMixin, _CommitMixin):
                     )
                 finally:
                     config.stc.set_new_tensors(None)
-                # M2: unload module post-commit if not retaining during quant (upstream ~1500)
-                if not getattr(module, 'caps', {}).get('retain_during_quant'):
-                    module.unload()
 
             # -- advance state serially through the (quantized) module ---
             for i in range(len(state)):
@@ -314,6 +311,15 @@ class Coordinator(_StrategyMixin, _TransportMixin, _CommitMixin):
                         print(f" !! Non-finite hidden state in calibration row {i}, excluding row")
                     state[i] = rs.cpu()
                     _put_preserve(quant_preserves, i, adv_params)
+
+            # M2: unload the module after the advance loop, mirroring upstream
+            # (~1500): the post-quant forward must run on the loaded, quantized
+            # module. Unloading before the advance left prepare_for_device
+            # targeting an unloaded module (device -> cpu), which initialized
+            # the RMSNorm CUDAGuard with a CPU tensor and raised
+            # "CUDAGuardImpl initialized with non-CUDA DeviceType: cpu".
+            if not getattr(module, 'caps', {}).get('retain_during_quant'):
+                module.unload()
 
             # Mirror main: measure state error against the reference states
             # (consumed once), then gate the job on the bad-row fraction.
