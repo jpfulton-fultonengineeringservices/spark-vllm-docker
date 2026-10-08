@@ -216,6 +216,54 @@ def _cmd_selftest(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 1
 
 
+def _cmd_typecheck(args: argparse.Namespace) -> int:
+    """In-image type safety: mypy strict + stubtest for exllamav3 signatures.
+
+    Verifies that stubs/exllamav3/*.pyi match the runtime API of the installed
+    exllamav3 package. Requires the image to include stubs/ at /opt/exl3-pack/stubs
+    and mypy installed (see Dockerfile.exl3-pack).
+    """
+    import subprocess
+    import sys
+
+    checks: list[dict[str, object]] = []
+
+    root = Path("/opt/exl3-pack")
+    if not (root / "stubs").is_dir():
+        report = {"checks": [{"check": "stubs_present", "ok": False,
+                              "reason": f"{root / 'stubs'} missing from image"}],
+                  "ok": False}
+        print(json.dumps(report, indent=2))
+        return 1
+
+    def _run(name: str, cmd: list[str]) -> None:
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True,
+                                    timeout=300, cwd=str(root))
+        except FileNotFoundError as e:
+            checks.append({"check": name, "ok": False, "reason": str(e)})
+            return
+        checks.append({
+            "check": name,
+            "ok": result.returncode == 0,
+            "stdout": result.stdout[-2000:] if result.stdout else None,
+            "stderr": result.stderr[-2000:] if result.stderr else None,
+        })
+
+    # 1) stubtest: validate stubs against the installed runtime package
+    _run("stubtest_exllamav3", [sys.executable, "-m", "mypy.stubtest",
+                                 "--custom-typeshed-dir", str(root / "stubs"),
+                                 "--crash-on-error", "exllamav3.conversion.convert_model"])
+
+    # 2) mypy: validate src/exl3pack against the stubs using repo config
+    _run("mypy_src", [sys.executable, "-m", "mypy",
+                        "--config-file", str(root / "pyproject.toml"), "--no-error-summary"])
+
+    report = {"checks": checks, "ok": all(c["ok"] for c in checks)}
+    print(json.dumps(report, indent=2))
+    return 0 if report["ok"] else 1
+
+
 def _selftest_dispatch() -> dict[str, object]:
     """Exercise `_dequant_fp8_block_dispatch` on synthetic flat + interleaved grids."""
     try:
@@ -299,6 +347,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("selftest")
     p.set_defaults(func=_cmd_selftest)
+
+    p = sub.add_parser("typecheck")
+    p.set_defaults(func=_cmd_typecheck)
 
     p = sub.add_parser("dist-coordinator")
     p.add_argument("--source", required=True, type=Path)
