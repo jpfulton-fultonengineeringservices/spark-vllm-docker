@@ -21,12 +21,10 @@ cmd_dist_coordinator() {
   [ -n "$work" ]     || { err "dist-coordinator: could not resolve --work"; exit 2; }
   [ -n "$exl3_out" ] || { err "dist-coordinator: could not resolve --exl3-out"; exit 2; }
   [ -n "$recipe" ]   || { err "dist-coordinator: could not resolve --recipe"; exit 2; }
-  local coord_log_dir="${work}/dist/logs/${MODEL}-coord"
+  # Log dir is created in-image by logconfig.get_logger (mkdir -p) where the
+  # NFS mount is writable; the driver host has no /nas-1 so never mkdir here.
   if [ "$DRY_RUN" = true ]; then
-    echo "[dist] DRY-RUN would create log dir: ${coord_log_dir}"
-    echo "[dist] DRY-RUN log bind-mount: -v ${work}:${work} (log dir lives under WORK, cluster-visible via NFS)"
-  else
-    mkdir -p "$coord_log_dir"
+    echo "[dist] DRY-RUN log dir: ${work}/dist/logs/${MODEL}-coord (created in-image)"
   fi
   vargs=(--source "$src" --work "$work" --exl3-out "$exl3_out" --recipe "$recipe")
   [ -n "$BITS" ]     && vargs+=(--bits "$BITS")
@@ -47,11 +45,10 @@ cmd_dist_worker() {
   [ -n "$STOP" ]   || { err "dist-worker: --stop required"; exit 2; }
   build_global_args
   local worker_log_dir="${SHARED}/dist/logs/${MODEL}-worker"
+  # Log dir is created in-image by logconfig.get_logger (mkdir -p) where the
+  # NFS mount is writable; the driver host has no /nas-1 so never mkdir here.
   if [ "$DRY_RUN" = true ]; then
-    echo "[dist] DRY-RUN would create log dir: ${worker_log_dir}"
-    echo "[dist] DRY-RUN log bind-mount: -v ${SHARED}:${SHARED} (log dir lives under WORK, cluster-visible via NFS)"
-  else
-    mkdir -p "$worker_log_dir"
+    echo "[dist] DRY-RUN log dir: ${worker_log_dir} (created in-image)"
   fi
   vargs=(--inbox "$INBOX" --shared "$SHARED" --device "$DEVICE" --stop "$STOP" --log-dir "$worker_log_dir")
   [ "$DRY_RUN" = true ] || prep
@@ -120,12 +117,10 @@ cmd_dist_run() {
   launch_workers
   local coord_rc=0
   build_global_args
-  local coord_log_dir="${work}/dist/logs/${MODEL}-coord"
+  # Log dir is created in-image by logconfig.get_logger (mkdir -p) where the
+  # NFS mount is writable; the driver host has no /nas-1 so never mkdir here.
   if [ "$DRY_RUN" = true ]; then
-    echo "[dist] DRY-RUN would create log dir: ${coord_log_dir}"
-    echo "[dist] DRY-RUN log bind-mount: -v ${work}:${work} (log dir lives under WORK, cluster-visible via NFS)"
-  else
-    mkdir -p "$coord_log_dir"
+    echo "[dist] DRY-RUN log dir: ${work}/dist/logs/${MODEL}-coord (created in-image)"
   fi
   vargs=(--source "$src" --work "$work" --exl3-out "$exl3_out" --recipe "$recipe")
   [ -n "$BITS" ]     && vargs+=(--bits "$BITS")

@@ -10,13 +10,10 @@ launch_workers() {
   for slug in $NODES; do
     slug="${slug// /}"
     [ -n "$slug" ] || continue
-    local log_dir="${WORK}/dist/logs/${slug}"
-    if [ "$DRY_RUN" != true ]; then
-      mkdir -p "$log_dir"
-    else
-      echo "[dist] DRY-RUN would create log dir: ${log_dir}"
-      echo "[dist] DRY-RUN log bind-mount: -v ${WORK}:${WORK} (log dir lives under WORK, cluster-visible via NFS)"
-    fi
+    # Log dir is created in-image by logconfig.get_logger (mkdir -p) where the
+    # NFS mount is writable; the driver host has no /nas-1 so never mkdir here.
+    [ "$DRY_RUN" = true ] && \
+      echo "[dist] DRY-RUN log dir: ${WORK}/dist/logs/${slug} (created in-image)"
     host="$(node_ssh_host "$slug")"
     cname="$(worker_container_name "$slug")"
     echo "launching worker on ${host} (container ${cname})"
