@@ -423,6 +423,9 @@ def _cmd_dist_coordinator(args: argparse.Namespace) -> int:
         "out_scales": "always",
         "max_module": None,
         # override() table entries with upstream argparse defaults
+        # NB: override() treats falsy values as absent (table default applies),
+        # so ""/0/False here behave identically to missing keys on fresh runs;
+        # on resume, a falsy CLI value cannot override the saved job.json value.
         "shard_size": 8192,
         "vision_bits": 0,
         "ngram_bits": 0,
