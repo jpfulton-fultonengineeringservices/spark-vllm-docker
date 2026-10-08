@@ -48,6 +48,25 @@ _run_plan() {
     "$TAG" "${gargs[@]+"${gargs[@]}"}" plan
 }
 
+# Run the in-image type-safety verb: stubtest (stubs vs the installed pinned
+# wheel) then mypy (src vs stubs, repo config). Read-only like plan — it
+# validates what is already baked into the image, so it never syncs/builds;
+# rebuild first (drop --no-build) after any mods/exl3-pack change.
+cmd_typecheck() {
+  local -a argv=(
+    --rm --gpus all
+    --ulimit "nofile=${NOFILE_LIMIT}:${NOFILE_LIMIT}"
+    --name "${NAME}-typecheck"
+    -v "${NAS_ROOT}:${NAS_ROOT}"
+    -v "${LOCAL_ROOT}:/opt/llm"
+  )
+  if [ "$DRY_RUN" = true ]; then
+    echo "ssh $(ssh_target) docker run ${argv[*]} $TAG typecheck"
+    return 0
+  fi
+  ssh "$(ssh_target)" docker run "${argv[@]}" "$TAG" typecheck
+}
+
 # Extract a field from plan JSON on stdin.
 _plan_field() {
   python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('$1',''))"
