@@ -160,8 +160,15 @@ class Coordinator(_StrategyMixin, _TransportMixin, _CommitMixin):
                 "coordinator.shard_assigned",
                 fields={"module_idx": idx, "module": module_key},
             )
+            # Upstream loads fp16 on CPU when the module prefers it
+            # (convert_model.py ~1245): RMSNorm/Embedding-side small tensors
+            # stay CPU-side; loading them on CUDA trips CUDAGuardImpl
+            # ("initialized with non-CUDA DeviceType: cpu") inside
+            # prepare_for_device/forward. Mirror that guard here.
             device = torch.device(str(self.args.get("device", "cuda:0")))
-            module.load(device)
+            module.load(
+                torch.device("cpu") if module.caps.get("prefer_cpu") else device
+            )
 
             # -- capture online while fp16 (plan §3.1) -----------------------
             capture_H: dict[str, dict[str, Any]] = {}
@@ -275,7 +282,13 @@ class Coordinator(_StrategyMixin, _TransportMixin, _CommitMixin):
                 self._commit_module(module_key, q_tensors)
                 config.stc.set_new_tensors(q_tensors)
                 try:
-                    module.load(device, source=q_tensors, keep_source_weights=True)
+                    # Same prefer_cpu guard on the quantized reload
+                    # (convert_model.py ~1397).
+                    module.load(
+                        torch.device("cpu") if module.caps.get("prefer_cpu") else device,
+                        source=q_tensors,
+                        keep_source_weights=True,
+                    )
                 finally:
                     config.stc.set_new_tensors(None)
                 # M2: unload module post-commit if not retaining during quant (upstream ~1500)
