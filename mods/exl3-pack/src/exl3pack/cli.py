@@ -17,6 +17,9 @@ from . import paths
 from .geometry import detect
 from .spec import PackSpec, load_spec, load_spec_from_file
 
+# Codebooks exl3-v1 accepts (see repack.py). Shared by --codebook validation.
+_EXL3_CODEBOOKS = ("mcg", "lut_e4m3", "lut_fp16")
+
 
 def _resolve_spec(args: argparse.Namespace) -> PackSpec | None:
     if args.spec:
@@ -266,7 +269,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--exl3-out", required=True, type=Path)
     p.add_argument("--recipe", required=True, type=Path)
     p.add_argument("--bits", type=int, default=None)
-    p.add_argument("--codebook", type=int, default=None)
+    p.add_argument(
+        "--codebook", default=None, choices=_EXL3_CODEBOOKS,
+        help="EXL3 codebook name (default: coordinator uses mcg)",
+    )
     p.add_argument("--nodes", required=True, help="comma-separated node slugs/aliases")
     p.add_argument(
         "--gather-timeout", type=float, default=600.0,
@@ -401,8 +407,7 @@ def _cmd_dist_coordinator(args: argparse.Namespace) -> int:
     }
     if args.bits is not None:
         dist_args["bits"] = int(args.bits)
-    if args.codebook is not None:
-        dist_args["codebook"] = int(args.codebook)
+    dist_args["codebook"] = args.codebook or "mcg"
 
     endpoints: list[WorkerEndpoint] = []
     for node in nodes:
