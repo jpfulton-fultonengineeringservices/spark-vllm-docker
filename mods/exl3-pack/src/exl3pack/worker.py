@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
-import sys
+import logging
 import time
 import traceback
 from pathlib import Path
@@ -26,6 +26,7 @@ from exl3pack.dist_types import (
     write_atomic,
     write_done_marker,
 )
+from exl3pack.logconfig import get_logger, log_event
 
 __all__ = ["serve"]
 
@@ -40,7 +41,13 @@ def _lazy(name: str) -> Any:
 # serve loop
 # ---------------------------------------------------------------------------
 
-def serve(inbox: Path, shared: Path, device: int, stop: Path) -> None:
+def serve(
+    inbox: Path,
+    shared: Path,
+    device: int,
+    stop: Path,
+    log_dir: Path | None = None,
+) -> None:
     """Poll *inbox* for ``ShardSpec`` JSON files and process each one.
 
     The loop exits when the *stop* sentinel file appears.  Successfully
@@ -49,11 +56,28 @@ def serve(inbox: Path, shared: Path, device: int, stop: Path) -> None:
     """
     inbox = Path(inbox)
     stop = Path(stop)
+    log = get_logger("worker", log_dir=log_dir)
+    log_event(
+        log,
+        logging.INFO,
+        "worker.start",
+        fields={
+            "inbox": str(inbox),
+            "device": device,
+            "stop": str(stop),
+            "log_dir": str(log_dir) if log_dir is not None else None,
+        },
+    )
     while not stop.exists():
         try:
             spec_paths = sorted(inbox.glob("*.json"))
         except OSError as exc:
-            print(f"[worker] cannot list {inbox}: {exc}", file=sys.stderr)
+            log_event(
+                log,
+                logging.ERROR,
+                "worker.inbox_list_error",
+                fields={"inbox": str(inbox), "error": str(exc)},
+            )
             time.sleep(_POLL_INTERVAL_S)
             continue
         if not spec_paths:
@@ -65,20 +89,57 @@ def serve(inbox: Path, shared: Path, device: int, stop: Path) -> None:
             try:
                 spec = ShardSpec.from_json(spec_path.read_text(encoding="utf-8"))
             except (OSError, ValueError) as exc:
-                print(f"[worker] bad spec {spec_path}: {exc}", file=sys.stderr)
+                log_event(
+                    log,
+                    logging.WARNING,
+                    "worker.bad_spec",
+                    fields={"spec": str(spec_path), "error": str(exc)},
+                )
                 time.sleep(_POLL_INTERVAL_S)
                 continue
+            log_event(
+                log,
+                logging.INFO,
+                "worker.spec_taken",
+                fields={"spec": str(spec_path), "shard": spec.shard_idx},
+            )
             try:
                 _run_shard(spec, device, Path(shared))
             except Exception as exc:  # noqa: BLE001 — keep serving after a bad shard
-                print(f"[worker] shard {spec.shard_idx} failed: {exc}", file=sys.stderr)
+                log_event(
+                    log,
+                    logging.ERROR,
+                    "worker.shard_failed",
+                    fields={
+                        "shard": spec.shard_idx,
+                        "module": spec.module_key,
+                        "error": str(exc),
+                    },
+                )
                 traceback.print_exc()
                 time.sleep(_POLL_INTERVAL_S)
                 continue
+            log_event(
+                log,
+                logging.INFO,
+                "worker.shard_done",
+                fields={"shard": spec.shard_idx, "module": spec.module_key},
+            )
             try:
                 spec_path.unlink()
             except OSError as exc:
-                print(f"[worker] cannot remove {spec_path}: {exc}", file=sys.stderr)
+                log_event(
+                    log,
+                    logging.WARNING,
+                    "worker.spec_unlink_error",
+                    fields={"spec": str(spec_path), "error": str(exc)},
+                )
+    log_event(
+        log,
+        logging.INFO,
+        "worker.stop_sentinel",
+        fields={"stop": str(stop)},
+    )
 
 
 # ---------------------------------------------------------------------------

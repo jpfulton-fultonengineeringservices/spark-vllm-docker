@@ -3,7 +3,11 @@ name = "exl3pack"
 version = "0.1.0"
 description = "Shared EXL3 pack builder (convert + repack + assemble) for GB10 / b12x, with per-model specs and node-local source resolution."
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    # Structured JSONL logging for the dist pipeline via stdlib logging.
+    # Runtime deps for quantization itself still come from the b12x image.
+    "python-json-logger>=2.0",
+]
 
 [project.optional-dependencies]
 # Runtime deps supplied by the b12x image. On a host they are NOT required for

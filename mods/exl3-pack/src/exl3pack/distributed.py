@@ -39,6 +39,7 @@ from exl3pack.dist_commit import _CommitMixin, _get_preserve, _put_preserve
 from exl3pack.dist_strategy import _StrategyMixin
 from exl3pack.dist_transport import _TransportMixin
 from exl3pack.dist_types import WorkerEndpoint
+from exl3pack.logconfig import get_logger, log_event
 
 # Upstream constant for reference-state count (plan §3.1).
 _NUM_REF_STATES = 5
@@ -52,10 +53,13 @@ class Coordinator(_StrategyMixin, _TransportMixin, _CommitMixin):
         args: dict[str, Any],
         endpoints: Sequence[WorkerEndpoint],
         work: Path,
+        log_dir: Path | None = None,
     ) -> None:
         self.args = args
         self.endpoints = list(endpoints)
-        self.work = Path(work)
+        self.work = work
+        self.log = get_logger("coordinator", log_dir=log_dir)
+        self._log_dir = log_dir
         self.gather_timeout = float(args.get("gather_timeout", 600.0))
         # Upstream default is 120s via --cpi (plan §3).
         self.checkpoint_interval = int(
@@ -71,8 +75,20 @@ class Coordinator(_StrategyMixin, _TransportMixin, _CommitMixin):
 
     def run(self) -> None:
         """Drive the full loop; return on success, raise on hard failure."""
+        import logging
+
         # P1-e: crash-window restore must happen before prepare() reads ckpt/job.json.
         self._restore_checkpoint_backup()
+        log_event(
+            self.log,
+            logging.INFO,
+            "coordinator.start",
+            fields={
+                "work": str(self.work),
+                "nodes": [e.node for e in self.endpoints],
+                "log_dir": str(self._log_dir) if self._log_dir is not None else None,
+            },
+        )
 
         in_args, job_state, ok, err = convert_model.prepare(
             argparse.Namespace(**self.args)
@@ -132,6 +148,12 @@ class Coordinator(_StrategyMixin, _TransportMixin, _CommitMixin):
             self._module_idx = idx
             module = modules[idx]
             module_key = str(getattr(module, "key", f"module_{idx}"))
+            log_event(
+                self.log,
+                logging.INFO,
+                "coordinator.shard_assigned",
+                fields={"module_idx": idx, "module": module_key},
+            )
             device = torch.device(str(self.args.get("device", "cuda:0")))
             module.load(device)
 
@@ -226,12 +248,24 @@ class Coordinator(_StrategyMixin, _TransportMixin, _CommitMixin):
                 try:
                     q_tensors = self._gather(specs)
                 except Exception:
+                    log_event(
+                        self.log,
+                        logging.WARNING,
+                        "coordinator.gather_retry",
+                        fields={"module": module_key},
+                    )
                     # M3: clear stale partial results before retry (plan §5)
                     for spec in specs:
                         Path(spec.result_uri).unlink(missing_ok=True)
                         Path(spec.result_uri).with_suffix('.done').unlink(missing_ok=True)
                     self._dispatch(specs)
                     q_tensors = self._gather(specs)
+                log_event(
+                    self.log,
+                    logging.INFO,
+                    "coordinator.shard_done",
+                    fields={"module_idx": idx, "module": module_key},
+                )
                 self._commit_module(module_key, q_tensors)
                 config.stc.set_new_tensors(q_tensors)
                 try:
@@ -285,3 +319,10 @@ class Coordinator(_StrategyMixin, _TransportMixin, _CommitMixin):
             ):
                 self._checkpoint(job_state, state, original_input_ids)
                 self._last_checkpoint_time = now
+                log_event(
+                    self.log,
+                    logging.INFO,
+                    "coordinator.checkpoint",
+                    fields={"module_idx": idx, "module": module_key},
+                )
+        log_event(self.log, logging.INFO, "coordinator.stop_sentinel", fields={})

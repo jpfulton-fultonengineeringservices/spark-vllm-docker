@@ -13,14 +13,12 @@ on a torch-free host.
 
 from __future__ import annotations
 
-import argparse
 import ast
-import json
 import importlib
 import importlib.util
+import json
 import os
 import sys
-import types
 from pathlib import Path
 from unittest import mock
 
@@ -76,8 +74,9 @@ def _built_coordinator_args(extra: list[str]) -> dict[str, object]:
         pass
 
     class _FakeCoordinator:
-        def __init__(self, args, endpoints, work):  # noqa: ANN001
+        def __init__(self, args, endpoints, work, log_dir=None):  # noqa: ANN001
             captured["args"] = args
+            captured["log_dir"] = log_dir
             raise _StopBeforeWorkers
 
     args_ns = build_parser().parse_args(_dist_argv(extra))
@@ -125,8 +124,9 @@ def test_required_attrs_match_live_prepare_signature() -> None:
     """In-image drift guard: the fixture must match what the pinned
     exllamav3's prepare() actually reads. Runs only where exllamav3 is
     importable (the exl3-pack image); host runs skip on the image marker."""
-    import exllamav3.conversion.convert_model as cm  # noqa: PLC0415
     import inspect  # noqa: PLC0415
+
+    import exllamav3.conversion.convert_model as cm  # noqa: PLC0415
 
     src = inspect.getsource(cm.prepare)
     tree = ast.parse(src)

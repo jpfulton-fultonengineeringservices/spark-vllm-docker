@@ -21,6 +21,13 @@ cmd_dist_coordinator() {
   [ -n "$work" ]     || { err "dist-coordinator: could not resolve --work"; exit 2; }
   [ -n "$exl3_out" ] || { err "dist-coordinator: could not resolve --exl3-out"; exit 2; }
   [ -n "$recipe" ]   || { err "dist-coordinator: could not resolve --recipe"; exit 2; }
+  local coord_log_dir="${work}/dist/logs/${MODEL}-coord"
+  if [ "$DRY_RUN" = true ]; then
+    echo "[dist] DRY-RUN would create log dir: ${coord_log_dir}"
+    echo "[dist] DRY-RUN log bind-mount: -v ${work}:${work} (log dir lives under WORK, cluster-visible via NFS)"
+  else
+    mkdir -p "$coord_log_dir"
+  fi
   vargs=(--source "$src" --work "$work" --exl3-out "$exl3_out" --recipe "$recipe")
   [ -n "$BITS" ]     && vargs+=(--bits "$BITS")
   [ -n "$CODEBOOK" ] && vargs+=(--codebook "$CODEBOOK")
@@ -29,6 +36,7 @@ cmd_dist_coordinator() {
   [ -n "$CHECKPOINT_INTERVAL" ] && vargs+=(--checkpoint-interval "$CHECKPOINT_INTERVAL")
   # dist-coordinator has its own --node-map (not the global one)
   [ -n "$NODE_MAP" ] && vargs+=(--node-map "$NODE_MAP")
+  vargs+=(--log-dir "$coord_log_dir")
   [ "$DRY_RUN" = true ] || prep
   docker_run fg - dist-coordinator "${vargs[@]}"
 }
@@ -38,8 +46,16 @@ cmd_dist_worker() {
   [ -n "$SHARED" ] || { err "dist-worker: --shared required"; exit 2; }
   [ -n "$STOP" ]   || { err "dist-worker: --stop required"; exit 2; }
   build_global_args
+  local worker_log_dir="${SHARED}/dist/logs/${MODEL}-worker"
+  if [ "$DRY_RUN" = true ]; then
+    echo "[dist] DRY-RUN would create log dir: ${worker_log_dir}"
+    echo "[dist] DRY-RUN log bind-mount: -v ${SHARED}:${SHARED} (log dir lives under WORK, cluster-visible via NFS)"
+  else
+    mkdir -p "$worker_log_dir"
+  fi
+  vargs=(--inbox "$INBOX" --shared "$SHARED" --device "$DEVICE" --stop "$STOP" --log-dir "$worker_log_dir")
   [ "$DRY_RUN" = true ] || prep
-  docker_run fg - dist-worker --inbox "$INBOX" --shared "$SHARED" --device "$DEVICE" --stop "$STOP"
+  docker_run fg - dist-worker "${vargs[@]}"
 }
 
 # Emit <work>/recipe.yaml in-image before workers launch. The distributed
@@ -104,6 +120,13 @@ cmd_dist_run() {
   launch_workers
   local coord_rc=0
   build_global_args
+  local coord_log_dir="${work}/dist/logs/${MODEL}-coord"
+  if [ "$DRY_RUN" = true ]; then
+    echo "[dist] DRY-RUN would create log dir: ${coord_log_dir}"
+    echo "[dist] DRY-RUN log bind-mount: -v ${work}:${work} (log dir lives under WORK, cluster-visible via NFS)"
+  else
+    mkdir -p "$coord_log_dir"
+  fi
   vargs=(--source "$src" --work "$work" --exl3-out "$exl3_out" --recipe "$recipe")
   [ -n "$BITS" ]     && vargs+=(--bits "$BITS")
   [ -n "$CODEBOOK" ] && vargs+=(--codebook "$CODEBOOK")
@@ -111,6 +134,7 @@ cmd_dist_run() {
   [ -n "$GATHER_TIMEOUT" ]      && vargs+=(--gather-timeout "$GATHER_TIMEOUT")
   [ -n "$CHECKPOINT_INTERVAL" ] && vargs+=(--checkpoint-interval "$CHECKPOINT_INTERVAL")
   [ -n "$NODE_MAP" ] && vargs+=(--node-map "$NODE_MAP")
+  vargs+=(--log-dir "$coord_log_dir")
   docker_run_host "$HOST" "$NAME-coord" fg - dist-coordinator "${vargs[@]}" || coord_rc=$?
   echo "dist-run: coordinator exited rc=${coord_rc}; tearing down workers."
   return "$coord_rc"
