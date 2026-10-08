@@ -85,9 +85,9 @@ def _built_coordinator_args(extra: list[str]) -> dict[str, object]:
         distributed = importlib.import_module("exl3pack.distributed")
         with mock.patch.dict(os.environ, {"EXL3_SPECS_ROOT": str(_specs_root())}), \
                 mock.patch.object(paths, "load_node_map", lambda _p: {}), \
-                mock.patch.object(distributed, "Coordinator", _FakeCoordinator):
-            with pytest.raises(_StopBeforeWorkers):
-                cli._cmd_dist_coordinator(args_ns)
+                mock.patch.object(distributed, "Coordinator", _FakeCoordinator), \
+                pytest.raises(_StopBeforeWorkers):
+            cli._cmd_dist_coordinator(args_ns)
     return dict(captured["args"])  # type: ignore[arg-type]
 
 
