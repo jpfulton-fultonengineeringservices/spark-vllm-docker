@@ -405,8 +405,17 @@ def _cmd_dist_coordinator(args: argparse.Namespace) -> int:
         "gather_timeout": float(args.gather_timeout),
         "checkpoint_interval": int(args.checkpoint_interval),
     }
+    # bits: explicit flag wins; otherwise the model's PackSpec supplies it, the
+    # same source every other subcommand uses. Without this, prepare() raises
+    # AttributeError on a missing 'bits' after workers have already launched.
     if args.bits is not None:
         dist_args["bits"] = int(args.bits)
+    else:
+        spec = _resolve_spec(args)
+        if spec is None:
+            print("dist-coordinator: --bits or --model required", file=sys.stderr)
+            return 2
+        dist_args["bits"] = int(spec.bits)
     dist_args["codebook"] = args.codebook or "mcg"
 
     endpoints: list[WorkerEndpoint] = []
