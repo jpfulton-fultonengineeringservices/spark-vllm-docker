@@ -21,6 +21,7 @@ cmd_dist_coordinator() {
   [ -n "$work" ]     || { err "dist-coordinator: could not resolve --work"; exit 2; }
   [ -n "$exl3_out" ] || { err "dist-coordinator: could not resolve --exl3-out"; exit 2; }
   [ -n "$recipe" ]   || { err "dist-coordinator: could not resolve --recipe"; exit 2; }
+  local coord_log_dir="${work}/dist/logs/${MODEL}-coord"
   # Log dir is created in-image by logconfig.get_logger (mkdir -p) where the
   # NFS mount is writable; the driver host has no /nas-1 so never mkdir here.
   if [ "$DRY_RUN" = true ]; then
@@ -117,6 +118,7 @@ cmd_dist_run() {
   launch_workers
   local coord_rc=0
   build_global_args
+  local coord_log_dir="${work}/dist/logs/${MODEL}-coord"
   # Log dir is created in-image by logconfig.get_logger (mkdir -p) where the
   # NFS mount is writable; the driver host has no /nas-1 so never mkdir here.
   if [ "$DRY_RUN" = true ]; then
