@@ -27,7 +27,13 @@ import argparse
 import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from exl3pack.cli import CoordinatorArgs
+else:
+    # Runtime fallback for mypy-only usage; actual type checked at boundary.
+    CoordinatorArgs = dict[str, Any]  # type: ignore[misc,assignment]
 
 import torch
 from exllamav3.conversion import convert_model
@@ -35,7 +41,6 @@ from exllamav3.model.config import Config
 from exllamav3.modules.linear import Linear
 from safetensors import safe_open  # noqa: F401  — patched in tests via mock.patch.object
 
-from exl3pack.cli import CoordinatorArgs
 from exl3pack.dist_commit import _CommitMixin, _get_preserve, _put_preserve
 from exl3pack.dist_strategy import _StrategyMixin
 from exl3pack.dist_transport import _TransportMixin

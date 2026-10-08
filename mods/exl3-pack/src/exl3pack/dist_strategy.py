@@ -8,11 +8,15 @@ from __future__ import annotations
 import json
 from importlib import import_module
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from exl3pack.cli import CoordinatorArgs
+else:
+    CoordinatorArgs = dict[str, Any]  # type: ignore[misc,assignment]
 
 from exllamav3.model.config import Config
 
-from exl3pack.cli import CoordinatorArgs
 from exl3pack.dist_types import write_atomic
 from exl3pack.recipe import DEFAULT_HEAD_BITS, DEFAULT_MTP_BITS
 
