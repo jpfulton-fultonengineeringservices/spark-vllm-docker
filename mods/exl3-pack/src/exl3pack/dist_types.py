@@ -13,6 +13,7 @@ import contextlib
 import hashlib
 import json
 import os
+import time
 from collections.abc import Callable
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
@@ -172,7 +173,22 @@ def write_atomic(path: Path, write_fn: Callable[[Path], None]) -> None:
     """
     path = Path(path)
     parent = path.parent
-    parent.mkdir(parents=True, exist_ok=True)
+    # Race-tolerant mkdir: Path.mkdir(parents=True, exist_ok=True) can still
+    # raise FileExistsError when another worker (or node, over NFS) creates
+    # an intermediate directory between our recursive mkdir levels. Retry on
+    # EEXIST; re-raise everything else.
+    for _ in range(10):
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+            break
+        except FileExistsError:
+            # A concurrent creator won the race; if it made the full chain,
+            # exist_ok semantics are satisfied and we are done.
+            if parent.exists():
+                break
+            time.sleep(0.1)
+    else:
+        parent.mkdir(parents=True, exist_ok=True)  # re-raise the real error
     tmp = path.with_name(path.name + ".tmp")
     if tmp.exists():
         tmp.unlink()
