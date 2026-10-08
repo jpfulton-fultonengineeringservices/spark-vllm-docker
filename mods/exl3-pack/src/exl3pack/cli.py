@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import TypedDict
@@ -236,10 +237,16 @@ def _cmd_typecheck(args: argparse.Namespace) -> int:
         print(json.dumps(report, indent=2))
         return 1
 
+    # stubtest resolves stubs via MYPYPATH (PEP 561 stubs dir importable);
+    # mypy resolves src/ + stubs/ from the config's own paths when run with
+    # cwd=/opt/exl3-pack (where pyproject.toml, src/, stubs/ all sit).
+    env_path = f"{root / 'src'}{os.pathsep}{root / 'stubs'}"
+    env = {**os.environ, "MYPYPATH": env_path}
+
     def _run(name: str, cmd: list[str]) -> None:
         try:
             result = subprocess.run(cmd, capture_output=True, text=True,
-                                    timeout=300, cwd=str(root))
+                                    timeout=300, cwd=str(root), env=env)
         except FileNotFoundError as e:
             checks.append({"check": name, "ok": False, "reason": str(e)})
             return
@@ -251,17 +258,15 @@ def _cmd_typecheck(args: argparse.Namespace) -> int:
         })
 
     # 1) stubtest: validate stubs against the installed runtime package
-    #    --custom-typeshed-dir expects the directory CONTAINING stubs/
     _run("stubtest_exllamav3", [sys.executable, "-m", "mypy.stubtest",
-                                 "--custom-typeshed-dir", str(root),
+                                 "--mypy-config-file", str(root / "pyproject.toml"),
                                  "exllamav3.conversion.convert_model"])
 
     # 2) mypy: validate src/exl3pack against the stubs using repo config
     #    (pyproject.toml baked alongside src/ in the image)
     _run("mypy_src", [sys.executable, "-m", "mypy",
                         "--config-file", str(root / "pyproject.toml"),
-                        "--mypy-path", f"{root / 'src'}:{root / 'stubs'}",
-                        "--no-error-summary", str(root / "src" / "exl3pack")])
+                        "--no-error-summary"])
 
     report = {"checks": checks, "ok": all(c["ok"] for c in checks)}
     print(json.dumps(report, indent=2))
