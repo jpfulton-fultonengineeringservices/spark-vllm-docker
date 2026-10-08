@@ -32,6 +32,18 @@ __all__ = ["serve"]
 
 _POLL_INTERVAL_S = 1.0
 _MAX_CONSECUTIVE_SPEC_FAILURES = 3
+_HEARTBEAT_STALE_S = 10.0
+
+
+def _touch_heartbeat(shared: Path, slug: str) -> None:
+    """Touch <shared>/dist/heartbeat/<slug> so the coordinator can tell a
+    dead worker from a slow one. Best-effort: NFS hiccup must not kill us."""
+    try:
+        hb = Path(shared) / "dist" / "heartbeat" / slug
+        hb.parent.mkdir(parents=True, exist_ok=True)
+        hb.touch()
+    except OSError:
+        pass
 
 def _lazy(name: str) -> Any:
     """Import *name* lazily (torch / exllamav3 are image-only)."""
@@ -71,6 +83,7 @@ def serve(
         },
     )
     while not stop.exists():
+        _touch_heartbeat(shared, inbox.name)
         try:
             spec_paths = sorted(inbox.glob("*.json"))
         except OSError as exc:
@@ -99,6 +112,7 @@ def serve(
                 )
                 time.sleep(_POLL_INTERVAL_S)
                 continue
+            _touch_heartbeat(shared, inbox.name)
             log_event(
                 log,
                 logging.INFO,
@@ -123,6 +137,9 @@ def serve(
                         },
                     )
                     raise SystemExit(1) from exc
+                # Full traceback into the JSONL so a node-only container log is
+                # not required to diagnose it; str(exc) alone hides the raiser.
+                tb = traceback.format_exc()
                 log_event(
                     log,
                     logging.ERROR,
@@ -131,6 +148,7 @@ def serve(
                         "shard": spec.shard_idx,
                         "module": spec.module_key,
                         "error": str(exc),
+                        "traceback": tb,
                     },
                 )
                 traceback.print_exc()

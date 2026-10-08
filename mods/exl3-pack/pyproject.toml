@@ -42,7 +42,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "W"]
 python_version = "3.12"
 strict = true
 files = ["src/exl3pack"]
-mypy_path = "src"
+mypy_path = ["src", "stubs"]
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]

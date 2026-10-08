@@ -328,6 +328,9 @@ def test_gather_times_out_without_done_marker(distributed: Any, tmp_path: Path) 
     coord = _make_coordinator(distributed, tmp_path, endpoints)
     coord.gather_timeout = 0.2
     missing = tmp_path / "out" / "node0" / "shard-0.safetensors"
+    # Live worker: fresh heartbeat, otherwise the liveness check fires first.
+    (tmp_path / "dist" / "heartbeat" / "node0").parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "dist" / "heartbeat" / "node0").touch()
     with pytest.raises(TimeoutError, match="timeout after"):
         coord._gather([_spec_to(missing, idx=0, cfg="c" * 64)])
 
@@ -843,6 +846,10 @@ def test_p1_d_per_shard_timeout(distributed: Any, tmp_path: Path) -> None:
     endpoints = [WorkerEndpoint(node="node0", inbox=str(tmp_path / "inbox"), device=0)]
     coord = _make_coordinator(distributed, tmp_path, endpoints)
     coord.gather_timeout = 0.05  # 50ms
+    # spec0's result parent (out0) must look like a live worker; the liveness
+    # check would otherwise raise before the P1-d timeout path can be tested.
+    (tmp_path / "dist" / "heartbeat" / "out0").parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "dist" / "heartbeat" / "out0").touch()
     # Create two specs; first has no done marker, second does
     out0 = tmp_path / "out0" / "shard-0.safetensors"
     out1 = tmp_path / "out1" / "shard-0.safetensors"
