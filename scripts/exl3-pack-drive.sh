@@ -187,6 +187,7 @@ POLL_INTERVAL=5
 CONTEXT_DIR="/tmp/spark-vllm-docker-context"
 DRY_RUN=false
 DEBUG=false
+FORCE=false
 NOFILE_LIMIT="${EXL3_PACK_NOFILE:-1048576}"
 dist_run_teardown_done=false
 
@@ -808,8 +809,11 @@ preflight_dist_run() {
     running="$(ssh "$(ssh_target "$host")" \
       "docker inspect -f '{{.State.Running}}' '${cname}' 2>/dev/null" || true)"
     if [ "$running" = "true" ]; then
-      err "preflight: ${cname} is already running on ${host}. Stop it first (docker stop ${cname}); refusing to start a second copy."
-      return 1
+      if [ "$FORCE" != true ]; then
+        err "preflight: ${cname} is already running on ${host}. Stop it first, or rerun with --force."
+        return 1
+      fi
+      teardown_container "$host" "$cname" "$WORK" "$slug"
     fi
     ssh "$(ssh_target "$host")" "rm -f '${WORK}/dist/stop-${slug}'" || {
       err "preflight: could not clear stale ${WORK}/dist/stop-${slug} on ${host}."
@@ -820,9 +824,25 @@ preflight_dist_run() {
   coord_running="$(ssh "$(ssh_target "$HOST")" \
     "docker inspect -f '{{.State.Running}}' '${NAME}-coord' 2>/dev/null" || true)"
   if [ "$coord_running" = "true" ]; then
-    err "preflight: ${NAME}-coord is already running on ${HOST}. Stop it first; refusing to start a second copy."
-    return 1
+    if [ "$FORCE" != true ]; then
+      err "preflight: ${NAME}-coord is already running on ${HOST}. Stop it first, or rerun with --force."
+      return 1
+    fi
+    teardown_container "$HOST" "${NAME}-coord" "" ""
   fi
+}
+
+# Tear down one live container for --force. Workers: write the stop-file first
+# so the worker exits between shards, then docker stop/rm. Coordinator has no
+# stop-file, so it is stopped directly.
+teardown_container() {
+  local host="$1" cname="$2" work="$3" slug="$4"
+  echo "force: tearing down ${cname} on ${host}"
+  if [ -n "$slug" ]; then
+    ssh "$(ssh_target "$host")" "touch '${work}/dist/stop-${slug}'" || return 1
+    sleep 5
+  fi
+  ssh "$(ssh_target "$host")" "docker stop -t 20 '${cname}' >/dev/null 2>&1; docker rm -f '${cname}' >/dev/null 2>&1; true" || return 1
 }
 
 cmd_dist_run() {
@@ -956,6 +976,7 @@ while [ $# -gt 0 ]; do
     --nofile) NOFILE_LIMIT="${2:-}"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
     --debug) DEBUG=true; shift ;;
+    --force) FORCE=true; shift ;;
     -h|--help)
       case "$subcommand" in
         "") usage; exit 0 ;;
@@ -1000,6 +1021,13 @@ fi
 
 require_host
 
+cmd_dist_preflight() {
+  require_model
+  [ -n "$NODES" ] || { err "dist-preflight: --nodes required"; exit 2; }
+  [ -n "$WORK" ] || WORK="${NAS_ROOT}/fes-projects/exl3-mimo-build/${MODEL}-work-k3"
+  preflight_dist_run
+}
+
 case "$subcommand" in
   pack)       cmd_pack ;;
   convert)    cmd_convert ;;
@@ -1010,6 +1038,7 @@ case "$subcommand" in
   dist-coordinator) cmd_dist_coordinator ;;
   dist-worker) cmd_dist_worker ;;
   dist-run) cmd_dist_run ;;
+  dist-preflight) cmd_dist_preflight ;;
   build) cmd_build ;;
   sync)       cmd_sync ;;
   status)     cmd_status ;;
@@ -1020,3 +1049,4 @@ case "$subcommand" in
     exit 2
     ;;
 esac
+
