@@ -108,7 +108,9 @@ class Coordinator(_StrategyMixin, _TransportMixin, _CommitMixin):
         ) = convert_model.get_base_model(in_args)
 
         state: list[torch.Tensor]
-        original_input_ids: list[torch.Tensor]
+        # prepare_state returns None here on resume (upstream: only idx 0 loads
+        # original ids); the guard below materializes either way. Upstream's
+        # resumed form is a list of per-row dicts, so elements are Tensor|dict.
         state, original_input_ids = convert_model.prepare_state(
             in_args, job_state, config, model, tokenizer
         )
@@ -117,7 +119,7 @@ class Coordinator(_StrategyMixin, _TransportMixin, _CommitMixin):
             original_input_ids = (
                 state.copy()
                 if int(job_state.get("next_module_idx", 0) or 0) == 0
-                else [None] * len(state)
+                else [{} for _ in range(len(state))]
             )
 
         # Build the model-global bitrate strategy (plan §8).

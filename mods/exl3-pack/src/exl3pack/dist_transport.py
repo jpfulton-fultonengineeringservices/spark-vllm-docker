@@ -41,6 +41,11 @@ def _exllamav3_version() -> str:
         return ""
 
 
+# Worker heartbeats are touched every _POLL_INTERVAL_S (1s) in worker.serve;
+# a heartbeat this stale means the worker process is gone (not merely slow).
+_HEARTBEAT_STALE_S = 10.0
+
+
 class _TransportMixin:
     """Transport methods, mixed into ``Coordinator``."""
 
@@ -227,13 +232,28 @@ class _TransportMixin:
         # in tests can intercept the call (plan §6 test compatibility).
         from exl3pack import distributed as _dist
 
+        hb_dir = self.work / "dist" / "heartbeat"
+
         merged: dict[str, torch.Tensor] = {}
         for spec in specs:
             # P1-d: per-shard deadline
             deadline = time.monotonic() + self.gather_timeout
             data_path = Path(spec.result_uri)
             done_path = data_path.with_suffix(".done")
+            spec_node = Path(spec.result_uri).parent.name
             while not done_path.exists():
+                hb = hb_dir / spec_node
+                try:
+                    hb_age = time.time() - hb.stat().st_mtime
+                except OSError:
+                    hb_age = float("inf")  # no heartbeat yet: never written
+                if hb_age > _HEARTBEAT_STALE_S:
+                    raise RuntimeError(
+                        f"{spec.module_key} shard {spec.shard_idx}: worker on "
+                        f"{spec_node!r} is dead (heartbeat stale {hb_age:.0f}s > "
+                        f"{_HEARTBEAT_STALE_S:.0f}s); "
+                        "not retrying a gather that cannot complete"
+                    )
                 if time.monotonic() > deadline:
                     raise TimeoutError(
                         f"{spec.module_key} shard {spec.shard_idx}: "
