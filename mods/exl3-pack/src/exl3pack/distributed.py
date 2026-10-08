@@ -167,7 +167,8 @@ class Coordinator(_StrategyMixin, _TransportMixin, _CommitMixin):
             # prepare_for_device/forward. Mirror that guard here.
             device = torch.device(str(self.args.get("device", "cuda:0")))
             module.load(
-                torch.device("cpu") if module.caps.get("prefer_cpu") else device
+                torch.device("cpu") if module.caps.get("prefer_cpu") else device,
+                keep_source_weights=True,
             )
 
             # -- capture online while fp16 (plan §3.1) -----------------------
