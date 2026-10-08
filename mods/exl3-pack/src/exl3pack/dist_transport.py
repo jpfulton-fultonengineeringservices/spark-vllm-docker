@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 from collections.abc import Sequence
 from importlib import metadata
@@ -32,9 +33,7 @@ from exl3pack.dist_types import (
     sha256_file,
     write_atomic,
 )
-
-if TYPE_CHECKING:
-    from exl3pack.dist_types import WorkerEndpoint
+from exl3pack.logconfig import log_event
 
 
 def _exllamav3_version() -> str:
@@ -45,13 +44,19 @@ def _exllamav3_version() -> str:
         return ""
 
 
-# Worker heartbeats are touched every _POLL_INTERVAL_S (1s) in worker.serve;
-# a heartbeat this stale means the worker process is gone (not merely slow).
-_HEARTBEAT_STALE_S = 10.0
+# Worker heartbeats are touched every _POLL_INTERVAL_S (1s) in worker.serve.
+# A stale heartbeat does NOT kill a gather: NFS attribute caching routinely
+# serves mtimes minutes old, and the GIL can starve the daemon touch thread
+# during multi-minute MoE shards. Staleness is a diagnostic only -- the
+# gather deadline is the real failure signal. This must stay comfortably
+# above NFS actimeo so it never fires on a live worker.
+_HEARTBEAT_WARN_S = 60.0
 
 
 class _TransportMixin:
     """Transport methods, mixed into ``Coordinator``."""
+
+    log: logging.Logger
 
     # Union: pre-prepare CoordinatorArgs, post-prepare the merged in_args
     # superset (prepare() adds derived keys).
@@ -253,12 +258,17 @@ class _TransportMixin:
                     hb_age = time.time() - hb.stat().st_mtime
                 except OSError:
                     hb_age = float("inf")  # no heartbeat yet: never written
-                if hb_age > _HEARTBEAT_STALE_S:
-                    raise RuntimeError(
-                        f"{spec.module_key} shard {spec.shard_idx}: worker on "
-                        f"{spec_node!r} is dead (heartbeat stale {hb_age:.0f}s > "
-                        f"{_HEARTBEAT_STALE_S:.0f}s); "
-                        "not retrying a gather that cannot complete"
+                if hb_age > _HEARTBEAT_WARN_S:
+                    log_event(
+                        self.log,
+                        logging.WARNING,
+                        "coordinator.gather_heartbeat_stale",
+                        fields={
+                            "module": spec.module_key,
+                            "shard": spec.shard_idx,
+                            "node": spec_node,
+                            "hb_age_s": round(hb_age, 1),
+                        },
                     )
                 if time.monotonic() > deadline:
                     raise TimeoutError(
