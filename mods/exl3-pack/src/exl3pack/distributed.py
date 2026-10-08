@@ -35,6 +35,7 @@ from exllamav3.model.config import Config
 from exllamav3.modules.linear import Linear
 from safetensors import safe_open  # noqa: F401  — patched in tests via mock.patch.object
 
+from exl3pack.cli import CoordinatorArgs
 from exl3pack.dist_commit import _CommitMixin, _get_preserve, _put_preserve
 from exl3pack.dist_strategy import _StrategyMixin
 from exl3pack.dist_transport import _TransportMixin
@@ -50,21 +51,23 @@ class Coordinator(_StrategyMixin, _TransportMixin, _CommitMixin):
 
     def __init__(
         self,
-        args: dict[str, Any],
+        args: CoordinatorArgs,
         endpoints: Sequence[WorkerEndpoint],
         work: Path,
         log_dir: Path | None = None,
     ) -> None:
-        self.args = args
+        # After prepare() runs, self.args becomes the merged in_args superset
+        # (prepare adds derived keys like recipe_strategy, apply_out_scales),
+        # so the stored type is the union, not just the CLI boundary shape.
+        self.args: CoordinatorArgs | dict[str, Any] = args
         self.endpoints = list(endpoints)
         self.work = work
         self.log = get_logger("coordinator", log_dir=log_dir)
         self._log_dir = log_dir
         self.gather_timeout = float(args.get("gather_timeout", 600.0))
-        # Upstream default is 120s via --cpi (plan §3).
-        self.checkpoint_interval = int(
-            args.get("checkpoint_interval") or args.get("cpi") or 120
-        )
+        # Upstream default is 120s (plan §3); host tests construct Coordinator
+        # with a minimal torch-free args dict, so default defensively.
+        self.checkpoint_interval = int(args.get("checkpoint_interval", 120))
         self._module_idx = 0
         self._h_dir = ""
         self._last_checkpoint_time = 0.0
@@ -116,11 +119,7 @@ class Coordinator(_StrategyMixin, _TransportMixin, _CommitMixin):
         )
         # B2: upstream guard: fresh run copies state; resumed run materializes None
         if original_input_ids is None:
-            original_input_ids = (
-                state.copy()
-                if int(job_state.get("next_module_idx", 0) or 0) == 0
-                else [{} for _ in range(len(state))]
-            )
+            original_input_ids = state.copy()
 
         # Build the model-global bitrate strategy (plan §8).
         strategy = self._build_strategy(model, _mtp_model, _vision_model, config)

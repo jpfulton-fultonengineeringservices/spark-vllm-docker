@@ -2,6 +2,8 @@ import argparse
 from collections.abc import Collection
 from typing import Any
 
+import torch
+
 # Model / Tokenizer are not stubbed in PART 1; use Any for those positions.
 # `config` resolves to the stubbed exllamav3.model.config.Config.
 
@@ -25,7 +27,7 @@ def prepare_state(
     config: Any,
     model: Any,
     tokenizer: Any | None,
-) -> tuple[list[Any], Any | None]: ...
+) -> tuple[list[torch.Tensor], list[torch.Tensor] | None]: ...
 
 
 def get_state_error(x: Any, ref: Any) -> tuple[float, float, float]: ...

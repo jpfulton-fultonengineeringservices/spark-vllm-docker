@@ -12,6 +12,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import TypedDict
 
 from . import paths
 from .geometry import detect
@@ -19,6 +20,42 @@ from .spec import PackSpec, load_spec, load_spec_from_file
 
 # Codebooks exl3-v1 accepts (see repack.py). Shared by --codebook validation.
 _EXL3_CODEBOOKS = ("mcg", "lut_e4m3", "lut_fp16")
+
+
+class CoordinatorArgs(TypedDict):
+    """Exactly the kwargs convert_model.prepare() reads on the Namespace built
+    from dist_args; a dropped key is a compile error (types must match the
+    upstream argparse defaults baked in below)."""
+
+    in_dir: str
+    out_dir: str
+    recipe: str
+    work_dir: str
+    gather_timeout: float
+    checkpoint_interval: int
+    bits: int
+    codebook: str
+    resume: bool
+    head_bits: float | None
+    mtp_bits: float | None
+    hq: bool
+    override_anyway: bool
+    image_dump: bool
+    verbose: bool
+    out_scales: str
+    max_module: int | None
+    shard_size: int
+    vision_bits: int
+    ngram_bits: int
+    ngram_file: str
+    cal_data: str
+    cal_rows: int
+    cal_cols: int
+    last_checkpoint_index: int
+    devices: str
+    device_ratios: str
+    hessians: str
+    hessians_reg: float
 
 
 def _resolve_spec(args: argparse.Namespace) -> PackSpec | None:
@@ -405,9 +442,13 @@ def _cmd_dist_coordinator(args: argparse.Namespace) -> int:
         return 2
 
     work = Path(args.work)
-    dist_args: dict[str, object] = {
+    dist_args: CoordinatorArgs = {
         "in_dir": str(args.source),
         "out_dir": str(args.exl3_out),
+        # bits/codebook resolved below from --bits or PackSpec; placeholders
+        # replaced before any consumer runs.
+        "bits": 0,
+        "codebook": "mcg",
         "recipe": str(args.recipe),
         "work_dir": str(work),
         "gather_timeout": float(args.gather_timeout),
