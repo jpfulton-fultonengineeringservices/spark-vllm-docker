@@ -422,6 +422,19 @@ def _cmd_dist_coordinator(args: argparse.Namespace) -> int:
         "verbose": False,
         "out_scales": "always",
         "max_module": None,
+        # override() table entries with upstream argparse defaults
+        "shard_size": 8192,
+        "vision_bits": 0,
+        "ngram_bits": 0,
+        "ngram_file": "",
+        "cal_data": "",
+        "cal_rows": 250,
+        "cal_cols": 2048,
+        "last_checkpoint_index": -1,
+        "devices": "0",
+        "device_ratios": "",
+        "hessians": "",
+        "hessians_reg": 0.025,
     }
     # bits: explicit flag wins; otherwise the model's PackSpec supplies it, the
     # same source every other subcommand uses. Without this, prepare() raises
