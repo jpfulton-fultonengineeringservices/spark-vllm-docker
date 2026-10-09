@@ -12,11 +12,13 @@ import os
 import re
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from safetensors.torch import save_file
 
+if TYPE_CHECKING:
+    from exl3pack.cli import CoordinatorArgs
 from exl3pack.dist_types import coverage_assert, write_atomic
 
 # Quantized keys emitted by ``LinearEXL3.get_tensors()`` (no ".weight").
@@ -36,8 +38,12 @@ _QUANT_SUFFIXES = frozenset(
     }
 )
 
-# MiMo v2.6 MoE shape: layers 1-47 carry 256 experts each, and every expert
-# contributes exactly one down projection to the gathered module tensors.
+# MiMo v2.6 MoE expert validation. Flash default (MoE layers 1-47, 256
+# experts) is the fallback when the spec is unavailable; the coordinator
+# plumbs the PackSpec geometry (moe_layer_count / num_experts) through
+# dist_args as moe_layer_lo/moe_layer_hi/moe_expert_count, which overrides
+# these. Never bake flash geometry into a shared constant when the
+# coordinator holds the spec (pro: 69 MoE layers, 384 experts).
 _MOE_LAYER_LO = 1
 _MOE_LAYER_HI = 47
 _MOE_EXPERT_COUNT = 256
@@ -80,6 +86,9 @@ def _put_preserve(
 class _CommitMixin:
     """Commit and checkpoint methods, mixed into ``Coordinator``."""
 
+    # Union: pre-prepare CoordinatorArgs, post-prepare merged in_args
+    # superset (same convention as distributed.py / dist_transport.py).
+    args: dict[str, Any] | CoordinatorArgs
     work: Path
     _planned_keys: set[str]
     _strategy: dict[str, float]
@@ -106,18 +115,23 @@ class _CommitMixin:
             {_base_key(k) for k in q_tensors},
         )
 
-        # MiMo-specific: every MoE layer must return exactly experts 0-255 of
-        # each expert down projection (plan §9).
+        # MiMo-specific: every MoE layer must return exactly experts
+        # 0..(expert_count-1) of each expert down projection (plan §9).
+        # Range/count come from the PackSpec geometry plumbed through
+        # dist_args (M); flash constants are only the no-spec fallback.
         layer_match = _MODULE_KEY_RE.fullmatch(module_key)
         if layer_match is not None:
             layer_i = int(layer_match.group(1))
-            if _MOE_LAYER_LO <= layer_i <= _MOE_LAYER_HI:
+            moe_lo = int(self.args.get("moe_layer_lo", _MOE_LAYER_LO))
+            moe_hi = int(self.args.get("moe_layer_hi", _MOE_LAYER_HI))
+            moe_n = int(self.args.get("moe_expert_count", _MOE_EXPERT_COUNT))
+            if moe_lo <= layer_i <= moe_hi:
                 experts: set[int] = set()
                 for key in q_tensors:
                     m = _EXPERT_DOWN_RE.fullmatch(_base_key(key))
                     if m is not None and int(m.group(1)) == layer_i:
                         experts.add(int(m.group(2)))
-                expected = set(range(_MOE_EXPERT_COUNT))
+                expected = set(range(moe_n))
                 if experts != expected:
                     raise ValueError(
                         f"{module_key}: expected 256 expert down_proj keys "

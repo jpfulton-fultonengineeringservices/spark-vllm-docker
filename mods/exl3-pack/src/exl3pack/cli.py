@@ -60,6 +60,12 @@ class CoordinatorArgs(TypedDict):
     device_ratios: str
     hessians: str
     hessians_reg: float
+    # PackSpec geometry (M): MoE validate range + expert count for the
+    # commit-time expert-coverage assert (dist_commit). Flash default keeps
+    # minimal host-test args working: MoE layers 1..47, 256 experts.
+    moe_layer_lo: int
+    moe_layer_hi: int
+    moe_expert_count: int
 
 
 def _resolve_spec(args: argparse.Namespace) -> PackSpec | None:
@@ -505,6 +511,14 @@ def _cmd_dist_coordinator(args: argparse.Namespace) -> int:
         return 2
 
     work = Path(args.work)
+    # PackSpec geometry -> commit-time MoE validation (dist_commit): the MoE
+    # validate range and expert count come from the spec the run was launched
+    # with, never from baked flash constants. No spec (raw --bits path) keeps
+    # the upstream-compatible flash default.
+    _spec_geo = _resolve_spec(args)
+    if _spec_geo is None and args.bits is None:
+        print("dist-coordinator: --bits or --model required", file=sys.stderr)
+        return 2
     dist_args: CoordinatorArgs = {
         "in_dir": str(args.source),
         "out_dir": str(args.exl3_out),
@@ -542,18 +556,21 @@ def _cmd_dist_coordinator(args: argparse.Namespace) -> int:
         "device_ratios": "",
         "hessians": "",
         "hessians_reg": 0.025,
+        "moe_layer_lo": 1,
+        "moe_layer_hi": (
+            47 if _spec_geo is None else _spec_geo.geometry.moe_layer_count
+        ),
+        "moe_expert_count": (
+            256 if _spec_geo is None else _spec_geo.geometry.num_experts
+        ),
     }
-    # bits: explicit flag wins; otherwise the model's PackSpec supplies it, the
-    # same source every other subcommand uses. Without this, prepare() raises
-    # AttributeError on a missing 'bits' after workers have already launched.
     if args.bits is not None:
         dist_args["bits"] = int(args.bits)
     else:
-        spec = _resolve_spec(args)
-        if spec is None:
+        if _spec_geo is None:
             print("dist-coordinator: --bits or --model required", file=sys.stderr)
             return 2
-        dist_args["bits"] = int(spec.bits)
+        dist_args["bits"] = int(_spec_geo.bits)
     dist_args["codebook"] = args.codebook or "mcg"
 
     endpoints: list[WorkerEndpoint] = []

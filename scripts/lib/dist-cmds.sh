@@ -109,6 +109,20 @@ cmd_dist_run() {
   # node, and the trap's teardown writes stop-files on every node.
   preflight_dist_run || return 1
   _emit_dist_recipe "$src" "$work" "$recipe" || return 1
+  # Purge stale dist scratch BEFORE launching workers: a reused work dir can
+  # hold shard outputs, .done markers, and inbox specs from an aborted run
+  # with a different shard plan. Workers launch before the coordinator and
+  # poll inboxes immediately, so a worker can take a stale spec into memory
+  # before any coordinator-side purge runs; the only safe purge point is
+  # host-side, before launch_workers. Resume state (ckpt/, qtensors/) is
+  # untouched -- only dist/ scratch for dispatch/gather goes.
+  # ckpt-derived module scratch (mod<N>) is rewritten per module by dispatch,
+  # so only inbox specs + .done markers + out/ leftovers matter here.
+  if [ "$DRY_RUN" = true ]; then
+    echo "[dist-run] DRY-RUN would purge: ${work}/dist/mod*/out/*, ${work}/dist/inbox/*/*.json, stray .done"
+  else
+    purge_dist_scratch "$work"
+  fi
   # Teardown runs on every exit path (normal return, set -e failure, Ctrl-C,
   # TERM): workers poll for the stop sentinel and otherwise never exit.
   dist_run_teardown_done=false
