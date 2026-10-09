@@ -16,10 +16,18 @@ run_stage() {
   if [ "$DETACH" = true ]; then
     echo "started container ${NAME}; status: ${status_file}"
     echo "  watch:  $0 watch --host ${HOST} --model ${MODEL}"
-    echo "  logs:   ssh $(ssh_target) docker logs -f ${NAME}"
+    echo "  logs:   ssh $(ssh_target) 'docker logs -f ${NAME} 2>&1 | tee -a $(v1_out_dir)/.pack-build.log'"
     return 0
   fi
+  # Persist stdout/stderr on the node (--rm destroys container logs on exit).
+  # Always under v1-out (never $WORK): v1-out is the durable NAS destination.
+  local v1 log_pid
+  v1="$(v1_out_dir)"
+  ssh "$(ssh_target)" \
+    "{ mkdir -p '${v1}' 2>/dev/null || true; } && docker logs -f '${NAME}' 2>&1 | tee -a '${v1}/.pack-build.log' >/dev/null" &
+  log_pid=$!
   poll "$status_file"
+  wait "$log_pid" 2>/dev/null || true
   echo "--- container logs (tail) ---"
   ssh "$(ssh_target)" "docker logs '${NAME}' 2>&1 | tail -30" || true
 }
@@ -78,8 +86,22 @@ cmd_pack() {
   build_override_args paths
   if [ "$ASSEMBLE" = true ]; then
     run_stage pipeline "${vargs[@]+"${vargs[@]}"}"
-    # assemble needs source + pack + serve-out; reuse same overrides
-    run_stage assemble "${vargs[@]+"${vargs[@]}"}"
+    # Chained assemble: pack source is the repack output (v1-out), NOT
+    # exl3-out — default cleanup=work may have deleted exl3-out, and the
+    # in-image pack.is_dir() guard would reject it anyway. Repack pre-fills
+    # v1-out, so pass --force; the in-image copy-skip makes re-copying the
+    # pack layers already present there a no-op.
+    local v1
+    local -a avars
+    v1="$(v1_out_dir)"
+    avars=(--source "$v1" --force
+      --status-file "$v1/.pack-status.json"
+      --log-dir "$v1/.pack-build-logs")
+    [ -n "$WORK" ]     && avars+=(--work "$WORK")
+    [ -n "$V1_OUT" ]   && avars+=(--v1-out "$V1_OUT")
+    [ -n "$RECIPE" ]   && avars+=(--recipe "$RECIPE")
+    [ -n "$CLEANUP" ]  && avars+=(--cleanup "$CLEANUP")
+    run_stage assemble "${avars[@]+"${avars[@]}"}"
   else
     run_stage pipeline "${vargs[@]+"${vargs[@]}"}"
   fi
@@ -103,6 +125,12 @@ cmd_assemble() {
   require_model
   build_global_args
   build_override_args paths
+  # Assemble is observable: status file + JSONL event logs live under v1-out.
+  local v1
+  v1="$(v1_out_dir)"
+  vargs+=(--status-file "$(derive_status_file)")
+  vargs+=(--log-dir "$v1/.pack-build-logs")
+  [ "$FORCE" = true ] && vargs+=(--force)
   run_stage assemble "${vargs[@]+"${vargs[@]}"}"
 }
 
