@@ -381,8 +381,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--nodes", required=True, help="comma-separated node slugs/aliases")
     p.add_argument(
-        "--gather-timeout", type=float, default=600.0,
-        help="per-shard gather timeout in seconds (default 600.0)",
+        "--gather-timeout", type=float, default=3600.0,
+        help="per-shard gather timeout in seconds (default 3600.0)",
     )
     p.add_argument(
         "--checkpoint-interval", type=int, default=120,

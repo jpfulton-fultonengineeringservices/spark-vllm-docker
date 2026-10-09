@@ -69,7 +69,7 @@ class Coordinator(_StrategyMixin, _TransportMixin, _CommitMixin):
         self.work = work
         self.log = get_logger("coordinator", log_dir=log_dir)
         self._log_dir = log_dir
-        self.gather_timeout = float(args.get("gather_timeout", 600.0))
+        self.gather_timeout = float(args.get("gather_timeout", 3600.0))
         # Upstream default is 120s (plan §3); host tests construct Coordinator
         # with a minimal torch-free args dict, so default defensively.
         self.checkpoint_interval = int(args.get("checkpoint_interval", 120))
@@ -92,10 +92,19 @@ class Coordinator(_StrategyMixin, _TransportMixin, _CommitMixin):
         # schema list, dropping any keys it does not know (moe_layer_lo/
         # moe_layer_hi/moe_expert_count), so capture them pre-merge and
         # restore after -- the spec-derived values must survive the merge.
-        _geom_pre: dict[str, Any] = {
+        # gather_timeout is also dropped by prepare() (not in the upstream
+        # schema override list), so preserve it the same way; otherwise the
+        # coordinator falls back to the 600s default and every Pro MoE
+        # shard (~19 min on 2 nodes) times out on the first gather.
+        _prepare_dropped: dict[str, Any] = {
             k: v
             for k, v in dict(self.args).items()
-            if k in ("moe_layer_lo", "moe_layer_hi", "moe_expert_count")
+            if k in (
+                "moe_layer_lo",
+                "moe_layer_hi",
+                "moe_expert_count",
+                "gather_timeout",
+            )
         }
         log_event(
             self.log,
@@ -114,7 +123,7 @@ class Coordinator(_StrategyMixin, _TransportMixin, _CommitMixin):
         if not ok or in_args is None or job_state is None:
             raise RuntimeError(f"prepare failed: {err}")
         self.args = in_args  # merged superset (adds image_dump, verbose, ...)
-        self.args.update(_geom_pre)
+        self.args.update(_prepare_dropped)
 
         config: Config
         (
