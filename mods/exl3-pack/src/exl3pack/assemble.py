@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import os
 import shutil
 import sys
 from collections.abc import Callable
@@ -28,6 +30,8 @@ from typing import Any, cast
 import torch
 from safetensors import safe_open
 from safetensors.torch import save_file
+
+from . import logconfig, monitor
 
 EXL3_MANIFEST_FILENAME = "exl3-manifest.json"
 LAYER_PREFIX = "exl3-layer-"
@@ -180,6 +184,7 @@ def _write_shards(
     ckpt_groups: int,
     max_bytes: int,
     progress: Callable[[str], None],
+    on_shard: Callable[[int, int], None] | None = None,
 ) -> tuple[dict[str, str], int]:
     """Write kept tensors (fp8 pairs dequantized) to fresh shards in ``out``."""
     out_keys = [k for k in kept_keys if not k.endswith(SCALE_INV_SUFFIX)]
@@ -202,6 +207,8 @@ def _write_shards(
         save_file(pending, str(out / fname))
         for key in pending:
             new_map[key] = fname
+        if on_shard is not None:
+            on_shard(shard_idx, (out / fname).stat().st_size)
         progress(f"dense shard {shard_idx}: {len(pending)} tensor(s) -> {fname}")
         pending = {}
         pending_bytes = 0
@@ -252,7 +259,11 @@ def _write_shards(
 
 
 def _copy_pack(
-    pack: Path, out: Path, progress: Callable[[str], None], cleanup: CleanupPolicy
+    pack: Path,
+    out: Path,
+    progress: Callable[[str], None],
+    cleanup: CleanupPolicy,
+    on_layer: Callable[[int, str], None] | None = None,
 ) -> int:
     manifest = pack / EXL3_MANIFEST_FILENAME
     if not manifest.exists():
@@ -265,6 +276,8 @@ def _copy_pack(
         if not (dest.exists() and dest.stat().st_size == f.stat().st_size):
             shutil.copy2(f, dest)
         copied += 1
+        if on_layer is not None:
+            on_layer(copied, f.name)
         progress(f"pack layer {copied}: {f.name}")
         if cleanup.delete_pack_after_copy:
             f.unlink(missing_ok=True)
@@ -299,9 +312,20 @@ def run(
     max_shard_bytes: int = 5_000_000_000,
     force: bool = False,
     cleanup: CleanupPolicy | None = None,
+    status_file: Path | None = None,
+    log_dir: Path | None = None,
     progress: Callable[[str], None] = print,
 ) -> None:
     cleanup = cleanup or CleanupPolicy()
+    if status_file is not None:
+        sf = status_file
+    elif os.environ.get("PACK_STATUS_FILE"):
+        sf = monitor.status_path()
+    else:
+        sf = out / ".pack-status.json"
+    started_at = monitor.timestamp()
+    log = logconfig.get_logger("assemble", log_dir)
+
     if not source.is_dir():
         raise SystemExit(f"source dir not found: {source}")
     if not pack.is_dir():
@@ -309,45 +333,134 @@ def run(
     if out.exists():
         entries = [p for p in out.iterdir() if not p.name.startswith(".")]
         if entries and not force:
-            raise SystemExit(f"output dir not empty: {out} (pass --force to overwrite)")
+            err = f"output dir not empty: {out} (pass --force to overwrite)"
+            monitor.write_status(sf, started_at, stage="assemble", phase="error", errors=[err])
+            logconfig.log_event(log, logging.ERROR, "assemble.error", {"error": err})
+            raise SystemExit(err)
     out.mkdir(parents=True, exist_ok=True)
 
-    wm = _weight_map(source)
-    kept = [k for k in wm if EXPERT_MARKER not in k]
-    fp8_bases = (
-        {k[: -len(WEIGHT_SUFFIX)] for k in kept if k.endswith(WEIGHT_SUFFIX)}
-        & {k[: -len(SCALE_INV_SUFFIX)] for k in kept if k.endswith(SCALE_INV_SUFFIX)}
+    layers_total = len(list(pack.glob(f"{LAYER_PREFIX}*.safetensors")))
+    monitor.write_status(
+        sf, started_at, stage="assemble", phase="running", layers_total=layers_total
     )
-    src_cfg = _load_json(source / "config.json")
-    src_qc = src_cfg.get("quantization_config", {}) or {}
-    block_raw = src_qc.get("weight_block_size") or [128, 128]
-    fp8_block = (int(block_raw[0]), int(block_raw[1]))
-    dense_format = dense_format or ("bf16" if fp8_bases else "fp8")
-    src_tc = src_cfg.get("text_config", src_cfg)
-    ckpt_groups = int(src_tc.get("num_key_value_heads") or 1)
+    logconfig.log_event(
+        log,
+        logging.INFO,
+        "assemble.start",
+        {"source": str(source), "pack": str(pack), "out": str(out), "layers_total": layers_total},
+    )
 
-    progress(f"assemble: source={source} pack={pack} out={out}")
-    new_map, _total = _write_shards(
-        source, out, wm, kept, fp8_bases, fp8_block, ckpt_groups, max_shard_bytes, progress
-    )
-    (out / "model.safetensors.index.json").write_text(
-        json.dumps({"metadata": {"total_size": _total}, "weight_map": new_map}, indent=2) + "\n"
-    )
-    layers = _copy_pack(pack, out, progress, cleanup)
-    progress(f"copied {layers} exl3 layer file(s) + {EXL3_MANIFEST_FILENAME}")
-    _patch_config(source, pack, out, kept, dense_format)
-    copied = _copy_aux(source, out)
-    progress(f"copied auxiliary file(s)/dir(s): {', '.join(copied[:8])}")
+    shards_completed = 0
+    shards_bytes = 0
+    layers_completed = 0
 
-    cfg = _load_json(out / "config.json")
-    tc = cfg.get("text_config", cfg)
-    geometry = _load_json(out / EXL3_MANIFEST_FILENAME).get("geometry", {})
-    if geometry.get("hidden_size") and geometry["hidden_size"] != tc.get("hidden_size"):
-        raise SystemExit(
-            f"manifest hidden_size {geometry['hidden_size']} != source hidden "
-            f"{tc.get('hidden_size')}; wrong pack for this source?"
+    def on_shard(shard_idx: int, nbytes: int) -> None:
+        nonlocal shards_completed, shards_bytes
+        shards_completed += 1
+        shards_bytes += nbytes
+        logconfig.log_event(
+            log,
+            logging.INFO,
+            "assemble.shard_done",
+            {"shard": shard_idx, "bytes": nbytes},
+    )
+
+    def on_layer(idx: int, name: str) -> None:
+        nonlocal layers_completed
+        layers_completed = idx
+        monitor.write_status(
+            sf,
+            started_at,
+            stage="assemble",
+            layers_completed=layers_completed,
+            current_layer=name,
+    )
+        logconfig.log_event(
+            log, logging.INFO, "assemble.layer_copied", {"layer": idx, "file": name}
+    )
+
+    try:
+        wm = _weight_map(source)
+        monitor.write_status(
+            sf, started_at, stage="assemble", shards_total=len(set(wm.values()))
         )
-    progress("assemble: OK")
+        kept = [k for k in wm if EXPERT_MARKER not in k]
+        fp8_bases = (
+            {k[: -len(WEIGHT_SUFFIX)] for k in kept if k.endswith(WEIGHT_SUFFIX)}
+            & {k[: -len(SCALE_INV_SUFFIX)] for k in kept if k.endswith(SCALE_INV_SUFFIX)}
+        )
+        src_cfg = _load_json(source / "config.json")
+        src_qc = src_cfg.get("quantization_config", {}) or {}
+        block_raw = src_qc.get("weight_block_size") or [128, 128]
+        fp8_block = (int(block_raw[0]), int(block_raw[1]))
+        dense_format = dense_format or ("bf16" if fp8_bases else "fp8")
+        src_tc = src_cfg.get("text_config", src_cfg)
+        ckpt_groups = int(src_tc.get("num_key_value_heads") or 1)
+
+        progress(f"assemble: source={source} pack={pack} out={out}")
+        new_map, _total = _write_shards(
+            source,
+            out,
+            wm,
+            kept,
+            fp8_bases,
+            fp8_block,
+            ckpt_groups,
+            max_shard_bytes,
+            progress,
+            on_shard,
+        )
+        monitor.write_status(
+            sf,
+            started_at,
+            stage="assemble",
+            shards_completed=shards_completed,
+            bytes_written=shards_bytes,
+        )
+        (out / "model.safetensors.index.json").write_text(
+            json.dumps({"metadata": {"total_size": _total}, "weight_map": new_map}, indent=2)
+            + "\n"
+        )
+        _copy_pack(pack, out, progress, cleanup, on_layer)
+        progress(f"copied {layers_completed} exl3 layer file(s) + {EXL3_MANIFEST_FILENAME}")
+        _patch_config(source, pack, out, kept, dense_format)
+        logconfig.log_event(
+            log, logging.INFO, "assemble.config_patched", {"dense_format": dense_format}
+        )
+        copied = _copy_aux(source, out)
+        progress(f"copied auxiliary file(s)/dir(s): {', '.join(copied[:8])}")
+
+        cfg = _load_json(out / "config.json")
+        tc = cfg.get("text_config", cfg)
+        geometry = _load_json(out / EXL3_MANIFEST_FILENAME).get("geometry", {})
+        if geometry.get("hidden_size") and geometry["hidden_size"] != tc.get("hidden_size"):
+            raise SystemExit(
+                f"manifest hidden_size {geometry['hidden_size']} != source hidden "
+                f"{tc.get('hidden_size')}; wrong pack for this source?"
+            )
+        output_size = sum(
+            f.stat().st_size for f in out.iterdir() if f.is_file() and not f.name.startswith(".")
+        )
+        monitor.write_status(
+            sf,
+            started_at,
+            stage="assemble",
+            phase="done",
+            layers_completed=layers_completed,
+            output_size=output_size,
+        )
+        logconfig.log_event(
+            log,
+            logging.INFO,
+            "assemble.done",
+            {"output_size": output_size, "layers": layers_completed, "shards": shards_completed},
+        )
+        progress("assemble: OK")
+    except BaseException as e:
+        err = str(e) or repr(e)
+        monitor.write_status(sf, started_at, stage="assemble", phase="error", errors=[err])
+        logconfig.log_event(log, logging.ERROR, "assemble.error", {"error": err})
+        raise
 
 
 def main(argv: list[str] | None = None) -> int:

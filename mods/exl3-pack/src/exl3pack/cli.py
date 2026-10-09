@@ -351,6 +351,9 @@ def build_parser() -> argparse.ArgumentParser:
         # Shared recipe (model-global quantization plan).
         p.add_argument("--recipe", default=None)
         p.add_argument("--cleanup", choices=("none", "work", "all"), default="all")
+        p.add_argument("--status-file", default=None, help="pack status JSON path")
+        p.add_argument("--log-dir", default=None, help="JSONL event log dir")
+        p.add_argument("--force", action="store_true", help="assemble into a non-empty out")
         p.set_defaults(func=_cmd_run_stage, stage=name)
 
     p = sub.add_parser("status")
@@ -480,6 +483,9 @@ def _cmd_run_stage(args: argparse.Namespace) -> int:
             exl3_out,
             v1_out,
             cleanup=assemble.CleanupPolicy(delete_pack_after_copy=cleanup.delete_exl3_out),
+            status_file=Path(args.status_file) if args.status_file else None,
+            log_dir=Path(args.log_dir) if args.log_dir else None,
+            force=args.force,
         )
         return 0
     print(f"unknown stage {args.stage}", file=sys.stderr)

@@ -128,6 +128,9 @@
 #   --recipe <path>         pipeline recipe (default: derived from spec)
 #   --cleanup <mode>        pipeline cleanup: none|work|all (default: work)
 #   --assemble              pack: also run the assemble stage at the end
+#                         (pack source = v1-out repack output, forwarded with
+#                         --force; observable via status/watch live,
+#                         .pack-build.log post-mortem)
 #   --bits <n>              override spec bits (rare; dist-coordinator only)
 #   --codebook <n>          override spec codebook (rare; dist-coordinator only)
 #   --nodes <n[,n...]>      dist-run/dist-coordinator: node ids (see above)
@@ -144,7 +147,10 @@
 #   --local-root <path>     node-local checkpoint/staging root (default: /opt/llm)
 #   --nofile <n>            container nofile ulimit (default: 1048576; env
 #                         EXL3_PACK_NOFILE). Raise for highly sharded sources.
-#   --status-file <path>    override derived status file path
+#   --status-file <path>    override derived status file path (default:
+#                         <v1-out>/.pack-status.json; assemble now writes it +
+#                         JSONL event logs under <v1-out>/.pack-build-logs, so
+#                         status/watch are live during assemble)
 #   --name <name>           container name (default: exl3-pack-job)
 #                         dist-run names: <name>-coord, <name>-worker-<node-id>
 #   --no-sync               skip rsync of build context
