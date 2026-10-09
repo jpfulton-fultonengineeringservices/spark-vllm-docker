@@ -25,6 +25,31 @@ check_shared_work_writable() {
   done
 }
 
+# Purge stale dist/ scratch from a reused work dir BEFORE workers launch.
+# Workers start before the coordinator and poll inboxes immediately; a
+# stale inbox spec can be taken into worker memory before any coordinator
+# purge runs, and a stale .done marker satisfies gather instantly. Only
+# dispatch/gather scratch goes: ckpt/, qtensors/, recipe.yaml, logs/ are
+# resume state. Runs host-side over SSH (the driver Mac has no /nas-1).
+purge_dist_scratch() {
+  local work="$1"
+  [ -n "$work" ] || { err "purge_dist_scratch: no work dir"; return 1; }
+  [ "$DRY_RUN" = true ] && { echo "[dry-run] purge_dist_scratch: would purge ${work}/dist/{mod*/out,inbox/*/*.json,*.done}"; return 0; }
+  ssh "$(ssh_target "$HOST")" "
+    set -e
+    [ -d '${work}/dist' ] || exit 0
+    # Per-module shard outputs + done markers (dispatch rewrites per module)
+    find '${work}/dist' -maxdepth 3 -path '*/out/*' -name 'shard-*.safetensors' -delete 2>/dev/null || true
+    find '${work}/dist' -maxdepth 3 -path '*/out/*' -name 'shard-*.done' -delete 2>/dev/null || true
+    # Stale inbox specs from any prior run (fresh specs are re-dispatched)
+    find '${work}/dist/inbox' -name 'shard-*.json' -delete 2>/dev/null || true
+    # Stray done markers at mod roots (any position)
+    find '${work}/dist' -name '*.done' -delete 2>/dev/null || true
+    exit 0
+  " || { err "purge_dist_scratch: purge failed on $HOST"; return 1; }
+  echo "[dist-run] purged stale dist scratch under ${work}/dist (out/, inbox specs, .done)"
+}
+
 # Reject a node-local WORK for the distributed path (coordinator writes every
 # node's inbox/outputs under one --work; must be cluster-visible shared storage).
 validate_shared_work() {
