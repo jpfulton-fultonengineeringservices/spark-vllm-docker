@@ -163,6 +163,16 @@ class _TransportMixin:
         out_dir = self.work / "dist" / f"mod{self._module_idx}" / "out"
         specs: list[ShardSpec] = []
 
+        # Pre-create the per-node output directories from the coordinator
+        # (single-threaded) so workers never race on mkdir over NFS. Without
+        # this, two workers calling write_atomic -> parent.mkdir(parents=True,
+        # exist_ok=True) simultaneously can hit [Errno 17] File exists on the
+        # shared "out" intermediate when NFS attribute cache delays the
+        # exist_ok check between recursive levels. write_atomic's 10x0.1s
+        # retry cannot outlast a multi-second NFS cache window.
+        for ep in endpoints:
+            (out_dir / ep.node).mkdir(parents=True, exist_ok=True)
+
         for wi, ep in enumerate(endpoints):
             linear_keys: list[str] = []
             qmaps: set[str] = set()
