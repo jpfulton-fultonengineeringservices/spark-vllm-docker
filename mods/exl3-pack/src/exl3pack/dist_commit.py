@@ -134,8 +134,8 @@ class _CommitMixin:
                 expected = set(range(moe_n))
                 if experts != expected:
                     raise ValueError(
-                        f"{module_key}: expected 256 expert down_proj keys "
-                        f"(experts 0-255), got {len(experts)} distinct"
+                        f"{module_key}: expected {moe_n} expert down_proj keys "
+                        f"(experts 0-{moe_n - 1}), got {len(experts)} distinct"
                     )
 
         # P1-a: per-linear required-key assertion

@@ -87,6 +87,16 @@ class Coordinator(_StrategyMixin, _TransportMixin, _CommitMixin):
 
         # P1-e: crash-window restore must happen before prepare() reads ckpt/job.json.
         self._restore_checkpoint_backup()
+        # PackSpec geometry for the commit-time MoE coverage assert
+        # (dist_commit): prepare() rebuilds in_args from a fixed upstream
+        # schema list, dropping any keys it does not know (moe_layer_lo/
+        # moe_layer_hi/moe_expert_count), so capture them pre-merge and
+        # restore after -- the spec-derived values must survive the merge.
+        _geom_pre: dict[str, Any] = {
+            k: v
+            for k, v in dict(self.args).items()
+            if k in ("moe_layer_lo", "moe_layer_hi", "moe_expert_count")
+        }
         log_event(
             self.log,
             logging.INFO,
@@ -104,6 +114,7 @@ class Coordinator(_StrategyMixin, _TransportMixin, _CommitMixin):
         if not ok or in_args is None or job_state is None:
             raise RuntimeError(f"prepare failed: {err}")
         self.args = in_args  # merged superset (adds image_dump, verbose, ...)
+        self.args.update(_geom_pre)
 
         config: Config
         (
