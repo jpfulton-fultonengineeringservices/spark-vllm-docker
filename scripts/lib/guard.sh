@@ -38,9 +38,11 @@ purge_dist_scratch() {
   ssh "$(ssh_target "$HOST")" "
     set -e
     [ -d '${work}/dist' ] || exit 0
-    # Per-module shard outputs + done markers (dispatch rewrites per module)
-    find '${work}/dist' -maxdepth 3 -path '*/out/*' -name 'shard-*.safetensors' -delete 2>/dev/null || true
-    find '${work}/dist' -maxdepth 3 -path '*/out/*' -name 'shard-*.done' -delete 2>/dev/null || true
+    # Per-module shard outputs + done markers (dispatch rewrites per module).
+    # No -maxdepth: shard files sit at dist/mod<N>/out/<node>/shard-<i>.* =
+    # depth 4, and a bounded -maxdepth 3 would silently match nothing.
+    find '${work}/dist' -path '*/out/*' -name 'shard-*.safetensors' -delete 2>/dev/null || true
+    find '${work}/dist' -path '*/out/*' -name 'shard-*.done' -delete 2>/dev/null || true
     # Stale inbox specs from any prior run (fresh specs are re-dispatched)
     find '${work}/dist/inbox' -name 'shard-*.json' -delete 2>/dev/null || true
     # Stray done markers at mod roots (any position)
