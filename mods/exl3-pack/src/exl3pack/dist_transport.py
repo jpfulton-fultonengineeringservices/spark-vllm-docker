@@ -7,6 +7,7 @@ helper used by ``_plan_shards``.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -224,6 +225,19 @@ class _TransportMixin:
                     f"shard_idx {spec.shard_idx} has no endpoint"
                 )
             ep = self.endpoints[spec.shard_idx]
+            # Purge prior outputs for this shard before dispatching: a reused
+            # work dir can hold shard files and .done markers from an aborted
+            # run with a different shard plan. Gather waits on .done existence
+            # and verifies hash-vs-marker, so a stale marker satisfied by
+            # stale contents silently merges the previous run's tensors
+            # instead of this dispatch's (caught fail-closed by the commit
+            # coverage assert as "coverage mismatch"). Purging here makes
+            # gather observe only this dispatch's results.
+            stale_out = Path(spec.result_uri)
+            stale_done = stale_out.with_suffix(".done")
+            for stale in (stale_out, stale_done):
+                with contextlib.suppress(OSError):
+                    stale.unlink()
             inbox = Path(ep.inbox)
             payload = spec.to_json()
 
