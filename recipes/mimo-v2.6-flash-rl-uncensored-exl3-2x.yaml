@@ -1,0 +1,118 @@
+# Recipe: MiMo-V2.6-Flash-RL-UNCENSORED EXL3 (two DGX Spark, TP=2)
+#
+# Serves the b12x `exl3-v1` pack produced by the fork's pack-build "assemble"
+# stage (mods/mimo-v2.6-flash-rl-uncensored/pack-build/spec.py, see
+# mods/exl3-mimo/EXL3_MIMO_PACK.md) across two GB10 nodes at TP=2. Identical
+# serve shape to recipes/mimo-v2.6-flash-exl3-2x.yaml, except:
+#   - the staged slug is the UNcensored derivative's pack
+#     (mimo-v2.6-flash-rl-uncensored-exl3-v1, cluster.env
+#     MIMO_V26_FLASH_RL_UNCENSORED_EXL3_SLUG / SPARK_VLLM_DOCKER_SLUGS pair),
+#     assembled from /nas-1/models/mimo/mimo-v2.6-flash-rl-uncensored,
+#   - DFlash speculative decoding is enabled (--speculative-config, same
+#     drafter path/shape as recipes/mimo-v2.6-flash-exl3-4x.yaml; the pack
+#     ships the DFlash drafter under dflash/, staged by mods/mimo-v2.6-flash
+#     from MIMO_V26_MODEL_ID's snapshot).
+#
+# Model: served via the FES staged-weights path. The slug holds the ASSEMBLED
+# serving checkpoint (source dense weights minus routed experts + the exl3-v1
+# container + a fork-shaped quantization_config), produced by:
+#   scripts/exl3-pack-drive.sh assemble
+#     /opt/llm/staging/mimo-v2.6-flash-rl-uncensored
+#     /nas-1/models/mimo/mimo-v2.6-flash-rl-uncensored-exl3-v1
+#     /nas-1/models/mimo/mimo-v2.6-flash-rl-uncensored-exl3-v1-serve
+# Mods/fes-weights presents that dir under this hub id, so `vllm serve` resolves
+# offline. Because `model:` is a packaging id (not a downloadable repo), run the
+# staged path (spark-vllm-docker-serve.sh stage/launch, or scripts/fes-eval.sh);
+# `--setup`/`--download-model` do not apply.
+#
+# Launch on the head rank (gx10-cb11), ranks on gx10-becc (node3) and
+# gx10-9273 (node4):
+#   cluster-config/scripts/spark-vllm-docker-serve.sh stage  --recipe mimo-v2.6-flash-rl-uncensored-exl3-2x
+#   cluster-config/scripts/spark-vllm-docker-serve.sh launch --recipe mimo-v2.6-flash-rl-uncensored-exl3-2x \
+#       --rank-order gx10-becc:0,gx10-9273:1 --daemon
+# (the SPARK_VLLM_DOCKER_SLUGS map in cluster.env binds this recipe to the
+# mimo-v2.6-flash-rl-uncensored-exl3-v1 slug)
+
+recipe_version: "1"
+name: MiMo-V2.6-Flash-RL-UNCENSORED EXL3 2x
+description: vLLM serving a MiMo-V2.6-Flash-RL-UNCENSORED EXL3 pack (B12X exl3-v1 container, DFlash speculative decoding) on two DGX Spark nodes (TP=2, b12x stack, exl3 quant method)
+
+# Local exl3-v1 serving checkpoint, staged by the FES weights path under this
+# hub id. Not a downloadable repo — use the staged launch (see header).
+model: XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3
+
+# b12x fork (local-inference-lab/vllm@dev/karmic-kraken) with B12X paged
+# attention (DiffKV + fp8 KV + sinks + non-causal) and b12x linear. Build with:
+#   ./build-and-copy.sh --exp-b12x -t vllm-node-b12x
+container: vllm-node-b12x
+
+build_args:
+  - --exp-b12x
+
+# 2 nodes: the experts-only EXL3 pack is ~110 GB total, ~55 GB/rank at TP=2, so
+# two nodes leave room for fp8 KV and the resident embed units.
+cluster_only: true
+
+# exl3-mimo relaxes the fork's DeepSeek-shaped EXL3 gates for MiMo (SiLU +
+# non-DeepSeek dense arrangement). mimo-v2.6-flash carries the model-support
+# patches and stages the DFlash drafter; kv-cache-guard-override skips the
+# single-request 1M KV guard.
+mods:
+  - mods/fes-weights
+  - mods/mimo-v2.6-flash
+  - mods/exl3-mimo
+  - mods/mimo-diffkv-fp8-kv
+  - mods/kv-cache-guard-override
+  - mods/b12x-kernel-cache
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 2
+  # ~55 GB experts/rank + non-expert weights + fp8 KV at TP=2; 0.8 also leaves
+  # room for the resident embed units (~0.10), matching the flagship b12x
+  # recipes' 0.80 + embed co-existence budget.
+  gpu_memory_utilization: 0.8
+  max_model_len: 1048576
+  block_size: 128
+  max_num_seqs: 32
+  max_num_batched_tokens: 16384
+  # DFlash speculative decoding: draft length 7 (same as the coherent-proven
+  # exl3-4x recipe).
+  num_speculative_tokens: 7
+
+env:
+  CUTE_DSL_ARCH: "sm_121a"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+  VLLM_SKIP_KV_CACHE_MEMORY_CHECK: "1"
+  # The mimo-v2.6-flash mod resolves its DFlash drafter from the served
+  # snapshot of MIMO_V26_MODEL_ID; point it at this (assembled) checkpoint so it
+  # finds dflash/ there rather than the source MiMo repo.
+  MIMO_V26_MODEL_ID: "XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3"
+
+command: |
+  b12x-kcache exec vllm serve XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3 \
+      --trust-remote-code \
+      --host {host} \
+      --port {port} \
+      --tensor-parallel-size {tensor_parallel} \
+      --quantization exl3 \
+      --attention-backend B12X \
+      --linear-backend b12x \
+      --block-size {block_size} \
+      --max-model-len {max_model_len} \
+      --kv-cache-dtype fp8 \
+      --kv-cache-dtype-skip-layers sliding_window \
+      --max-num-seqs {max_num_seqs} \
+      --max-num-batched-tokens {max_num_batched_tokens} \
+      --gpu-memory-utilization {gpu_memory_utilization} \
+      --enable-chunked-prefill \
+      --async-scheduling \
+      --enable-prefix-caching \
+      --speculative-config '{"method":"dflash","model":"/workspace/MiMo-V2.6-Flash-RL-dflash","num_speculative_tokens":{num_speculative_tokens},"attention_backend":"B12X"}' \
+      --generation-config vllm \
+      --reasoning-parser mimo \
+      --tool-call-parser mimo \
+      --enable-auto-tool-choice \
+      --kv-cache-metrics \
+      --enable-mfu-metrics
