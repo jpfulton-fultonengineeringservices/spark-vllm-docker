@@ -162,6 +162,11 @@ env:
   # its retained-owner walk (no cycle guard/memoization) spins at 100% CPU
   # with NIXL-registered KV buffers in the retained set (see mods/b12x-reclaim-gate).
   B12X_SKIP_RECLAIM: "1"
+  # Co-tenant headroom: the bge-m3 embed EngineCore co-resident on rank-0
+  # holds ~39 GiB UMA, leaving 81 GiB free — 0.7 GMU (84.4 GiB) fails
+  # request_memory. 0.62 (~74.8 GiB) leaves ~6 GiB slack under the co-tenant.
+  PD_PREFILL_GMU: "0.62"
+  PD_DECODE_GMU: "0.62"
 
 # Single-line outer-engine recipe command: multi-node launch-cluster.sh runs
 # this as the LAST line, appending --nnodes/--node-rank/--master-addr/
