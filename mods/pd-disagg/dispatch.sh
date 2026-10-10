@@ -294,8 +294,6 @@ if [ "$NODE_RANK" -ge 2 ]; then
     --max-model-len "$PD_MAX_MODEL_LEN"
     --attention-backend B12X
     --linear-backend b12x
-    --moe-backend b12x
-    --load-format b12x
     --block-size "$PD_BLOCK_SIZE"
     --kv-cache-dtype fp8
     --kv-cache-dtype-skip-layers sliding_window
