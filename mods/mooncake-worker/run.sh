@@ -51,6 +51,33 @@ done
 [ "$(md5_of "$SRC_DIR/worker.py")" = "$MD5_MOD_WORKER" ] \
     || { echo "$PREFIX FAIL: mod worker.py md5 mismatch (expected $MD5_MOD_WORKER)" >&2; exit 1; }
 
+# --- envs shim ---------------------------------------------------------------
+# The ported worker reads envs.VLLM_PREFIX_CACHE_RETENTION_INTERVAL (FES
+# lineage defines it in vllm/envs.py:319, default None; used for prefix-cache
+# alignment). The stock image's vllm/envs.py predates it — inject the
+# attribute next to its neighbor VLLM_NIC_SELECTION_VARS with the FES
+# default. Gated: only injected when absent; idempotent.
+ENVS_PY="${PYTHON_ROOT}/vllm/envs.py"
+if ! grep -q 'VLLM_PREFIX_CACHE_RETENTION_INTERVAL' "$ENVS_PY" 2>/dev/null; then
+    python3 - "$ENVS_PY" <<'PYEOF'
+import sys, ast
+from pathlib import Path
+p = Path(sys.argv[1])
+t = p.read_text()
+anchor = "    VLLM_NIC_SELECTION_VARS: str = \"\"\n"
+assert t.count(anchor) == 1, f"envs anchor count={t.count(anchor)}"
+new = anchor + "    VLLM_PREFIX_CACHE_RETENTION_INTERVAL: int | None = None\n"
+t = t.replace(anchor, new, 1)
+ast.parse(t)
+tmp = p.with_suffix(".py.tmp")
+tmp.write_text(t)
+tmp.rename(p)
+print("envs shim injected")
+PYEOF
+else
+    echo "$PREFIX envs shim already present"
+fi
+
 CUR_WORKER="$(md5_of "$STORE_DIR/worker.py")"
 
 if [ "$CUR_WORKER" = "$MD5_MOD_WORKER" ]; then
