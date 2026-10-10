@@ -70,6 +70,20 @@ else
   . "$ENV_FILE"
 fi
 
+# KV-transfer allocator constraint (GATE on NixlConnector): PyTorch's
+# CUDA-VMM expandable_segments can remap KV virtual addresses to different
+# physical pages, invalidating NIXL-registered IB memory regions — vLLM
+# hard-rejects the pair at config validation. launch-cluster.sh exports
+# expandable_segments:True as a GB10 platform default (good for non-PD
+# recipes); unset it for BOTH PD roles only. (Alternative per the validator
+# message: enable_cumem_allocator / sleep mode — not needed here.)
+case "${PYTORCH_CUDA_ALLOC_CONF:-}" in
+  *expandable_segments:True*|*expandable_segments=true*)
+    echo "$PREFIX info: unsetting PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF (NixlConnector + expandable_segments invalidates registered KV memory)"
+    unset PYTORCH_CUDA_ALLOC_CONF
+    ;;
+esac
+
 # Outer-engine-appended args. Topology flags are parsed and consumed; anything
 # after `--` is an engine flag (e.g. trace flags appended by cluster-config
 # when SPARK_VLLM_DOCKER_TRACES=1) and is forwarded to BOTH roles' vLLM
