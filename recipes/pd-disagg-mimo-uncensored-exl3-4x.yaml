@@ -116,10 +116,14 @@ defaults:
   pd_tp_prefill: 2
   pd_tp_decode: 2
   # REQUIRED at NNODES=4 (decode ranks 2-3 rendezvous): rank-2 host IP,
-  # auto-derived by serve.sh from --rank-order and passed via -e (over the
-  # empty template value below); dispatch.sh aborts fail-closed if
-  # missing/empty when the decode sub-group forms.
-  pd_decode_master_addr: ""
+  # auto-derived by serve.sh from --rank-order and passed via docker -e.
+  # Deliberately NOT a command-template placeholder: run-recipe.py renders
+  # command: with str.format(**params) at script-generation time, so an
+  # inline `PD_DECODE_MASTER_ADDR='{...}'` prefix assignment would stomp
+  # the inherited docker -e value (prefix assignments override inherited
+  # env even when empty) and trip dispatch.sh's :? fail-closed guard.
+  # Serve.sh is the single source; dispatch.sh aborts fail-closed if the
+  # -e value is missing/empty when the decode sub-group forms.
   # DFlash speculative-decoding depth: hash-enforced cross-role
   # (PD_PARITY_SHA256); must be 7 (coherent-proven, 2x recipe).
   num_speculative_tokens: 7
@@ -151,4 +155,4 @@ env:
 # this as the LAST line, appending --nnodes/--node-rank/--master-addr/
 # --master-port. dispatch.sh derives per-role vLLM commands; vLLM-level
 # tensor-parallel comes ONLY from PD_TP_PREFILL/PD_TP_DECODE (NOT trimmed).
-command: PD_NIXL_PORT={pd_nixl_port} PD_PREFILL_PORT={pd_prefill_port} PD_DECODE_PORT={pd_decode_port} PD_ROUTER_PORT={pd_router_port} PD_NUM_SPECULATIVE_TOKENS={num_speculative_tokens} PD_MAX_MODEL_LEN={max_model_len} PD_BLOCK_SIZE={block_size} PD_MAX_NUM_SEQS={max_num_seqs} PD_MAX_NUM_BATCHED_TOKENS={max_num_batched_tokens} PD_TP_PREFILL={pd_tp_prefill} PD_TP_DECODE={pd_tp_decode} PD_DECODE_MASTER_PORT={pd_decode_master_port} PD_DECODE_MASTER_ADDR='{pd_decode_master_addr}' bash /workspace/mods/pd-disagg/dispatch.sh
+command: PD_NIXL_PORT={pd_nixl_port} PD_PREFILL_PORT={pd_prefill_port} PD_DECODE_PORT={pd_decode_port} PD_ROUTER_PORT={pd_router_port} PD_NUM_SPECULATIVE_TOKENS={num_speculative_tokens} PD_MAX_MODEL_LEN={max_model_len} PD_BLOCK_SIZE={block_size} PD_MAX_NUM_SEQS={max_num_seqs} PD_MAX_NUM_BATCHED_TOKENS={max_num_batched_tokens} PD_TP_PREFILL={pd_tp_prefill} PD_TP_DECODE={pd_tp_decode} PD_DECODE_MASTER_PORT={pd_decode_master_port} /workspace/mods/pd-disagg/dispatch.sh
