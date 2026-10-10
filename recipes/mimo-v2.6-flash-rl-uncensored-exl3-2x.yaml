@@ -89,7 +89,11 @@ env:
   # snapshot of MIMO_V26_MODEL_ID; point it at this (assembled) checkpoint so it
   # finds dflash/ there rather than the source MiMo repo.
   MIMO_V26_MODEL_ID: "XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3"
-  B12X_KCACHE_FORCE_AUTOTUNE_OFF: "0"
+  # Persist the torch inductor Triton autotuner cache (cubin files) outside
+  # /tmp so b12x-kcache can archive it alongside the b12x compile/preparation
+  # roots. Without this, /tmp/torchinductor_root is ephemeral and every boot
+  # re-compiles Triton kernels (the "Failed to reload cubin file" warnings).
+  TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
 
 command: |
   b12x-kcache exec vllm serve XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3 \

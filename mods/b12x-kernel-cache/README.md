@@ -29,6 +29,12 @@ as upstream `_cute_compile_cache_dir()` suggests), so the sibling entry is a
 benign no-op: save's directory check skips it and the `compile/` archive
 already carries `preparation/`. The entry is kept for a future upstream
 layout change.
+A third entry `torchinductor` → `/root/.cache/torchinductor` archives torch
+inductor's Triton autotuner cubin files. Without this, torch inductor writes
+to `/tmp/torchinductor_root` (ephemeral, lost on container restart) and every
+boot re-compiles Triton kernels (`Failed to reload cubin file` warnings). Set
+`TORCHINDUCTOR_CACHE_DIR=/root/.cache/torchinductor` in the recipe env so torch
+writes to the archived location.
 
 ## Store
 

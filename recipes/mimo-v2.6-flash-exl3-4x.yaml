@@ -95,6 +95,9 @@ env:
   # MIMO_V26_MODEL_ID; point it at the (assembled) EXL3 checkpoint so it finds
   # dflash/ there rather than the source MiMo repo.
   MIMO_V26_MODEL_ID: "XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3"
+  # Persist the torch inductor Triton autotuner cache outside /tmp so
+  # b12x-kcache archives it (roots.txt entry "torchinductor").
+  TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
 
 command: |
   b12x-kcache exec vllm serve XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3 \

@@ -77,6 +77,9 @@ defaults:
 env:
   CUTE_DSL_ARCH: "sm_121a"
   VLLM_USE_V2_MODEL_RUNNER: "1"
+  # Persist the torch inductor Triton autotuner cache outside /tmp so
+  # b12x-kcache archives it (roots.txt entry "torchinductor").
+  TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
 
 # The vLLM serve command template.
 # --attention-backend B12X: b12x paged attention supports DiffKV (192/128 K/V
