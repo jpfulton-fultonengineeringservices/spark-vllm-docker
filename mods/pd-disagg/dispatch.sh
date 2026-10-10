@@ -206,16 +206,14 @@ if [ "$NODE_RANK" -lt 2 ]; then
     ROUTER_SCRIPT="${PD_ROUTER_SCRIPT:-$(dirname "$0")/toy_proxy_server.py}"
     if [ -f "$ROUTER_SCRIPT" ]; then
       PD_ROUTER_START_DELAY="${PD_ROUTER_START_DELAY:-30}"
-      # toy_proxy_server.py parses --decoder-hosts/--decoder-ports with
-      # argparse nargs="+" and zips host<->port pairs, so the decode CSV MUST
-      # be expanded into one token per host -- a quoted CSV parses as a single
-      # "hostname" and httpx dials it (Errno -2 Name or service not known).
-      # Expansion preserves PD_DECODE_NODE_IPS order (rank 2, then rank 3).
-      IFS=',' read -r -a router_decoder_hosts <<< "${PD_DECODE_NODE_IPS:-}"
-      router_decoder_ports=()
-      for _ in "${router_decoder_hosts[@]}"; do
-        router_decoder_ports+=("${PD_DECODE_PORT:-8200}")
-      done
+      # The router must dial the decode sub-group MASTER only (first
+      # PD_DECODE_NODE_IPS entry = rank 2): --headless sub-group members
+      # (rank 3) never bind the API port, so round-robin over the full CSV
+      # dies with Connection refused on every other request. Same for
+      # prefill: --prefiller-hosts is this node's IP (rank 0 master); the
+      # headless rank 1 never serves.
+      router_decoder_hosts=("${PD_DECODE_NODE_IPS%%,*}")
+      router_decoder_ports=("${PD_DECODE_PORT:-8200}")
       # M1: sleep-gated start (README + recipe comments promise the 30s gate);
       # subshell keeps set -e safe, exec replaces the subshell with python3.
       # --host 0.0.0.0: the vendored router defaults --host to 127.0.0.1,
