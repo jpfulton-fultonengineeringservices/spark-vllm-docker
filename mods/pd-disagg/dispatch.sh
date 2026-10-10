@@ -70,11 +70,16 @@ else
   . "$ENV_FILE"
 fi
 
-# Outer-engine-appended args (parsed, consumed, NEVER forwarded verbatim to vLLM).
+# Outer-engine-appended args. Topology flags are parsed and consumed; anything
+# after `--` is an engine flag (e.g. trace flags appended by cluster-config
+# when SPARK_VLLM_DOCKER_TRACES=1) and is forwarded to BOTH roles' vLLM
+# commands verbatim — the same semantics every non-PD recipe gets from
+# run-recipe.py's post-`--` pass-through.
 NNODES=""
 NODE_RANK=""
 MASTER_ADDR=""
 MASTER_PORT=""
+PD_ENGINE_ARGS=()
 # shellcheck disable=SC2034  # MASTER_PORT parsed for symmetry only; the
 # outer-engine's master port is never forwarded to per-role vLLM commands.
 while [ $# -gt 0 ]; do
@@ -84,6 +89,7 @@ while [ $# -gt 0 ]; do
     --master-addr) MASTER_ADDR="$2"; shift 2 ;;
     --master-port) MASTER_PORT="$2"; shift 2 ;;
     --headless) shift ;; # per-role headless is re-derived below
+    --) shift; PD_ENGINE_ARGS=("$@"); break ;;
     *) fail "reason=unknown_arg arg=$1" ;;
   esac
 done
@@ -228,6 +234,9 @@ if [ "$NODE_RANK" -lt 2 ]; then
     --kv-transfer-config "$KV_PRODUCER"
     --trust-remote-code
   )
+  # Outer-engine trailing args (post-`--`, e.g. OTLP trace flags) forwarded
+  # verbatim to the prefill engine.
+  PREFILL_CMD+=("${PD_ENGINE_ARGS[@]+"${PD_ENGINE_ARGS[@]}"}")
   # NOTE: no --speculative-config on prefill; spec-decode (DFlash) is
   # decode-only. Prefill/decode parity on num_speculative_tokens is enforced
   # via the shared var + PD_PARITY_SHA256, not by duplicating the flag.
@@ -281,6 +290,9 @@ if [ "$NODE_RANK" -eq $((NNODES - 1)) ]; then
     --enable-mfu-metrics
     --kv-transfer-config "$KV_CONSUMER"
   )
+  # Outer-engine trailing args (post-`--`) forwarded verbatim to the decode
+  # engine as well, so trace/metric flags apply symmetrically to both roles.
+  DECODE_CMD+=("${PD_ENGINE_ARGS[@]+"${PD_ENGINE_ARGS[@]}"}")
   exec "${DECODE_CMD[@]}"
 fi
 
