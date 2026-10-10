@@ -216,10 +216,13 @@ if [ "$NODE_RANK" -lt 2 ]; then
       # Sleep-gated start (README + recipe promise the 30s gate); subshell
       # keeps set -e safe. pd-proxy has no --host flag (uvicorn default binds
       # 0.0.0.0); --verify-timeout 1800 lets engines finish EXL3 loading.
+      # pd-proxy validate_instances expects BARE host:port (splits on ':' and
+      # requires exactly two parts) — NOT a http:// URL, which would be
+      # rejected as "Invalid instance format".
       ( sleep "$PD_ROUTER_START_DELAY"; exec python3 "$PROXY_SCRIPT" \
         --model "${PD_EXL3_MODEL}" \
-        --prefill "http://${NODE_IP}:${PD_PREFILL_PORT:-8100}" \
-        --decode "http://${router_decoder_host}:${PD_DECODE_PORT:-8200}" \
+        --prefill "${NODE_IP}:${PD_PREFILL_PORT:-8100}" \
+        --decode "${router_decoder_host}:${PD_DECODE_PORT:-8200}" \
         --port "${PD_ROUTER_PORT:-8000}" \
         --verify-timeout 1800 \
       ) >/tmp/pd-proxy.log 2>&1 &
