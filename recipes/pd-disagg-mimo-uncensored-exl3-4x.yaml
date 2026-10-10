@@ -69,6 +69,7 @@
 # - mods/exl3-mimo          EXL3-to-MiMo runtime patch
 # - mods/pd-disagg          this PD mod (NIXL + role dispatcher)
 # - mods/b12x-kernel-cache  B12X kernel cache wrapper
+# - mods/b12x-reclaim-gate skip b12x evict_unretained sweep (B12X_SKIP_RECLAIM)
 
 recipe_version: "1"
 name: MiMo-V2.6-Flash-RL-UNCENSORED PD-Disaggregated EXL3 (4x)
@@ -93,6 +94,7 @@ mods:
   - mods/exl3-mimo
   - mods/pd-disagg
   - mods/b12x-kernel-cache
+  - mods/b12x-reclaim-gate
 
 defaults:
   # Router (rank 0) API port; external clients point here.
@@ -150,6 +152,10 @@ env:
   TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
   # Staged-weights only (fes-weights shim); never contact HF.
   HF_HUB_OFFLINE: "1"
+  # b12x-reclaim-gate mod: skip b12x's evict_unretained reclamation sweep —
+  # its retained-owner walk (no cycle guard/memoization) spins at 100% CPU
+  # with NIXL-registered KV buffers in the retained set (see mods/b12x-reclaim-gate).
+  B12X_SKIP_RECLAIM: "1"
 
 # Single-line outer-engine recipe command: multi-node launch-cluster.sh runs
 # this as the LAST line, appending --nnodes/--node-rank/--master-addr/
