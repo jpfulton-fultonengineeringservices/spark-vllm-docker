@@ -1,10 +1,10 @@
 # Recipe: PD-disaggregated MiMo-V2.6 EXL3 prefill + source decode (3-node GB10)
 #
-# Concept: one rank-0 prefill instance serves the EXL3-v1 MiMo pack with
-# tensor-parallel=1 (kv_role kv_producer); ranks 1..2 run the source-precision
-# decode instance tensor-parallel=2 (kv_role kv_consumer). NIXL moves KV from
-# prefill to decode. A toy_proxy_server on the shared rank-0 node routes
-# completions.
+# Concept (inverted, matches mods/pd-disagg/dispatch.sh): ranks 0-1 run the
+# EXL3-v1 MiMo pack prefill instance with tensor-parallel=2 (kv_role
+# kv_producer); the last rank (NNODES-1) runs the source-precision decode
+# instance tensor-parallel=1 + DFlash (kv_role kv_consumer). NIXL moves KV
+# from prefill to decode. A toy_proxy_server on rank 0 routes completions.
 #
 # This recipe is a cluster-only, research target. It is intentionally
 # conservative: it defines the minimum viable PD shape for the 3-node cap
@@ -60,9 +60,10 @@ defaults:
  # TP values are intentionally NOT inline integers in `command:` to avoid
  # launch-cluster.sh's parse_parallelism_from_text() footgun.  They travel
  # via env as variables.
- pd_tp_prefill: 1
- pd_tp_decode: 2
- # decode-master IP must be set to the first worker node (rank 1) IP.
+ pd_tp_prefill: 2
+ pd_tp_decode: 1
+ # decode-master IP: UNUSED at PD_TP_DECODE=1 (dispatch.sh only consumes it
+ # for a multi-rank decode sub-group); keep empty for the 3-node shape.
  pd_decode_master_addr: ""
  # DFlash speculative-decoding depth; hash-enforced between prefill and decode.
  num_speculative_tokens: 7
