@@ -9,7 +9,7 @@
 # Topology (NNODES must be 4; see tmp/spark-vllm-docker/pd-3x-completion-plan.md):
 #   ranks 0..1  PREFILL  : EXL3 pack, tensor-parallel 2 (2-rank sub-group,
 #                         mirrors recipes/mimo-v2.6-flash-rl-uncensored-exl3-2x.yaml),
-#                         API port 8100, rank 0 also runs the toy_proxy_server router.
+#                         API port 8100, rank 0 also runs the pd-proxy router.
 #   ranks 2..3  DECODE   : same EXL3 pack TP=2 sub-group + DFlash speculative
 #                         decoding, API port 8200, kv_consumer. Both roles serve
 #                         PD_EXL3_MODEL so prefill/decode quantization match.
@@ -21,8 +21,8 @@
 # correct vLLM flags itself (including its own sub-group rendezvous args for
 # the prefill TP=2 pair).
 #
-# The env file published by mods/pd-disagg/run.sh (UCX_NET_DEVICES for RoCE
-# HCAs, VLLM_NIXL_SIDE_CHANNEL_PORT, shared parity vars) is sourced first;
+# The env file published by mods/pd-disagg/run.sh (MOONCAKE_* store config,
+# PYTHONHASHSEED=0, shared parity vars) is sourced first;
 # run.sh must have run in-container before dispatch.sh unless PD_DISAGG_ENABLED=0.
 #
 # Parity by construction: every flag that MUST match across roles (speculative
@@ -71,13 +71,12 @@ else
   . "$ENV_FILE"
 fi
 
-# KV-transfer allocator constraint (GATE on NixlConnector): PyTorch's
-# CUDA-VMM expandable_segments can remap KV virtual addresses to different
-# physical pages, invalidating NIXL-registered IB memory regions — vLLM
-# hard-rejects the pair at config validation. launch-cluster.sh exports
-# expandable_segments:True as a GB10 platform default (good for non-PD
-# recipes); unset it for BOTH PD roles only. (Alternative per the validator
-# message: enable_cumem_allocator / sleep mode — not needed here.)
+# KV-transfer allocator constraint (was GATE on NixlConnector): PyTorch's
+# CUDA-VMM expandable_segments remaps KV virtual addresses, which broke
+# NIXL-registered IB regions. MooncakeStoreConnector host-stages KV through
+# the sibling client (no direct GPU-VA registration), so the constraint no
+# longer applies; the unset stays as belt-and-suspenders for the store
+# connector's pinned staging allocation.
 case "${PYTORCH_CUDA_ALLOC_CONF:-}" in
   *expandable_segments:True*|*expandable_segments=true*)
     echo "$PREFIX info: unsetting PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF (NixlConnector + expandable_segments invalidates registered KV memory)"
@@ -131,10 +130,9 @@ if [ -z "$NODE_IP" ]; then
 fi
 : "${NODE_IP:?op=env reason=missing_node_ip set_VLLM_HOST_IP}"
 
-# NIXL side channel: each node advertises its OWN IP (agents dial each other),
-# so VLLM_NIXL_SIDE_CHANNEL_HOST must never be the head's IP on workers.
-export VLLM_NIXL_SIDE_CHANNEL_HOST="$NODE_IP"
-export VLLM_NIXL_SIDE_CHANNEL_PORT="${PD_NIXL_PORT:-5600}"
+# Mooncake store: vLLM ranks are pure requesters; env (MOONCAKE_CONFIG_PATH,
+# MOONCAKE_PREFERRED_SEGMENT, PYTHONHASHSEED=0) was published by run.sh into
+# $ENV_FILE and re-sourced above. No side-channel exports needed.
 
 # ---------------------------------------------------------------------------
 # Shared parity config: defaults first (so a bare boot still works), then a
@@ -174,15 +172,12 @@ export TORCHINDUCTOR_CACHE_DIR="${TORCHINDUCTOR_CACHE_DIR:-/root/.cache/torchind
 # shellcheck disable=SC2206
 VLLM_SERVE=(${PD_VLLM_SERVE:-vllm serve})
 
-# enforce_handshake_compat=false: NIXL's compatibility hash mismatches by
-# design here -- decode runs DFlash speculative decoding (extra draft KV
-# layers) while prefill does not, so the two roles hash different configs.
-# Cross-role parity of the TRANSFERRED layout (block size, fp8 KV,
-# sliding_window skip, max_model_len, seq/batch caps) is enforced at boot by
-# PD_PARITY_SHA256 on every role; NIXL's redundant whole-config check is
-# disabled rather than silenced per-request.
-KV_PRODUCER='{"kv_connector":"NixlConnector","kv_role":"kv_producer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"enforce_handshake_compat":false}}'
-KV_CONSUMER='{"kv_connector":"NixlConnector","kv_role":"kv_consumer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"enforce_handshake_compat":false}}'
+# Store-only Mooncake: prefill = kv_producer (hash-dedup'd block PUT via
+# host-staged RDMA), decode = kv_consumer (GET on demand). No extra_config
+# keys needed; the store JSON (MOONCAKE_CONFIG_PATH) carries transport/segment
+# config, and DFlash stays decode-only via --speculative-config.
+KV_PRODUCER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_producer"}'
+KV_CONSUMER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_consumer"}'
 
 # Shared flag payload (identical on both roles): everything from the live
 # recipes/mimo-v2.6-flash-rl-uncensored-exl3-2x.yaml EXCEPT port / TP / GMU,
@@ -203,39 +198,33 @@ if [ "$NODE_RANK" -lt 2 ]; then
   PREFILL_MASTER_ADDR="${PD_PREFILL_MASTER_ADDR:-${MASTER_ADDR:-$NODE_IP}}"
   PREFILL_MASTER_PORT="${PD_PREFILL_MASTER_PORT:-29501}"
 
-  echo "$PREFIX role=PREFILL rank=$NODE_RANK tp=$TP_PREFILL nixl_host=$NODE_IP:$VLLM_NIXL_SIDE_CHANNEL_PORT prefill_master=$PREFILL_MASTER_ADDR:$PREFILL_MASTER_PORT PD_PARITY_SHA256=$PD_PARITY_SHA256"
+  echo "$PREFIX role=PREFILL rank=$NODE_RANK tp=$TP_PREFILL kv=mooncake-store segment=${MOONCAKE_PREFERRED_SEGMENT:-unset} prefill_master=$PREFILL_MASTER_ADDR:$PREFILL_MASTER_PORT PD_PARITY_SHA256=$PD_PARITY_SHA256"
 
-  # Router only on rank 0 (prefill needs to boot first; see PD_ROUTER_START_DELAY).
+  # Proxy only on rank 0 (prefill needs to boot first; see PD_ROUTER_START_DELAY).
   if [ "$NODE_RANK" -eq 0 ] && [ "${PD_ROUTER_ENABLED:-0}" = "1" ]; then
-    # B2: default to the mod-local vendored router (lands at
-    # /workspace/mods/pd-disagg/toy_proxy_server.py via apply_mod_to_container);
-    # /workspace/toy_proxy_server.py stays as an override.
-    ROUTER_SCRIPT="${PD_ROUTER_SCRIPT:-$(dirname "$0")/toy_proxy_server.py}"
-    if [ -f "$ROUTER_SCRIPT" ]; then
+    # pd-proxy (cluster-config docker/pd-proxy/pd_proxy.py) replaces the NIXL-era
+    # toy_proxy_server: same FastAPI proxy used by the proven qwen38 store-only
+    # deployment. Decodes a single endpoint: the decode sub-group MASTER (rank 2,
+    # first PD_DECODE_NODE_IPS entry) — headless rank 3 never binds 8200.
+    PROXY_SCRIPT="${PD_ROUTER_SCRIPT:-$(dirname "$0")/pd_proxy.py}"
+    if [ -f "$PROXY_SCRIPT" ]; then
       PD_ROUTER_START_DELAY="${PD_ROUTER_START_DELAY:-30}"
-      # The router must dial the decode sub-group MASTER only (first
-      # PD_DECODE_NODE_IPS entry = rank 2): --headless sub-group members
-      # (rank 3) never bind the API port, so round-robin over the full CSV
-      # dies with Connection refused on every other request. Same for
-      # prefill: --prefiller-hosts is this node's IP (rank 0 master); the
-      # headless rank 1 never serves.
-      router_decoder_hosts=("${PD_DECODE_NODE_IPS%%,*}")
-      router_decoder_ports=("${PD_DECODE_PORT:-8200}")
-      # M1: sleep-gated start (README + recipe comments promise the 30s gate);
-      # subshell keeps set -e safe, exec replaces the subshell with python3.
-      # --host 0.0.0.0: the vendored router defaults --host to 127.0.0.1,
-      # which would bind loopback only and break http://<head>:8000/v1/models.
-      ( sleep "$PD_ROUTER_START_DELAY"; exec python3 "$ROUTER_SCRIPT" \
-        --host "${PD_ROUTER_HOST:-0.0.0.0}" \
+      # The decode dial target is the decode sub-group MASTER only (first
+      # PD_DECODE_NODE_IPS entry = rank 2); headless rank 3 never binds 8200.
+      router_decoder_host="${PD_DECODE_NODE_IPS%%,*}"
+      # Sleep-gated start (README + recipe promise the 30s gate); subshell
+      # keeps set -e safe. pd-proxy has no --host flag (uvicorn default binds
+      # 0.0.0.0); --verify-timeout 1800 lets engines finish EXL3 loading.
+      ( sleep "$PD_ROUTER_START_DELAY"; exec python3 "$PROXY_SCRIPT" \
+        --model "${PD_EXL3_MODEL}" \
+        --prefill "http://${NODE_IP}:${PD_PREFILL_PORT:-8100}" \
+        --decode "http://${router_decoder_host}:${PD_DECODE_PORT:-8200}" \
         --port "${PD_ROUTER_PORT:-8000}" \
-        --prefiller-hosts "$NODE_IP" \
-        --prefiller-ports "${PD_PREFILL_PORT:-8100}" \
-        --decoder-hosts ${router_decoder_hosts[@]+"${router_decoder_hosts[@]}"} \
-        --decoder-ports ${router_decoder_ports[@]+"${router_decoder_ports[@]}"} \
-      ) >/tmp/pd-router.log 2>&1 &
-      echo "$PREFIX router scheduled (delay=${PD_ROUTER_START_DELAY}s, port=${PD_ROUTER_PORT:-8000}, log=/tmp/pd-router.log)"
+        --verify-timeout 1800 \
+      ) >/tmp/pd-proxy.log 2>&1 &
+      echo "$PREFIX proxy scheduled (delay=${PD_ROUTER_START_DELAY}s, port=${PD_ROUTER_PORT:-8000}, log=/tmp/pd-proxy.log)"
     else
-      echo "$PREFIX WARN router script not found (PD_ROUTER_SCRIPT=$ROUTER_SCRIPT); skipping router" >&2
+      echo "$PREFIX WARN proxy script not found (PD_ROUTER_SCRIPT=$PROXY_SCRIPT); skipping proxy" >&2
     fi
   fi
 
@@ -297,7 +286,7 @@ fi
 if [ "$NODE_RANK" -ge 2 ]; then
   : "${PD_DECODE_MASTER_ADDR:?op=argparse reason=PD_DECODE_MASTER_ADDR_required_for_4x}"
 
-  echo "$PREFIX role=DECODE rank=$NODE_RANK tp=$TP_DECODE nixl_host=$NODE_IP:$VLLM_NIXL_SIDE_CHANNEL_PORT PD_PARITY_SHA256=$PD_PARITY_SHA256"
+  echo "$PREFIX role=DECODE rank=$NODE_RANK tp=$TP_DECODE kv=mooncake-store segment=${MOONCAKE_PREFERRED_SEGMENT:-unset} decode_master=${PD_DECODE_MASTER_ADDR} PD_PARITY_SHA256=$PD_PARITY_SHA256"
 
   # shellcheck disable=SC2206
   DECODE_CMD=("${VLLM_SERVE[@]}" "${PD_EXL3_MODEL:-XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3}"
