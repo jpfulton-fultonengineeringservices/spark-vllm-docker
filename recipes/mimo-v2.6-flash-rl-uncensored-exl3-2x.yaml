@@ -72,7 +72,7 @@ defaults:
   # ~55 GB experts/rank + non-expert weights + fp8 KV at TP=2; 0.8 also leaves
   # room for the resident embed units (~0.10), matching the flagship b12x
   # recipes' 0.80 + embed co-existence budget.
-  gpu_memory_utilization: 0.8
+  gpu_memory_utilization: 0.7
   max_model_len: 1048576
   block_size: 128
   max_num_seqs: 32
