@@ -59,7 +59,28 @@ fi
 # directly (mooncake-store Dockerfile) — UCX is not on the store data path.
 MOD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# The connector imports `mooncake` in-process (store/worker.py:
+# --- 1b. Host-staging connector patch --------------------------------------
+# The deployed image's MooncakeStoreConnector registers the GPU KV buffer
+# directly (worker.py `register_buffer(gpu_addr)`), which dies on GB10 with
+# ibv_reg_mr EFAULT ("Bad address [14]", num_segments=0). The Fulton vllm
+# fork's host-staging branches add _StagingSlotPool (D2H -> pinned host
+# slots -> RDMA) keyed off kv_connector_extra_config['host_staging'].
+# The image predates it, so stage the fork's mooncake/ connector package at
+# the pinned SHA and overlay it in-place (same tree the qwen38 systemd path
+# bind-mounts via SERVE_VLLM_PATCH_CONNECTOR_DIR; mods are COPIED into the
+# container at apply time, not mounted, so the in-place overlay is the
+# mod-pipeline equivalent). Idempotent: skipped when host_staging already
+# present.
+if ! grep -q 'host_staging' \
+    "${VLLM_SITE_PACKAGES:-/usr/local/lib/python3.12/dist-packages}/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/worker.py" 2>/dev/null; then
+    info "connector lacks host_staging; staging fork package"
+    bash "$MOD_DIR/mooncake-connector-patch.sh" stage \
+        "${VLLM_SITE_PACKAGES:-/usr/local/lib/python3.12/dist-packages}/vllm/distributed/kv_transfer/kv_connector/v1/mooncake"
+else
+    info "connector host_staging already present"
+fi
+
+# The connector imports `mooncake` in-process (worker.py:
 # `from mooncake.store import ...`). The vllm-node-b12x image does not ship
 # the wheel; install it at boot if absent (mirrors the retired NIXL install
 # path). RDMA runtime deps (libmlx5/libibverbs) are already in the image.
