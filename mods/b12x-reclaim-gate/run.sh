@@ -4,22 +4,24 @@ set -euo pipefail
 # b12x reclamation-sweep gate mod.
 #
 # b12x/preparation/session.py:_reclaim_programs runs evict_unretained(keep)
-# after a warmup/profiling batch release. evict_unretained ->
-# retained_program_keys (b12x/_lib/compile_plan.py) walks every live retained
-# owner via program_keys() recursion, which has NO cycle guard and NO
-# memoization: DAG-shaped owner graphs re-materialize values per path and the
-# walk blows up exponentially. On the pd-disagg 4x recipe (NIXL-registered KV
-# buffers join the retained set) the sweep spins at 100% CPU (GIL held)
-# indefinitely: py-spy pins every sample in retained_program_keys.__iter__ via
-# evict_unretained, the worker stops answering EngineCore RPCs, and engine init
-# never completes (no API bind, no KV-cache init).
+# (stale-cache eviction) and an eager gc.collect() after each warmup/profiling
+# batch release. evict_unretained -> retained_program_keys
+# (b12x/_lib/compile_plan.py) walks every live retained owner via program_keys()
+# recursion with NO cycle guard and NO memoization: DAG-shaped owner graphs
+# re-materialize values per path, so the walk is exponential. The eager
+# gc.collect() grinds the same owner graph. On the pd-disagg 4x recipe
+# (NIXL-registered KV buffers join the retained set) both grind at 100% CPU
+# (GIL held) indefinitely: py-spy pins samples in retained_program_keys.__iter__
+# via evict_unretained, the worker stops answering EngineCore RPCs
+# (determine_available_memory never returns), and engine init never completes.
 #
-# The sweep is a stale-cache eviction optimization: `keep` protects live
-# programs, and a skipped eviction only leaves extra memoized entries in
-# per-process WeakValueDictionary-backed caches (reaped by GC). Patch: skip the
-# sweep when B12X_SKIP_RECLAIM=1, keep gc.collect().
+# Patch: B12X_SKIP_RECLAIM=1 skips BOTH the sweep and the eager gc.collect()
+# (CPython's threshold-triggered automatic collection still runs; a skipped
+# eviction only leaves extra memoized entries in per-process
+# WeakValueDictionary-backed caches). Default path byte-identical to upstream.
 #
-# Idempotent: skipped when already gated.
+# Idempotent and upgrade-safe: v1 (sweep gated, gc.collect() eager) containers
+# are upgraded in place.
 
 PREFIX="[b12x-reclaim-gate]"
 PYTHON_ROOT="${VLLM_SITE_PACKAGES:-${PYTHON_ROOT:-/usr/local/lib/python3.12/dist-packages}}"
@@ -53,7 +55,7 @@ NEW = '''        with timing.span("program_reclamation"):
                 # guard or memoization and spins on the pd-disagg 4x retained
                 # set. Skipping the sweep only leaves extra memoized cache
                 # entries, which are WeakValueDictionary-backed and reaped by
-                # the gc.collect() below.
+                # CPython's automatic threshold collection.
                 removed = -1
                 logger.warning(
                     "b12x-reclaim-gate: B12X_SKIP_RECLAIM=1; skipped "
@@ -61,12 +63,47 @@ NEW = '''        with timing.span("program_reclamation"):
                 )
             else:
                 removed = evict_unretained(keep)
-            gc.collect()
+            if os.environ.get("B12X_SKIP_RECLAIM") != "1":
+                gc.collect()
+            # b12x-reclaim-gate v2: else skip the eager generational
+            # gc.collect() -- it grinds the same retained-owner graph for
+            # minutes per release on the pd-disagg 4x profile batch; CPython's
+            # threshold-triggered automatic collection still runs.
         timing.record("complete", evicted_entries=removed)'''
 
-if "b12x-reclaim-gate mod" in text:
-    print("already gated:", target)
+V2_MARK = 'if os.environ.get("B12X_SKIP_RECLAIM") != "1":'
+V1_MARK = 'b12x-reclaim-gate: B12X_SKIP_RECLAIM=1; skipped'
+V1_GC = '''            else:
+                removed = evict_unretained(keep)
+            gc.collect()
+        timing.record("complete", evicted_entries=removed)'''
+V2_GC = '''            else:
+                removed = evict_unretained(keep)
+            if os.environ.get("B12X_SKIP_RECLAIM") != "1":
+                gc.collect()
+            # b12x-reclaim-gate v2: skip the eager generational gc.collect() --
+            # it grinds the same retained-owner graph for minutes per release
+            # on the pd-disagg 4x profile batch; CPython's threshold-triggered
+            # automatic collection still runs.
+        timing.record("complete", evicted_entries=removed)'''
+
+if V2_MARK in text:
+    print("already gated (v2):", target)
     sys.exit(0)
+
+if V1_MARK in text:
+    # v1->v2 upgrade: gate the eager gc.collect() the v1 patch left ungated.
+    if V1_GC not in text:
+        print(
+            "v1 marker present but gc.collect() anchor missing:",
+            target,
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    target.write_text(text.replace(V1_GC, V2_GC, 1))
+    print("upgraded v1->v2:", target)
+    sys.exit(0)
+
 if OLD not in text:
     print(
         "anchor missing; b12x wheel layout changed:",
