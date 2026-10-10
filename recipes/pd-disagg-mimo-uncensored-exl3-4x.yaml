@@ -110,7 +110,10 @@ defaults:
   # (MOONCAKE_MASTER_SERVER_ADDRESS=-e), same pattern as PD_DECODE_MASTER_ADDR.
   pd_mooncake_master_port: 50051
   pd_mooncake_client_port: 50053
-  pd_mooncake_segment_size_gib: 16
+  # GB10 UMA: client DRAM segment + offload local buffer come out of the SAME
+  # pool vLLM sizes against (nvidia-smi "free on cuda:0" == MemAvailable).
+  # 8 GiB segment keeps vLLM's 0.7 GMU budget intact; 16 GiB starves KV cache.
+  pd_mooncake_segment_size_gib: 8
   pd_mooncake_offload_max_gib: 100
   # Decode sub-group master port (rank 2 master, rank 3 --headless);
   # consumed NOW that TP_DECODE=2.
@@ -162,11 +165,7 @@ env:
   # its retained-owner walk (no cycle guard/memoization) spins at 100% CPU
   # with NIXL-registered KV buffers in the retained set (see mods/b12x-reclaim-gate).
   B12X_SKIP_RECLAIM: "1"
-  # Co-tenant headroom: the bge-m3 embed EngineCore co-resident on rank-0
-  # holds ~39 GiB UMA, leaving 81 GiB free — 0.7 GMU (84.4 GiB) fails
-  # request_memory. 0.62 (~74.8 GiB) leaves ~6 GiB slack under the co-tenant.
-  PD_PREFILL_GMU: "0.62"
-  PD_DECODE_GMU: "0.62"
+
 
 # Single-line outer-engine recipe command: multi-node launch-cluster.sh runs
 # this as the LAST line, appending --nnodes/--node-rank/--master-addr/
