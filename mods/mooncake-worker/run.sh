@@ -53,10 +53,11 @@ done
 
 # --- envs shim ---------------------------------------------------------------
 # The ported worker reads envs.VLLM_PREFIX_CACHE_RETENTION_INTERVAL (FES
-# lineage defines it in vllm/envs.py:319, default None; used for prefix-cache
-# alignment). The stock image's vllm/envs.py predates it — inject the
-# attribute next to its neighbor VLLM_NIC_SELECTION_VARS with the FES
-# default. Gated: only injected when absent; idempotent.
+# lineage defines it in vllm/envs.py, default None; prefix-cache retention
+# alignment). vllm.envs resolves attributes via its `environment_variables`
+# dict in `__getattr__`, so the attribute must be added to that dict (an
+# annotation alone is NOT enough). Inject the FES lambda verbatim next to
+# VLLM_NIC_SELECTION_VARS when absent. Idempotent, AST-validated.
 ENVS_PY="${PYTHON_ROOT}/vllm/envs.py"
 if ! grep -q 'VLLM_PREFIX_CACHE_RETENTION_INTERVAL' "$ENVS_PY" 2>/dev/null; then
     python3 - "$ENVS_PY" <<'PYEOF'
@@ -64,15 +65,21 @@ import sys, ast
 from pathlib import Path
 p = Path(sys.argv[1])
 t = p.read_text()
-anchor = "    VLLM_NIC_SELECTION_VARS: str = \"\"\n"
-assert t.count(anchor) == 1, f"envs anchor count={t.count(anchor)}"
-new = anchor + "    VLLM_PREFIX_CACHE_RETENTION_INTERVAL: int | None = None\n"
-t = t.replace(anchor, new, 1)
+anchor = '    "VLLM_NIC_SELECTION_VARS": lambda: os.getenv("VLLM_NIC_SELECTION_VARS", ""),\n'
+assert t.count(anchor) == 1, f"envs dict anchor count={t.count(anchor)}"
+entry = (
+    '    "VLLM_PREFIX_CACHE_RETENTION_INTERVAL": lambda: (\n'
+    '        int(os.environ["VLLM_PREFIX_CACHE_RETENTION_INTERVAL"])\n'
+    '        if "VLLM_PREFIX_CACHE_RETENTION_INTERVAL" in os.environ\n'
+    '        else None\n'
+    '    ),\n'
+)
+t = t.replace(anchor, anchor + entry, 1)
 ast.parse(t)
 tmp = p.with_suffix(".py.tmp")
 tmp.write_text(t)
 tmp.rename(p)
-print("envs shim injected")
+print("envs dict shim injected")
 PYEOF
 else
     echo "$PREFIX envs shim already present"
