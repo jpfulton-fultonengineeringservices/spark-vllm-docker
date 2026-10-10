@@ -58,6 +58,26 @@ fi
 # enable_offload=false). No UCX exports: Mooncake's engine.so links libmlx5
 # directly (mooncake-store Dockerfile) — UCX is not on the store data path.
 MOD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The connector imports `mooncake` in-process (store/worker.py:
+# `from mooncake.store import ...`). The vllm-node-b12x image does not ship
+# the wheel; install it at boot if absent (mirrors the retired NIXL install
+# path). RDMA runtime deps (libmlx5/libibverbs) are already in the image.
+# Pin to the same version the sibling mooncake-store image runs.
+: "${PD_MOONCAKE_SPEC:=mooncake-transfer-engine-cuda13==0.3.12.post1}"
+if ! python3 -c 'import mooncake' >/dev/null 2>&1; then
+    if [ "${PD_DISAGG_INSTALL_MOONCAKE:-1}" = "1" ]; then
+        info "mooncake module missing; installing '${PD_MOONCAKE_SPEC}'"
+        python3 -m pip install --no-cache-dir "${PD_MOONCAKE_SPEC}" >&2 \
+            || fail "op=install_mooncake spec='${PD_MOONCAKE_SPEC}' reason=pip_failed"
+    fi
+    python3 -c 'import mooncake' >/dev/null 2>&1 \
+        || fail "op=import_mooncake reason=absent hint='set PD_DISAGG_INSTALL_MOONCAKE=1 or bake ${PD_MOONCAKE_SPEC} into the image'"
+    info "mooncake module installed"
+else
+    info "mooncake module already present"
+fi
+
 source "$MOD_DIR/mooncake-env.sh"
 
 # --- 2. publish env for dispatch.sh -------------------------------------
