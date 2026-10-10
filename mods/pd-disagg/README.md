@@ -84,6 +84,38 @@ Shared parity vars (`PD_NUM_SPECULATIVE_TOKENS=7`, `PD_BLOCK_SIZE=128`,
 are hashed into `PD_PARITY_SHA256` by run.sh and re-verified by every
 dispatch.sh invocation — cross-role config drift fail-closes the launch.
 
+## KV backend selection (`PD_KV_BACKEND`)
+
+Two interchangeable KV-transfer paths; the rest of the topology is identical.
+
+- **`mooncake`** (default) — `MooncakeStoreConnector`. Each vLLM rank host-stages
+  GPU KV into pinned DRAM and RDMA-writes into the sibling `mooncake-client`
+  cohort directly. Lowest indirection; one store hop.
+- **`lmcache`** — `LMCacheMPConnector`. Each vLLM rank attaches to a **per-node
+  LMCache MP server** (`lmcache server`, localhost ZMQ + CUDA-IPC) that owns an
+  L1 host-DRAM pool and fans out to L2 adapters: `mooncake_store` (native ext,
+  RDMA to the same master), `valkey` (Dell), `fs_native` (NFS). Adds chunk
+  management, CacheBlend-capable L1, and cross-instance reuse, at one extra hop.
+  Requires the **lmcache-mooncake wheel variant** (native `lmcache.lmcache_mooncake`),
+  the `lmcache-server` image, and vLLM prefix caching **off** (the MP connector
+  owns cache management — dispatch.sh strips `--enable-prefix-caching`).
+
+Select with recipe `pd_kv_backend: lmcache` (or `PD_KV_BACKEND=lmcache` in env).
+
+| LMCache MP var | Purpose | Default |
+|---|---|---|
+| `LMCACHE_MP_HOST` / `LMCACHE_MP_PORT` | MP server ZMQ endpoint the vLLM rank dials | `tcp://127.0.0.1` / `5555` |
+| `LMCACHE_MOONCAKE_MASTER_ADDR` | MP server's `mooncake_store` L2 master | unset (adapter off) |
+| `LMCACHE_MOONCAKE_WORKERS` | native connector worker threads | `4` |
+| `LMCACHE_MOONCAKE_GLOBAL_SEGMENT_BYTES` | MP server's registered segment | `17179869184` (16 GiB) |
+| `LMCACHE_MOONCAKE_LOCAL_BUFFER_BYTES` | MP server's local buffer | `4294967296` (4 GiB) |
+
+The per-node MP server is `lmcache server` from
+`infra/cluster-config/docker/lmcache-server/Dockerfile`, launched via
+`infra/cluster-config/scripts/lmcache-server-entrypoint.sh` (its `mooncake_store`
+L2 block is gated on `LMCACHE_MOONCAKE_MASTER_ADDR`, with `--no-l1-use-lazy` for
+the RDMA L1 preregistration the adapter requires).
+
 ## Deployment
 
 1. Recipe `recipes/pd-disagg-mimo-uncensored-exl3-4x.yaml` (mods: fes-weights,

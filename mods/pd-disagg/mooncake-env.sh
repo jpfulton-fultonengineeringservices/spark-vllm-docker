@@ -44,6 +44,35 @@ if [ -z "$THIS_RAILB_IP" ]; then
 fi
 : "${THIS_RAILB_IP:?op=env reason=cannot resolve node Rail B IP}"
 
+# --- Backend selection -------------------------------------------------------
+# PD_KV_BACKEND selects the vLLM-side KV connector:
+#   mooncake  (default) MooncakeStoreConnector — vLLM talks to the Mooncake
+#             store directly (sibling master/client cohort owns DRAM+SSD).
+#   lmcache   LMCacheMPConnector — vLLM attaches to a per-node LMCache MP
+#             server over localhost ZMQ; that server owns the L1 (host DRAM)
+#             and pushes to its L2 adapters (mooncake_store / valkey /
+#             fs_native). See mods/pd-disagg/README.md and the integration plan.
+PD_KV_BACKEND="${PD_KV_BACKEND:-mooncake}"
+
+if [ "$PD_KV_BACKEND" = "lmcache" ]; then
+    # LMCache MP mode: the vLLM rank does NOT need a Mooncake connector config
+    # (MOONCAKE_CONFIG_PATH) or preferred-segment steering — the MP server owns
+    # the store client. We still export the shared correctness env
+    # (PYTHONHASHSEED) and the MP server endpoint the connector dials.
+    LMCACHE_MP_HOST="${LMCACHE_MP_HOST:-tcp://127.0.0.1}"
+    LMCACHE_MP_PORT="${LMCACHE_MP_PORT:-5555}"
+    : "${LMCACHE_MP_HOST:?op=env reason=LMCACHE_MP_HOST required for PD_KV_BACKEND=lmcache}"
+    : "${LMCACHE_MP_PORT:?op=env reason=LMCACHE_MP_PORT required for PD_KV_BACKEND=lmcache}"
+
+    export LMCACHE_MP_HOST LMCACHE_MP_PORT
+    export PYTHONHASHSEED=0
+
+    echo "$PREFIX backend=lmcache mp=${LMCACHE_MP_HOST}:${LMCACHE_MP_PORT}"
+    echo "$PREFIX MOONCAKE_ENV_OK backend=lmcache master=${MOONCAKE_MASTER_SERVER_ADDRESS}:${MOONCAKE_MASTER_PORT}"
+    # Sourced by run.sh -> return; bare execution -> exit.
+    return 0 2>/dev/null || exit 0
+fi
+
 # --- Render mooncake-store.json ---------------------------------------------
 MOONCAKE_CONFIG_PATH="${MOONCAKE_CONFIG_PATH:-/tmp/pd-disagg/mooncake-store.json}"
 mkdir -p "$(dirname "$MOONCAKE_CONFIG_PATH")"
