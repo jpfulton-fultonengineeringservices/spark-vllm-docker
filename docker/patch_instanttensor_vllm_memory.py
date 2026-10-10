@@ -16,6 +16,11 @@ PATCHED = """        # Share vLLM's UMA accounting and its CUDA-on-WSL policy.
         free_bytes = MemorySnapshot(device=self.device).free_memory
         avail_bytes = int(free_bytes * max_free_mem_usage)
 """
+# instanttensor >= 0.2.1 handles UMA natively (integrated-GPU branch consults
+# host MemAvailable via _host_available_bytes before falling back to CUDA
+# free memory) and participates in the budget MIN collective before
+# rejecting bad input. On those versions this patch is a no-op.
+NATIVE_MARKER = "_host_available_bytes()"
 
 
 def patch_memory_query(source: str) -> str:
@@ -33,6 +38,9 @@ def patch_memory_query(source: str) -> str:
     lines = source.splitlines(keepends=True)
     start, end = method.lineno - 1, method.end_lineno
     body = "".join(lines[start:end])
+    if NATIVE_MARKER in body:
+        # Newer InstantTensor: platform-aware budget accounting upstream.
+        return source
     original_count, patched_count = body.count(ORIGINAL), body.count(PATCHED)
     if original_count == 0 and patched_count == 1:
         return source
