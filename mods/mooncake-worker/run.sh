@@ -2,9 +2,10 @@
 # [mooncake-worker] Thin launcher for the host-staged Mooncake store connector
 # installer (see pyproject.toml + src/mooncake_worker/).
 #
-# Locates the vLLM package root (no vLLM import needed), then delegates to the
-# package CLI. Mirrors the house mod pattern (fix-qwen3-next-autoround and the
-# exl3-pack uv package).
+# Locates the vLLM **site root** (parent of the vllm package — find_spec
+# returns the package dir itself, so take its parent), then delegates to the
+# package CLI. Mirrors the house mod pattern (fix-qwen3-next-autoround and
+# the exl3-pack uv package).
 #
 # Usage: run.sh [install | verify | selftest | manifest]   (default: install)
 #
@@ -29,7 +30,9 @@ import sys
 spec = importlib.util.find_spec("vllm")
 if spec is None or not spec.submodule_search_locations:
     sys.exit("vLLM not importable (is this the vllm-node container?)")
-print(next(iter(spec.submodule_search_locations)))
+import pathlib
+pkg = pathlib.Path(next(iter(spec.submodule_search_locations)))
+print(pkg.parent)  # site root: parent of the vllm package dir
 PY
 )"
 fi
