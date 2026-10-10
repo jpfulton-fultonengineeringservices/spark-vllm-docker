@@ -174,8 +174,15 @@ export TORCHINDUCTOR_CACHE_DIR="${TORCHINDUCTOR_CACHE_DIR:-/root/.cache/torchind
 # shellcheck disable=SC2206
 VLLM_SERVE=(${PD_VLLM_SERVE:-vllm serve})
 
-KV_PRODUCER='{"kv_connector":"NixlConnector","kv_role":"kv_producer","kv_load_failure_policy":"fail"}'
-KV_CONSUMER='{"kv_connector":"NixlConnector","kv_role":"kv_consumer","kv_load_failure_policy":"fail"}'
+# enforce_handshake_compat=false: NIXL's compatibility hash mismatches by
+# design here -- decode runs DFlash speculative decoding (extra draft KV
+# layers) while prefill does not, so the two roles hash different configs.
+# Cross-role parity of the TRANSFERRED layout (block size, fp8 KV,
+# sliding_window skip, max_model_len, seq/batch caps) is enforced at boot by
+# PD_PARITY_SHA256 on every role; NIXL's redundant whole-config check is
+# disabled rather than silenced per-request.
+KV_PRODUCER='{"kv_connector":"NixlConnector","kv_role":"kv_producer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"enforce_handshake_compat":false}}'
+KV_CONSUMER='{"kv_connector":"NixlConnector","kv_role":"kv_consumer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"enforce_handshake_compat":false}}'
 
 # Shared flag payload (identical on both roles): everything from the live
 # recipes/mimo-v2.6-flash-rl-uncensored-exl3-2x.yaml EXCEPT port / TP / GMU,
