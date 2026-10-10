@@ -93,6 +93,7 @@ mods:
   - mods/kv-cache-guard-override
   - mods/exl3-mimo
   - mods/pd-disagg
+  - mods/mooncake-worker
   - mods/b12x-kernel-cache
   - mods/b12x-reclaim-gate
 
