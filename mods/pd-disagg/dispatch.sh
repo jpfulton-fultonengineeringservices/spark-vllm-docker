@@ -172,13 +172,32 @@ export TORCHINDUCTOR_CACHE_DIR="${TORCHINDUCTOR_CACHE_DIR:-/root/.cache/torchind
 # shellcheck disable=SC2206
 VLLM_SERVE=(${PD_VLLM_SERVE:-vllm serve})
 
-# Store-only Mooncake, host-staged: vLLM ranks D2H-copy GPU KV into pinned
-# host slots and RDMA-write from there (_StagingSlotPool in the connector
-# patch — direct GPU-VA registration is the GB10 dead end). extra_config:
-# host_staging + 2x2048 MiB slots (budget-neutral vs the default single 4 GiB
-# buffer; see kilo plan 1787331814960). DFlash stays decode-only.
-KV_PRODUCER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_producer","kv_connector_extra_config":{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048}}'
-KV_CONSUMER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_consumer","kv_connector_extra_config":{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048}}'
+# KV connector selection (PD_KV_BACKEND, published by mooncake-env.sh):
+#   mooncake (default): MooncakeStoreConnector, host-staged — vLLM D2H-copies
+#     GPU KV into pinned host slots and RDMA-writes from there (_StagingSlotPool
+#     in the connector patch; direct GPU-VA registration is the GB10 dead end).
+#     extra_config: host_staging + 2x2048 MiB slots (budget-neutral vs the
+#     default single 4 GiB buffer; see kilo plan 1787331814960).
+#   lmcache: LMCacheMPConnector — vLLM attaches to a per-node LMCache MP server
+#     over localhost ZMQ + CUDA-IPC; that server owns L1 (host DRAM) + L2
+#     (mooncake_store/valkey/fs_native). MP mode REQUIRES prefix caching OFF
+#     (the connector manages its own chunk cache; vLLM prefix caching would
+#     double-count), so a variant flag strips --enable-prefix-caching below.
+# DFlash stays decode-only in both variants.
+PD_PREFIX_CACHING=1
+if [ "${PD_KV_BACKEND:-mooncake}" = "lmcache" ]; then
+  LMCACHE_MP_HOST="${LMCACHE_MP_HOST:-tcp://127.0.0.1}"
+  LMCACHE_MP_PORT="${LMCACHE_MP_PORT:-5555}"
+  LMCACHE_MP_EXTRA="{\"lmcache.mp.host\":\"${LMCACHE_MP_HOST}\",\"lmcache.mp.port\":${LMCACHE_MP_PORT}}"
+  KV_PRODUCER="{\"kv_connector\":\"LMCacheMPConnector\",\"kv_role\":\"kv_producer\",\"kv_connector_extra_config\":${LMCACHE_MP_EXTRA}}"
+  KV_CONSUMER="{\"kv_connector\":\"LMCacheMPConnector\",\"kv_role\":\"kv_consumer\",\"kv_connector_extra_config\":${LMCACHE_MP_EXTRA}}"
+  # MP connector owns cache management -> vLLM-level prefix caching must be off.
+  PD_PREFIX_CACHING=0
+  echo "$PREFIX kv_backend=lmcache mp=${LMCACHE_MP_HOST}:${LMCACHE_MP_PORT} prefix_caching=off"
+else
+  KV_PRODUCER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_producer","kv_connector_extra_config":{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048}}'
+  KV_CONSUMER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_consumer","kv_connector_extra_config":{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048}}'
+fi
 
 # Shared flag payload (identical on both roles): everything from the live
 # recipes/mimo-v2.6-flash-rl-uncensored-exl3-2x.yaml EXCEPT port / TP / GMU,
@@ -250,10 +269,9 @@ if [ "$NODE_RANK" -lt 2 ]; then
     --kv-cache-dtype-skip-layers sliding_window
     --max-num-seqs "$PD_MAX_NUM_SEQS"
     --max-num-batched-tokens "$PD_MAX_NUM_BATCHED_TOKENS"
-    --gpu-memory-utilization "${PD_PREFILL_GMU:-0.6}"
+    --gpu-memory-utilization "${PD_PREFILL_GMU:-0.65}"
     --enable-chunked-prefill
     --async-scheduling
-    --enable-prefix-caching
     --generation-config vllm
     # Recipe command: templates use {{...}} because run-recipe.py renders them
     # via str.format; dispatch.sh args are NEVER format-rendered (verbatim to
@@ -267,6 +285,11 @@ if [ "$NODE_RANK" -lt 2 ]; then
     --kv-transfer-config "$KV_PRODUCER"
     --trust-remote-code
   )
+  # LMCache MP mode owns cache management -> no vLLM prefix caching; the
+  # mooncake default keeps it (--enable-prefix-caching).
+  if [ "$PD_PREFIX_CACHING" = "1" ]; then
+    PREFILL_CMD+=(--enable-prefix-caching)
+  fi
   # Outer-engine trailing args (post-`--`, e.g. OTLP trace flags) forwarded
   # verbatim to the prefill engine.
   PREFILL_CMD+=("${PD_ENGINE_ARGS[@]+"${PD_ENGINE_ARGS[@]}"}")
@@ -314,7 +337,6 @@ if [ "$NODE_RANK" -ge 2 ]; then
     --gpu-memory-utilization "${PD_DECODE_GMU:-0.68}"
     --enable-chunked-prefill
     --async-scheduling
-    --enable-prefix-caching
     --speculative-config "$(shared_spec_cfg)"
     --generation-config vllm
     --override-generation-config '{"top_p":0.95}'
@@ -325,6 +347,10 @@ if [ "$NODE_RANK" -ge 2 ]; then
     --enable-mfu-metrics
     --kv-transfer-config "$KV_CONSUMER"
   )
+  # LMCache MP mode owns cache management -> no vLLM prefix caching.
+  if [ "$PD_PREFIX_CACHING" = "1" ]; then
+    DECODE_CMD+=(--enable-prefix-caching)
+  fi
   # Outer-engine trailing args (post-`--`) forwarded verbatim to the decode
   # engine as well, so trace/metric flags apply symmetrically to both roles.
   DECODE_CMD+=("${PD_ENGINE_ARGS[@]+"${PD_ENGINE_ARGS[@]}"}")
