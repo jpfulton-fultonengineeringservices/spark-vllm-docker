@@ -21,6 +21,35 @@ MODEL_ID="${MIMO_V26_MODEL_ID:-XiaomiMiMo/MiMo-V2.6-Flash-RL}"
 LINK_DIR="${MIMO_V26_LINK_DIR:-/workspace}"
 DRAFT_DIR="$LINK_DIR/${MIMO_V26_LINK_NAME:-MiMo-V2.6-Flash-RL}-dflash"
 
+# DFlash drafter snapshot resolution order: recipe env (exec-script), then the
+# fes-weights EXL3 pack shim (the assembled checkpoint ships dflash/), then the
+# source snapshot. Mod-apply time (launch-cluster.sh apply_mod_to_container)
+# carries NO -e env, so the recipe's MIMO_V26_MODEL_ID (pack packaging id on the
+# pd-disagg recipes) is absent there — probe the hub cache directly instead.
+PACK_ID="XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3"
+SOURCE_ID="XiaomiMiMo/MiMo-V2.6-Flash-RL"
+resolve_snapshot() {
+  local id
+  for id in "${MIMO_V26_MODEL_ID:-}" "$PACK_ID" "$SOURCE_ID"; do
+    [ -z "$id" ] && continue
+    if python3 -c '
+import sys
+from huggingface_hub import snapshot_download
+snapshot_download(sys.argv[1], local_files_only=True)
+' "$id" >/dev/null 2>&1; then
+      printf '%s' "$id"
+      return 0
+    fi
+  done
+  return 1
+}
+if ! MODEL_ID="$(resolve_snapshot)"; then
+  echo "$PREFIX Could not locate a local snapshot of the pack ($PACK_ID) or source ($SOURCE_ID) in the Hugging Face cache." >&2
+  echo "$PREFIX Stage weights first (run-recipe.sh --setup / --download-only) or set MIMO_V26_MODEL_ID." >&2
+  exit 1
+fi
+echo "$PREFIX DFlash drafter source snapshot: $MODEL_ID"
+
 echo "=== MiMo-V2.6-Flash mod ==="
 
 if [ ! -f "$MODELS_DIR/mimo_v2.py" ]; then
