@@ -70,7 +70,14 @@ fi
 
 # --- 2. RoCE HCA pinning -------------------------------------------------
 ucx_devs="${PD_UCX_NET_DEVICES:-$DEFAULT_UCX_DEVS}"
-ucx_tls="${PD_UCX_TLS:-rc,ud,sm,self,^cuda_ipc}"
+# UCX_TLS must keep a CUDA memory transport: NixlConnector registers the KV
+# buffer on the GPU (kv_buffer_device=cuda), and GB10 has no GDR -- cuda_copy
+# is the transport that maps CUDA memory. Without it UCX reports "CUDA support
+# was not found", host-registers the GPU VA, and register_memory dies with
+# NIXL_ERR_BACKEND. The image default is cuda_copy,rc,sm,self,tcp (Dockerfile.nixl);
+# this default keeps cuda_copy and only excludes cuda_ipc (incompatible with
+# the RoCE two-HCA layout).
+ucx_tls="${PD_UCX_TLS:-cuda_copy,rc,ud,sm,self,^cuda_ipc}"
 
 missing=""
 old_ifs="$IFS"
