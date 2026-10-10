@@ -90,7 +90,12 @@ while [ $# -gt 0 ]; do
     --master-port) MASTER_PORT="$2"; shift 2 ;;
     --headless) shift ;; # per-role headless is re-derived below
     --) shift; PD_ENGINE_ARGS=("$@"); break ;;
-    *) fail "reason=unknown_arg arg=$1" ;;
+    # Unknown args are engine flags for BOTH roles (run-recipe.py flattens the
+    # recipe's post-`--` args into this line ahead of the topology flags —
+    # e.g. the OTLP trace pair when SPARK_VLLM_DOCKER_TRACES=1). Forward them
+    # verbatim rather than fail: vLLM parses its own flags, headless workers
+    # included, so unknown-to-us-but-valid-to-vLLM args ride both role commands.
+    *) PD_ENGINE_ARGS+=("$1"); shift ;;
   esac
 done
 : "${NNODES:?op=argparse reason=missing_--nnodes}"
