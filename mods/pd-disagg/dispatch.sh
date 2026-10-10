@@ -172,12 +172,13 @@ export TORCHINDUCTOR_CACHE_DIR="${TORCHINDUCTOR_CACHE_DIR:-/root/.cache/torchind
 # shellcheck disable=SC2206
 VLLM_SERVE=(${PD_VLLM_SERVE:-vllm serve})
 
-# Store-only Mooncake: prefill = kv_producer (hash-dedup'd block PUT via
-# host-staged RDMA), decode = kv_consumer (GET on demand). No extra_config
-# keys needed; the store JSON (MOONCAKE_CONFIG_PATH) carries transport/segment
-# config, and DFlash stays decode-only via --speculative-config.
-KV_PRODUCER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_producer"}'
-KV_CONSUMER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_consumer"}'
+# Store-only Mooncake, host-staged: vLLM ranks D2H-copy GPU KV into pinned
+# host slots and RDMA-write from there (_StagingSlotPool in the connector
+# patch — direct GPU-VA registration is the GB10 dead end). extra_config:
+# host_staging + 2x2048 MiB slots (budget-neutral vs the default single 4 GiB
+# buffer; see kilo plan 1787331814960). DFlash stays decode-only.
+KV_PRODUCER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_producer","kv_connector_extra_config":{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048}}'
+KV_CONSUMER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_consumer","kv_connector_extra_config":{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048}}'
 
 # Shared flag payload (identical on both roles): everything from the live
 # recipes/mimo-v2.6-flash-rl-uncensored-exl3-2x.yaml EXCEPT port / TP / GMU,
