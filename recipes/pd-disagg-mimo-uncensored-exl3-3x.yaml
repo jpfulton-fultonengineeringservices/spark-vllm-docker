@@ -1,0 +1,149 @@
+# PD-disaggregated MiMo-V2.6-Flash-RL-UNCENSORED EXL3 (3-node GB10, inverted)
+#
+# Inverted 3-node topology (tmp/spark-vllm-docker/pd-3x-completion-plan.md):
+#   ranks 0-1  PREFILL: EXL3 pack (exl3-v1, uncensored) TP=2 sub-group,
+#             API 8100, kv_producer, GMU 0.7 (~55 GB experts/rank).
+#   rank 2     DECODE (NODE_RANK == NNODES-1): uncensored SOURCE precision
+#             TP=1 + DFlash, API 8200, kv_consumer, GMU 0.80
+#             (weights ~86.5 GB at TP=1 + ~6.3 GB DFlash drafter; run
+#             mods/memory-profile/capacity.py PD_DISAGG_ENABLED=1 BEFORE
+#             launch -- 1M-context KV host-staging OOMs >30 GiB).
+#   rank 0    toy_proxy_server router :8000 (PD_ROUTER_START_DELAY=30).
+#   NIXL/UCX  side channel 5600 per node (VLLM_NIXL_SIDE_CHANNEL_HOST=<own IP>,
+#             computed in-container by dispatch.sh; NEVER a remote IP).
+#
+# EXL3 pack is the uncensored `exl3-v1` assemble output
+# (mods/mimo-v2.6-flash-rl-uncensored/pack-build/spec.py,
+# scripts/exl3-pack-drive.sh --model mimo-v2.6-flash-rl-uncensored ...
+# /nas-1/models/mimo/mimo-v2.6-flash-rl-uncensored-exl3-v1-serve), served
+# under PACKAGING id `XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3` via fes-weights.
+# The id exists ONLY in the local hub-cache shim (HF_HUB_OFFLINE=1); do NOT
+# pass --setup/--download-model (that would try to fetch it from HF).
+#
+# MIMO_V26_MODEL_ID points at the ASSEMBLED checkpoint id, so the DFlash
+# drafter staging (mods/mimo-v2.6-flash) resolves `dflash/` from the pack:
+# DFlash weights are byte-identical between uncensored source and exl3-v1
+# pack (mods/exl3-mimo/uncensored-source/README.md).
+#
+# Decode role serves the uncensored SOURCE (same weights modulo
+# refusal-removal vs XiaomiMiMo/MiMo-V2.6-Flash-RL); fes-weights presents it
+# via FES_DRAFT_DIR=/drafter + FES_DRAFT_HUB_MODEL=XiaomiMiMo/MiMo-V2.6-Flash-RL
+# (cluster-config wiring stages BOTH slugs on ALL 3 ranks -- mounts are
+# uniform; dispatch.sh picks the role purely from NODE_RANK).
+#
+# PARITY BY CONSTRUCTION: every cross-role flag (DFlash method/depth incl.
+# PD_NUM_SPECULATIVE_TOKENS=7, PD_BLOCK_SIZE=128, fp8 KV +
+# --kv-cache-dtype-skip-layers sliding_window, PD_MAX_MODEL_LEN, seqs/batched
+# tokens) is derived ONLY from shared PD_* vars; dispatch.sh computes and
+# logs PD_PARITY_SHA256 at boot on every role and aborts if any required
+# shared var is missing/empty. Role-specific values (TP, GMU, ports, rank)
+# are excluded from the hash by construction.
+#
+# Launch via cluster-config scripts/spark-vllm-docker-serve.sh
+# (stage both slugs, then launch with --rank-order; NOT --setup):
+#   spark-vllm-docker-serve.sh --recipe pd-disagg-mimo-uncensored-exl3-3x
+#     stage  # both: mimo-v2.6-flash-rl-uncensored-exl3-v1 AND
+#            #      mimo-v2.6-flash-rl-uncensored (source)
+#   spark-vllm-docker-serve.sh --recipe pd-disagg-mimo-uncensored-exl3-3x \
+#     launch --daemon
+#     # PD_DECODE_NODE_IPS is auto-derived by serve.sh from --rank-order
+#     # (NODE_RAILB_IPS, rank 2); pass `-e PD_DECODE_NODE_IPS=<rank2-IP>`
+#     # ONLY as an explicit override.
+#
+# Acceptance gate (per pd-disagg README): NIXL nixl_bytes_transferred > 0
+# with zero failed transfers, /v1/models reachable on 8000 (router), 8100
+# (prefill), 8200 (decode); port probes with `ss -tln sport = :PORT`
+# (/proc/net/tcp awk LISTEN fallback) -- NEVER `nc -z`, it steals one-shot
+# NCCL rendezvous accepts.
+#
+# Required mods:
+# - mods/fes-weights        staged-weight hub-cache shim (pack + source)
+# - mods/mimo-v2.6-flash    DFlash drafter staging (from MIMO_V26_MODEL_ID)
+# - mods/mimo-diffkv-fp8-kv DiffKV + fp8 KV layout fix
+# - mods/kv-cache-guard-override skip 1M-token single-request guard
+# - mods/exl3-mimo          EXL3-to-MiMo runtime patch
+# - mods/pd-disagg          this PD mod (NIXL + role dispatcher)
+# - mods/b12x-kernel-cache  B12X kernel cache wrapper
+
+recipe_version: "1"
+name: MiMo-V2.6-Flash-RL-UNCENSORED PD-Disaggregated EXL3 (3x inverted)
+description: "vLLM PD-disaggregated MiMo-V2.6-Flash-RL-UNCENSORED — EXL3 exl3-v1 pack TP=2 prefill (ranks 0-1) + source-precision TP=1 DFlash decode (rank 2), NIXL KV, toy router (3-node GB10)"
+
+# Packaging id for the FES-staged ASSEMBLED exl3-v1 checkpoint (never fetched
+# from HF; fes-weights hub shim only).
+model: XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3
+
+container: vllm-node-b12x
+
+build_args:
+  - --exp-b12x
+
+cluster_only: true
+
+mods:
+  - mods/fes-weights
+  - mods/mimo-v2.6-flash
+  - mods/mimo-diffkv-fp8-kv
+  - mods/kv-cache-guard-override
+  - mods/exl3-mimo
+  - mods/pd-disagg
+  - mods/b12x-kernel-cache
+
+defaults:
+  # Router (rank 0) API port; external clients point here.
+  port: 8000
+  pd_router_port: 8000
+  # Prefill vLLM API (ranks 0-1, headless on rank 1).
+  pd_prefill_port: 8100
+  # Decode vLLM API (rank 2).
+  pd_decode_port: 8200
+  # NIXL side channel, per-node OWN IP:port (dispatch.sh).
+  pd_nixl_port: 5600
+  # Decode sub-group master port: parsed by dispatch.sh but UNUSED while
+  # PD_TP_DECODE=1 (this recipe); only consumed when TP_DECODE > 1. Kept as
+  # shape-compat for a future 4-node TP_DECODE=2 recipe -- do not delete.
+  pd_decode_master_port: 29502
+  # TP NOT set inline: the outer engine trims vLLM-level TP flags; ONLY
+  # PD_TP_PREFILL/PD_TP_DECODE below reach vLLM (see TP-trimming footgun in
+  # mods/pd-disagg/dispatch.sh).
+  # Inverted topology: 2-rank EXL3 prefill sub-group + 1 decode rank.
+  pd_tp_prefill: 2
+  pd_tp_decode: 1
+  # Parsed-but-unused while TP_DECODE=1 (this recipe): dispatch.sh only
+  # consumes the master addr when TP_DECODE > 1; empty-at-TP=1 is fine and
+  # ignored. Kept for shape-compat -- do not delete.
+  pd_decode_master_addr: ""
+  # DFlash speculative-decoding depth: hash-enforced cross-role
+  # (PD_PARITY_SHA256); must be 7 (coherent-proven, 2x recipe).
+  num_speculative_tokens: 7
+  max_model_len: 1048576
+  block_size: 128
+  max_num_seqs: 32
+  max_num_batched_tokens: 16384
+
+env:
+  PD_DISAGG_ENABLED: "1"
+  # toy_proxy_server on rank 0 only (PD_ROUTER_START_DELAY default 30s).
+  PD_ROUTER_ENABLED: "1"
+  # b12x-kcache wrapper (mods/b12x-kernel-cache): "b12x-kcache exec vllm serve".
+  PD_VLLM_SERVE: "b12x-kcache exec vllm serve"
+  # ASSEMBLED checkpoint id -> DFlash drafter resolves dflash/ from the pack.
+  MIMO_V26_MODEL_ID: "XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3"
+  # Prefill target: uncensored exl3-v1 pack (packaging id).
+  PD_EXL3_MODEL: "XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3"
+  # Decode target: uncensored SOURCE precision (FES_DRAFT_HUB_MODEL shim).
+  PD_DECODE_MODEL: "XiaomiMiMo/MiMo-V2.6-Flash-RL"
+  CUTE_DSL_ARCH: "sm_121a"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+  VLLM_SKIP_KV_CACHE_MEMORY_CHECK: "1"
+  # Persistent b12x/torchinductor kernel cache (per-boot /tmp re-compiles
+  # otherwise).
+  TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
+  # Staged-weights only (fes-weights shim); never contact HF.
+  HF_HUB_OFFLINE: "1"
+
+# Single-line outer-engine recipe command: multi-node launch-cluster.sh runs
+# this as the LAST line, appending --nnodes/--node-rank/--master-addr/
+# --master-port. dispatch.sh derives per-role vLLM commands; vLLM-level
+# tensor-parallel comes ONLY from PD_TP_PREFILL/PD_TP_DECODE (NOT trimmed).
+command: PD_NIXL_PORT={pd_nixl_port} PD_PREFILL_PORT={pd_prefill_port} PD_DECODE_PORT={pd_decode_port} PD_ROUTER_PORT={pd_router_port} PD_NUM_SPECULATIVE_TOKENS={num_speculative_tokens} PD_MAX_MODEL_LEN={max_model_len} PD_BLOCK_SIZE={block_size} PD_MAX_NUM_SEQS={max_num_seqs} PD_MAX_NUM_BATCHED_TOKENS={max_num_batched_tokens} PD_TP_PREFILL={pd_tp_prefill} PD_TP_DECODE={pd_tp_decode} PD_DECODE_MASTER_PORT={pd_decode_master_port} PD_DECODE_MASTER_ADDR='{pd_decode_master_addr}' bash /workspace/mods/pd-disagg/dispatch.sh
