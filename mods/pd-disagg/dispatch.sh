@@ -1,17 +1,18 @@
 #!/bin/bash
 #
-# [pd-disagg] Role-aware PD-disaggregated MiMo-V2.6-Flash-RL-UNCENSORED EXL3 (3-node GB10)
+# [pd-disagg] Role-aware PD-disaggregated MiMo-V2.6-Flash-RL-UNCENSORED EXL3 (4-node GB10)
 #
-# Sourced by recipes/pd-disagg-mimo-exl3.yaml's single-line recipe command,
+# Sourced by recipes/pd-disagg-mimo-uncensored-exl3-4x.yaml's single-line recipe command,
 # which launch-cluster.sh's outer engine invokes per node with:
 #   dispatch.sh --nnodes N --node-rank R --master-addr HEAD --master-port P [--headless]
 #
-# Topology (NNODES must be 3; see tmp/spark-vllm-docker/3node-serving-config-proposals.md):
+# Topology (NNODES must be 4; see tmp/spark-vllm-docker/pd-3x-completion-plan.md):
 #   ranks 0..1  PREFILL  : EXL3 pack, tensor-parallel 2 (2-rank sub-group,
 #                         mirrors recipes/mimo-v2.6-flash-rl-uncensored-exl3-2x.yaml),
 #                         API port 8100, rank 0 also runs the toy_proxy_server router.
-#   rank N-1   DECODE   : source-precision weights TP=1 + DFlash speculative
-#                         decoding, API port 8200, kv_consumer.
+#   ranks 2..3  DECODE   : same EXL3 pack TP=2 sub-group + DFlash speculative
+#                         decoding, API port 8200, kv_consumer. Both roles serve
+#                         PD_EXL3_MODEL so prefill/decode quantization match.
 #
 # TP-TRIMMING FOOTGUN: launch-cluster.sh's outer engine may append its own
 # '-tp N'/'--tensor-parallel-size N' style args for cluster orchestration;
@@ -114,12 +115,13 @@ while [ $# -gt 0 ]; do
 done
 : "${NNODES:?op=argparse reason=missing_--nnodes}"
 : "${NODE_RANK:?op=argparse reason=missing_--node-rank}"
-[ "$NNODES" -eq 3 ] || fail "op=topology reason=nnodes_must_be_3 got=$NNODES (this mod targets the 3-node prefill-TP2/decode-TP1 shape; see mods/pd-disagg/README.md)"
+[ "$NNODES" -eq 4 ] || fail "op=topology reason=pd_disagg_4_node_only got=$NNODES (this mod targets the 4-node prefill-TP2/decode-TP2 shape; see mods/pd-disagg/README.md)"
 
 # Role sizes: derived ONLY here (see TP-trimming footgun above).
 TP_PREFILL="${PD_TP_PREFILL:-2}"
-TP_DECODE="${PD_TP_DECODE:-1}"
-[ "$TP_PREFILL" -eq 2 ] || fail "op=topology reason=prefill_tp_must_be_2 got=$TP_PREFILL (EXL3 pack rendezvous is a 2-rank sub-group; NNODES=3 prefill must be TP=2)"
+TP_DECODE="${PD_TP_DECODE:-2}"
+[ "$TP_PREFILL" -eq 2 ] || fail "op=topology reason=prefill_tp_must_be_2 got=$TP_PREFILL (EXL3 pack rendezvous is a 2-rank sub-group; NNODES=4 prefill must be TP=2)"
+[ "$TP_DECODE" -eq 2 ] || fail "op=topology reason=decode_tp_must_be_2 got=$TP_DECODE (EXL3 decode rendezvous is a 2-rank sub-group; NNODES=4 decode must be TP=2)"
 
 # This node's IP: prefer VLLM_HOST_IP (set per node by launch-cluster.sh),
 # else outer master addr, else hostname -I.
@@ -266,25 +268,28 @@ if [ "$NODE_RANK" -lt 2 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Rank N-1 (== 2): DECODE (source weights TP=1 + DFlash).
-# TP=1 means NO sub-group rendezvous args and NO decode-master machinery.
-# FALLBACK NOTE: if decode is ever TP=2 (e.g. 4-node: prefill TP=2 + decode
-# TP=2), reintroduce a sub-group master here exactly like the prefill pair
-# above (--nnodes $TP_DECODE --node-rank $((NODE_RANK-2)) --master-addr
-# PD_DECODE_MASTER_ADDR --master-port PD_DECODE_MASTER_PORT), with the last
-# decode rank taking --headless. For the 3-node target topology this is dead
-# weight and is intentionally omitted.
+# Ranks 2..3: DECODE (same EXL3 pack TP=2 sub-group + DFlash).
+# The decode pair forms its OWN sub-group rendezvous, mirroring prefill above:
+# rank 2 = decode sub-group master, rank 3 = worker with --headless.
+# PD_DECODE_MASTER_ADDR is REQUIRED at NNODES=4 — decode ranks cannot
+# rendezvous without it (the outer master addr is the prefill head, wrong
+# subnet group for the decode pair).
 # ---------------------------------------------------------------------------
-if [ "$NODE_RANK" -eq $((NNODES - 1)) ]; then
-  [ "$TP_DECODE" -eq 1 ] || fail "op=topology reason=decode_tp_must_be_1 got=$TP_DECODE (for TP=2 decode see fallback note in dispatch.sh; requires PD_DECODE_MASTER_ADDR machinery that this 3-node build omits)"
+if [ "$NODE_RANK" -ge 2 ]; then
+  : "${PD_DECODE_MASTER_ADDR:?op=argparse reason=PD_DECODE_MASTER_ADDR_required_for_4x}"
 
   echo "$PREFIX role=DECODE rank=$NODE_RANK tp=$TP_DECODE nixl_host=$NODE_IP:$VLLM_NIXL_SIDE_CHANNEL_PORT PD_PARITY_SHA256=$PD_PARITY_SHA256"
 
   # shellcheck disable=SC2206
-  DECODE_CMD=("${VLLM_SERVE[@]}" "${PD_DECODE_MODEL:-XiaomiMiMo/MiMo-V2.6-Flash-RL}"
+  DECODE_CMD=("${VLLM_SERVE[@]}" "${PD_EXL3_MODEL:-XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3}"
     --host 0.0.0.0
     --port "${PD_DECODE_PORT:-8200}"
     --tensor-parallel-size "$TP_DECODE"
+    --nnodes 2
+    --node-rank "$((NODE_RANK-2))"
+    --master-addr "$PD_DECODE_MASTER_ADDR"
+    --master-port "${PD_DECODE_MASTER_PORT:-29502}"
+    --quantization exl3
     --trust-remote-code
     --max-model-len "$PD_MAX_MODEL_LEN"
     --attention-backend B12X
@@ -296,7 +301,7 @@ if [ "$NODE_RANK" -eq $((NNODES - 1)) ]; then
     --kv-cache-dtype-skip-layers sliding_window
     --max-num-seqs "$PD_MAX_NUM_SEQS"
     --max-num-batched-tokens "$PD_MAX_NUM_BATCHED_TOKENS"
-    --gpu-memory-utilization "${PD_DECODE_GMU:-0.70}"
+    --gpu-memory-utilization "${PD_DECODE_GMU:-0.7}"
     --enable-chunked-prefill
     --async-scheduling
     --enable-prefix-caching
@@ -312,6 +317,9 @@ if [ "$NODE_RANK" -eq $((NNODES - 1)) ]; then
   # Outer-engine trailing args (post-`--`) forwarded verbatim to the decode
   # engine as well, so trace/metric flags apply symmetrically to both roles.
   DECODE_CMD+=("${PD_ENGINE_ARGS[@]+"${PD_ENGINE_ARGS[@]}"}")
+  if [ "$NODE_RANK" -eq 3 ]; then
+    DECODE_CMD+=(--headless)
+  fi
   exec "${DECODE_CMD[@]}"
 fi
 
