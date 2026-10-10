@@ -247,6 +247,7 @@ if [ "$NODE_RANK" -lt 2 ]; then
     --async-scheduling
     --enable-prefix-caching
     --generation-config vllm
+    --override-generation-config '{{"top_p":0.95}}'
     --reasoning-parser mimo
     --tool-call-parser mimo
     --enable-auto-tool-choice

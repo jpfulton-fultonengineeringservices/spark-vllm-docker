@@ -116,6 +116,7 @@ command: |
       --enable-prefix-caching \
       --speculative-config '{{"method":"dflash","model":"/workspace/MiMo-V2.6-Flash-RL-dflash","num_speculative_tokens":{num_speculative_tokens},"attention_backend":"B12X"}}' \
       --generation-config vllm \
+      --override-generation-config '{{"top_p":0.95}}' \
       --reasoning-parser mimo \
       --tool-call-parser mimo \
       --enable-auto-tool-choice \
