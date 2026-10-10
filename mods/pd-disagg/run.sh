@@ -156,7 +156,11 @@ chmod 0644 "$ENV_FILE"
 } >> "$ENV_FILE"
 
 info "mooncake env published to $ENV_FILE:"
-info "  MOONCAKE_CONFIG_PATH=$MOONCAKE_CONFIG_PATH"
-info "  MOONCAKE_PREFERRED_SEGMENT=$MOONCAKE_PREFERRED_SEGMENT"
+if [ "$PD_KV_BACKEND" = "lmcache" ]; then
+    info "  PD_KV_BACKEND=lmcache LMCACHE_MP_HOST=$LMCACHE_MP_HOST LMCACHE_MP_PORT=$LMCACHE_MP_PORT"
+else
+    info "  MOONCAKE_CONFIG_PATH=$MOONCAKE_CONFIG_PATH"
+    info "  MOONCAKE_PREFERRED_SEGMENT=$MOONCAKE_PREFERRED_SEGMENT"
+fi
 info "PD_PARITY_SHA256=$PD_PARITY_SHA256 payload={num_speculative_tokens=$pd_num_speculative_tokens,block_size=$pd_block_size,max_model_len=$pd_max_model_len,max_num_seqs=$pd_max_num_seqs,max_num_batched_tokens=$pd_max_num_batched_tokens,kv=fp8/sliding_window}"
 info "PD_DISAGG_OK op=prepare env_file=$ENV_FILE"
