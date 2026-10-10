@@ -96,4 +96,4 @@ env:
 # per-role vLLM command is assembled inside dispatch.sh, where tensor-parallel
 # values are variables (PD_TP_PREFILL / PD_TP_DECODE), NOT literal integers in
 # this recipe text.  This avoids parse_parallelism_from_text() mis-trimming.
-command: PD_NIXL_PORT={pd_nixl_port} PD_PREFILL_PORT={pd_prefill_port} PD_DECODE_PORT={pd_decode_port} PD_ROUTER_PORT={pd_router_port} PD_NUM_SPECULATIVE_TOKENS={num_speculative_tokens} PD_TP_PREFILL={pd_tp_prefill} PD_TP_DECODE={pd_tp_decode} PD_DECODE_MASTER_PORT={pd_decode_master_port} PD_DECODE_MASTER_ADDR='{pd_decode_master_addr}' bash /workspace/mods/pd-disagg/dispatch.sh
+command: PD_NIXL_PORT={pd_nixl_port} PD_PREFILL_PORT={pd_prefill_port} PD_DECODE_PORT={pd_decode_port} PD_ROUTER_PORT={pd_router_port} PD_NUM_SPECULATIVE_TOKENS={num_speculative_tokens} PD_TP_PREFILL={pd_tp_prefill} PD_TP_DECODE={pd_tp_decode} PD_DECODE_MASTER_PORT={pd_decode_master_port} bash /workspace/mods/pd-disagg/dispatch.sh
