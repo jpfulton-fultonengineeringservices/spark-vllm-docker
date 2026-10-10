@@ -59,6 +59,12 @@ fi
 # directly (mooncake-store Dockerfile) — UCX is not on the store data path.
 MOD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Backend gate: the mooncake/cupy boot installs below are only needed by the
+# MooncakeStoreConnector path (vLLM imports `mooncake` in-process and the
+# host-staged _StagingSlotPool needs cupy). PD_KV_BACKEND=lmcache attaches to
+# the MP server instead and needs neither.
+if [ "${PD_KV_BACKEND:-mooncake}" = "mooncake" ]; then
+
 # The connector imports `mooncake` in-process (worker.py:
 # `from mooncake.store import ...`). The vllm-node-b12x image does not ship
 # the wheel; install it at boot if absent (mirrors the retired NIXL install
@@ -94,6 +100,8 @@ else
     info "cupy already present"
 fi
 
+fi  # PD_KV_BACKEND=mooncake
+
 source "$MOD_DIR/mooncake-env.sh"
 
 # --- 2. publish env for dispatch.sh -------------------------------------
@@ -128,13 +136,23 @@ export PD_PARITY_PAYLOAD PD_PARITY_SHA256
 mv -f "$ENV_FILE.tmp.$$" "$ENV_FILE"
 chmod 0644 "$ENV_FILE"
 {
-    echo "export MOONCAKE_CONFIG_PATH=\"$MOONCAKE_CONFIG_PATH\""
-    echo "export MOONCAKE_PREFERRED_SEGMENT=\"$MOONCAKE_PREFERRED_SEGMENT\""
-    echo "export MOONCAKE_REQUESTER_LOCAL_HOSTNAME=\"$MOONCAKE_REQUESTER_LOCAL_HOSTNAME\""
+    echo "export PD_KV_BACKEND=\"$PD_KV_BACKEND\""
     echo "export PYTHONHASHSEED=\"$PYTHONHASHSEED\""
-    echo "export MOONCAKE_MASTER_SERVER_ADDRESS=\"$MOONCAKE_MASTER_SERVER_ADDRESS\""
-    echo "export MOONCAKE_MASTER_PORT=\"$MOONCAKE_MASTER_PORT\""
-    echo "export MOONCAKE_CLIENT_PORT=\"$MOONCAKE_CLIENT_PORT\""
+    if [ "$PD_KV_BACKEND" = "lmcache" ]; then
+        # LMCache MP mode: the MP server owns the store client; the vLLM rank
+        # only needs the MP endpoint. globals are published for logging parity.
+        echo "export LMCACHE_MP_HOST=\"$LMCACHE_MP_HOST\""
+        echo "export LMCACHE_MP_PORT=\"$LMCACHE_MP_PORT\""
+        echo "export MOONCAKE_MASTER_SERVER_ADDRESS=\"$MOONCAKE_MASTER_SERVER_ADDRESS\""
+        echo "export MOONCAKE_MASTER_PORT=\"$MOONCAKE_MASTER_PORT\""
+    else
+        echo "export MOONCAKE_CONFIG_PATH=\"$MOONCAKE_CONFIG_PATH\""
+        echo "export MOONCAKE_PREFERRED_SEGMENT=\"$MOONCAKE_PREFERRED_SEGMENT\""
+        echo "export MOONCAKE_REQUESTER_LOCAL_HOSTNAME=\"$MOONCAKE_REQUESTER_LOCAL_HOSTNAME\""
+        echo "export MOONCAKE_MASTER_SERVER_ADDRESS=\"$MOONCAKE_MASTER_SERVER_ADDRESS\""
+        echo "export MOONCAKE_MASTER_PORT=\"$MOONCAKE_MASTER_PORT\""
+        echo "export MOONCAKE_CLIENT_PORT=\"$MOONCAKE_CLIENT_PORT\""
+    fi
 } >> "$ENV_FILE"
 
 info "mooncake env published to $ENV_FILE:"

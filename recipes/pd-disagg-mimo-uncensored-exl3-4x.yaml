@@ -111,6 +111,11 @@ defaults:
   # (MOONCAKE_MASTER_SERVER_ADDRESS=-e), same pattern as PD_DECODE_MASTER_ADDR.
   pd_mooncake_master_port: 50051
   pd_mooncake_client_port: 50053
+  # KV-transfer backend: "mooncake" (MooncakeStoreConnector, vLLM talks to the
+  # sibling mooncake master/client cohort directly) or "lmcache" (LMCacheMPConnector,
+  # vLLM attaches to a per-node LMCache MP server that owns L1 + L2 adapters).
+  # See mods/pd-disagg/README.md.
+  pd_kv_backend: mooncake
   # GB10 UMA: client DRAM segment + offload local buffer come out of the SAME
   # pool vLLM sizes against (nvidia-smi "free on cuda:0" == MemAvailable).
   # 8 GiB segment keeps vLLM's 0.7 GMU budget intact; 16 GiB starves KV cache.
@@ -146,6 +151,8 @@ defaults:
 
 env:
   PD_DISAGG_ENABLED: "1"
+  # Consumed by run.sh (env) AND dispatch.sh; "lmcache" enables the LMCache MP path.
+  PD_KV_BACKEND: "{pd_kv_backend}"
   # toy_proxy_server on rank 0 only (PD_ROUTER_START_DELAY default 30s).
   PD_ROUTER_ENABLED: "1"
   # b12x-kcache wrapper (mods/b12x-kernel-cache): "b12x-kcache exec vllm serve".
