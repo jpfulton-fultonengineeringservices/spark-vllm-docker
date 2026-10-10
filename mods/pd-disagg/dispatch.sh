@@ -206,6 +206,16 @@ if [ "$NODE_RANK" -lt 2 ]; then
     ROUTER_SCRIPT="${PD_ROUTER_SCRIPT:-$(dirname "$0")/toy_proxy_server.py}"
     if [ -f "$ROUTER_SCRIPT" ]; then
       PD_ROUTER_START_DELAY="${PD_ROUTER_START_DELAY:-30}"
+      # toy_proxy_server.py parses --decoder-hosts/--decoder-ports with
+      # argparse nargs="+" and zips host<->port pairs, so the decode CSV MUST
+      # be expanded into one token per host -- a quoted CSV parses as a single
+      # "hostname" and httpx dials it (Errno -2 Name or service not known).
+      # Expansion preserves PD_DECODE_NODE_IPS order (rank 2, then rank 3).
+      IFS=',' read -r -a router_decoder_hosts <<< "${PD_DECODE_NODE_IPS:-}"
+      router_decoder_ports=()
+      for _ in "${router_decoder_hosts[@]}"; do
+        router_decoder_ports+=("${PD_DECODE_PORT:-8200}")
+      done
       # M1: sleep-gated start (README + recipe comments promise the 30s gate);
       # subshell keeps set -e safe, exec replaces the subshell with python3.
       # --host 0.0.0.0: the vendored router defaults --host to 127.0.0.1,
@@ -215,8 +225,8 @@ if [ "$NODE_RANK" -lt 2 ]; then
         --port "${PD_ROUTER_PORT:-8000}" \
         --prefiller-hosts "$NODE_IP" \
         --prefiller-ports "${PD_PREFILL_PORT:-8100}" \
-        --decoder-hosts "${PD_DECODE_NODE_IPS:-}" \
-        --decoder-ports "${PD_DECODE_PORT:-8200}" \
+        --decoder-hosts ${router_decoder_hosts[@]+"${router_decoder_hosts[@]}"} \
+        --decoder-ports ${router_decoder_ports[@]+"${router_decoder_ports[@]}"} \
       ) >/tmp/pd-router.log 2>&1 &
       echo "$PREFIX router scheduled (delay=${PD_ROUTER_START_DELAY}s, port=${PD_ROUTER_PORT:-8000}, log=/tmp/pd-router.log)"
     else
