@@ -62,9 +62,6 @@ defaults:
  # via env as variables.
  pd_tp_prefill: 2
  pd_tp_decode: 1
- # decode-master IP: UNUSED at PD_TP_DECODE=1 (dispatch.sh only consumes it
- # for a multi-rank decode sub-group); keep empty for the 3-node shape.
- pd_decode_master_addr: ""
  # DFlash speculative-decoding depth; hash-enforced between prefill and decode.
  num_speculative_tokens: 7
  # common args shared across roles
