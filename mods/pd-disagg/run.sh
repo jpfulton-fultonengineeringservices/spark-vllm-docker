@@ -99,6 +99,22 @@ else
     info "mooncake module already present"
 fi
 
+# cupy-cuda13x: required by the host-staged _StagingSlotPool (pinned slot
+# allocs via cupy.cuda); the b12x image does not ship it. Mirrors vLLM's
+# kv_connectors.txt pin (<14.1.0 until cupy.testing regression fixed).
+if ! python3 -c 'import cupy' >/dev/null 2>&1; then
+    if [ "${PD_DISAGG_INSTALL_CUPY:-1}" = "1" ]; then
+        info "cupy missing; installing 'cupy-cuda13x<14.1.0'"
+        python3 -m pip install --no-cache-dir 'cupy-cuda13x<14.1.0' >&2 \
+            || fail "op=install_cupy reason=pip_failed"
+    fi
+    python3 -c 'import cupy' >/dev/null 2>&1 \
+        || fail "op=import_cupy reason=absent hint='set PD_DISAGG_INSTALL_CUPY=1 or bake cupy-cuda13x into the image'"
+    info "cupy installed"
+else
+    info "cupy already present"
+fi
+
 source "$MOD_DIR/mooncake-env.sh"
 
 # --- 2. publish env for dispatch.sh -------------------------------------
