@@ -106,6 +106,9 @@ env:
   # at /workspace/MiMo-V2.6-Flash-RL-dflash (its default MIMO_V26_LINK_NAME),
   # which is the path --speculative-config below references.
   MIMO_V26_MODEL_ID: "XiaomiMiMo/MiMo-V2.6-Pro-RL-EXL3"
+  # Persist the torch inductor Triton autotuner cache outside /tmp so
+  # b12x-kcache archives it (roots.txt entry "torchinductor").
+  TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
 
 command: |
   b12x-kcache exec vllm serve XiaomiMiMo/MiMo-V2.6-Pro-RL-EXL3 \
