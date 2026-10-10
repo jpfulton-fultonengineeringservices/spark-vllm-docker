@@ -1,160 +1,129 @@
-# PD-disaggregated MiMo-V2.6-Flash-RL-UNCENSORED EXL3 (4-node GB10)
+# PD-disaggregated MiMo-V2.6-Flash-RL-UNCENSORED EXL3 (4-node GB10, Mooncake store-only)
 
-Role-aware prefill/decode split with NIXL KV transfer over RoCE HCAs.
+Role-aware prefill/decode PD disaggregation with **MooncakeStoreConnector**
+KV transfer (hash-dedup'd distributed KV pool, NVMe-durable across restarts).
+**No Ray.** Replaces the retired NIXL path.
 
-- **Prefill** (ranks 0–1): EXL3 pack, TP=2 2-rank sub-group (master 29501),
-  API 8100, kv_producer. Rank 0 additionally runs the `toy_proxy_server`
-  router (8000).
-- **Decode** (ranks 2–3): the same EXL3 pack TP=2 2-rank sub-group
-  (master 29502) + DFlash speculative decoding, API 8200, kv_consumer.
-  Both roles serve `PD_EXL3_MODEL`, so prefill/decode quantization match.
-- KV cache moves producer→consumer via vLLM's `NixlConnector` (NIXL/UCX, RoCE
-  HCAs `rocep1s0f1:1,roceP2p1s0f1:1`), side channel on port 5600, each node
-  advertising its own IP (`VLLM_NIXL_SIDE_CHANNEL_HOST`).
+Topology (4 nodes, `NNODES=4` fail-closed):
 
-Opt-in: nothing happens unless `PD_DISAGG_ENABLED=1` (see `run.sh`).
+- Ranks 0–1 (gx10-node1, gx10-node2): **PREFILL** — EXL3 TP=2 sub-group
+  (NCCL init port 29501), API 8100, `kv_role=kv_producer`. Rank 0 also runs
+  the pd-proxy (port 8000).
+- Ranks 2–3 (gx10-node3, gx10-node4): **DECODE** — EXL3 TP=2 sub-group with
+  DFlash (init port 29502), API 8200, `kv_role=kv_consumer`.
+- **mooncake-master** (rank-0 node only): sibling container from the dedicated
+  `mooncake-store` image, metadata-only TCP on 50051 (`--network host`; no
+  GPUs, no uverbs).
+- **mooncake-client** (every node): sibling container from the dedicated
+  image; owns the node's 16 GiB DRAM segment + 100 GiB NVMe SSD offload tier;
+  RoCE RDMA via `roceP2p1s0f1` (uverbs1/uverbs3 + rdma_cm, memlock=-1);
+  `--network host`, port 50053.
+- **KV data path**: vLLM ranks host-stage GPU KV → pinned DRAM → RDMA-write
+  into the client's registered segment (hash-based dedup; GPU-VA registration
+  is the GB10 dead end — same class as the NIXL-GPU failure).
 
-## Parity by construction
-
-Every flag that must match across roles — DFlash spec config (method, draft
-model, `PD_NUM_SPECULATIVE_TOKENS`), `PD_BLOCK_SIZE`, KV dtype `fp8` +
-skip-layers `sliding_window`, `PD_MAX_MODEL_LEN`, `PD_MAX_NUM_SEQS`,
-`PD_MAX_NUM_BATCHED_TOKENS` — is derived ONLY from shared `PD_*` env vars
-(published by `run.sh` into `/tmp/pd-disagg.env`). `dispatch.sh` computes
-`PD_PARITY_SHA256` (sha256 of the canonical shared config) at boot on every
-role and logs it. **Verify the same hash appears in all four roles' boot
-logs before trusting a PD session** — mismatched KV layout across roles is a
-known NIXL mis-transfer failure mode (vLLM #58470).
-
-## Topology
+## Architecture
 
 ```mermaid
 flowchart LR
-  subgraph P0[PREFILL ranks 0-1 - GX10]
-    subgraph TP2P[EXL3 TP=2 sub-group, master 29501]
-      P0R["rank 0<br/>API 8100<br/>kv_producer"]
-      P1R["rank 1<br/>--headless<br/>API 8100"]
-    end
-    RT["toy_proxy_server<br/>port 8000"]
+  subgraph N1["gx10-node1 (rank 0)"]
+    P0["PREFILL rank 0<br/>EXL3 TP=2, API 8100<br/>kv_producer"]
+    MM["mooncake-master<br/>:50051 metadata-only"]
+    MC1["mooncake-client<br/>:50053 DRAM+SSD"]
+    PX["pd-proxy<br/>:8000"]
   end
-  subgraph P2[DECODE ranks 2-3 - GX10]
-    subgraph TP2D[EXL3 TP=2 sub-group, master 29502]
-      P2R["rank 2<br/>API 8200<br/>kv_consumer"]
-      P3R["rank 3<br/>--headless<br/>API 8200"]
-    end
+  subgraph N2["gx10-node2 (rank 1)"]
+    P1["PREFILL rank 1 --headless<br/>kv_producer"]
+    MC2["mooncake-client :50053"]
   end
-  NET["RoCE HCAs rocep1s0f1:1 roceP2p1s0f1:1<br/>NIXL side channel 5600/node"]
-
-  Client -->|:8000 /v1| RT
-  RT -->|prefill| P0R & P1R
-  RT -->|decode| P2R & P3R
-  P0R & P1R -->|KV fp8/sliding_window, blocks 128| NET
-  NET --> P2R & P3R
+  subgraph N3["gx10-node3 (rank 2)"]
+    D2["DECODE rank 2<br/>EXL3 TP=2 + DFlash, API 8200<br/>kv_consumer"]
+    MC3["mooncake-client :50053"]
+  end
+  subgraph N4["gx10-node4 (rank 3)"]
+    D3["DECODE rank 3 --headless"]
+    MC4["mooncake-client :50053"]
+  end
+  PX -->|:8000 /v1| P0
+  PX -->|decode| D2
+  P0 -->|"KV PUT (host-staged RDMA)"| MC1
+  P1 -->|"KV PUT"| MC2
+  D2 -->|"KV GET (node-local preferred)"| MC3
+  D3 -->|"KV GET"| MC4
+  MC1 & MC2 & MC3 & MC4 -->|"register / lookup"| MM
 ```
 
-Port map: router 8000, prefill 8100, decode 8200, NIXL side channel 5600,
-prefill sub-group master 29501, decode sub-group master 29502.
+Port map: 8000 (pd-proxy), 8100 (prefill API), 8200 (decode API),
+50051 (mooncake-master), 50053 (mooncake-client). No NIXL 5600.
 
-## Environment
+## Environment variables
 
-| Variable | Meaning | Default | Where | Notes |
-|---|---|---|---|---|
-| `PD_DISAGG_ENABLED` | Enable/disable mod | `0` | Both | `1` required on all roles |
-| `PD_DISAGG_INSTALL_NIXL` | Pip-install nixl if missing | `0` | run.sh | Prefer baked `nixl-runtime:24.04-cu13.3-sm121` |
-| `PD_DISAGG_NIXL_SPEC` | pip spec for nixl | `nixl` | run.sh | |
-| `PD_UCX_NET_DEVICES` | RoCE HCA list | `rocep1s0f1:1,roceP2p1s0f1:1` | run.sh | Overrides launch-cluster.sh's ETH_IF pinning |
-| `PD_UCX_TLS` | UCX TLS | `rc,ud,sm,self,^cuda_ipc` | run.sh | TCP appended only when HCAs missing && `PD_DISAGG_ALLOW_TCP_FALLBACK=1` |
-| `PD_DISAGG_ALLOW_TCP_FALLBACK` | Downgrade missing-HCA to warning | `0` | run.sh | Fail-closed default; UCX/NIXL must not silently run TCP-only |
-| `PD_DISAGG_ENV_FILE` | Env file sourced by dispatch.sh | `/tmp/pd-disagg.env` | Both | Must exist; **auto-published**: if missing, dispatch.sh sources the sibling `run.sh` in-process to publish it (then re-sources the env file) |
-| `PD_NIXL_PORT` | NIXL side-channel port | `5600` | Both | Per-node, own IP |
-| `NIXL_LOG_LEVEL` | NIXL python log level | `WARN` | Both | |
-| `PD_ROUTER_ENABLED` | Start toy_proxy_server on rank 0 | `0` | dispatch.sh | Can be disabled for testing |
-| `PD_ROUTER_SCRIPT` | Router script path | mod-local `toy_proxy_server.py` | dispatch.sh (rank 0) | Default is the vendored mod-local copy (`mods/pd-disagg/toy_proxy_server.py`); `/workspace/toy_proxy_server.py` works as an override |
-| `PD_ROUTER_START_DELAY` | Delay before router start | `30` | dispatch.sh (rank 0) | Sleep-gated start: the router waits this long before dialing prefill API 8100; prefill must be listening first |
-| `PD_ROUTER_PORT` | Router API port | `8000` | dispatch.sh (rank 0) | External clients point here |
-| `PD_ROUTER_HOST` | Router bind host | `0.0.0.0` | dispatch.sh (rank 0) | The vendored router defaults `--host` to `127.0.0.1` (loopback only); this override makes `http://<head>:8000/v1/models` reachable from clients |
-| `PD_VLLM_SERVE` | vLLM serve wrapper | `vllm serve` | Both | Set to `b12x-kcache exec vllm serve` |
-| `PD_TP_PREFILL` | Prefill TP size | `2` | dispatch.sh | MUST be 2 (EXL3 pack is a 2-rank sub-group) |
-| `PD_TP_DECODE` | Decode TP size | `2` | dispatch.sh | MUST be 2 on the 4-node topology (EXL3 decode is a 2-rank sub-group) |
-| `PD_EXL3_MODEL` | EXL3 model id, BOTH roles | `XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3` | dispatch.sh | The assembled uncensored pack staged via mods/fes-weights; decode serves the same pack so quantization matches prefill |
-| `PD_DECODE_NODE_IPS` | Decode node IPs for router dialing | (required if router enabled) | dispatch.sh (rank 0) | CSV; router `--decoder-hosts` |
-| `PD_DECODE_MASTER_ADDR` | Decode sub-group master addr | (REQUIRED) | dispatch.sh (ranks 2-3) | REQUIRED at NNODES=4 — decode ranks cannot rendezvous without it; pass rank 2's IP via `-e` |
-| `PD_DECODE_MASTER_PORT` | Decode sub-group master port | `29502` | dispatch.sh (ranks 2-3) | Distinct from prefill sub-group 29501 |
-| `PD_DFLASH_MODEL` | DFlash drafter path | `/workspace/MiMo-V2.6-Flash-RL-dflash` | dispatch.sh (decode) | Staged by mods/mimo-v2.6-flash; resolved via `MIMO_V26_MODEL_ID` |
-| `PD_NUM_SPECULATIVE_TOKENS` | DFlash draft depth | `7` | Both | Parity hash input; must match across roles |
-| `PD_PREFILL_PORT` | Prefill API port | `8100` | dispatch.sh (ranks 0-1) | |
-| `PD_PREFILL_GMU` | Prefill GMU | `0.7` | dispatch.sh (ranks 0-1) | EXL3 ~55 GB experts/rank of 121.6 GB |
-| `PD_PREFILL_MASTER_ADDR` | Prefill sub-group master | outer `--master-addr` | dispatch.sh (ranks 0-1) | Rank 0's IP |
-| `PD_PREFILL_MASTER_PORT` | Prefill sub-group master port | `29501` | dispatch.sh (ranks 0-1) | Distinct from outer engine's and decode's |
-| `PD_DECODE_PORT` | Decode API port | `8200` | dispatch.sh (ranks 2-3) | |
-| `PD_DECODE_GMU` | Decode GMU | `0.7` | dispatch.sh (ranks 2-3) | Same EXL3 footprint as prefill: ~55 GB experts/rank TP=2 |
-| `PD_BLOCK_SIZE` | KV block size | `128` | Both | Parity hash input |
-| `PD_MAX_MODEL_LEN` | Max context | `1048576` | Both | Parity hash input |
-| `PD_MAX_NUM_SEQS` | Max concurrent seqs | `32` | Both | Parity hash input |
-| `PD_MAX_NUM_BATCHED_TOKENS` | Max batched tokens | `16384` | Both | Parity hash input |
-| `PD_PARITY_SHA256` | Shared-config hash (read-only, logged) | computed at boot | dispatch.sh/run.sh | MUST be identical across roles |
+| Variable | Purpose | Default | Set by |
+|---|---|---|---|
+| `PD_DISAGG_ENABLED` | Opt-in gate | `0` | recipe env |
+| `PD_KV_BACKEND` | KV backend selector (`mooncake`) | `mooncake` | recipe env |
+| `MOONCAKE_MASTER_SERVER_ADDRESS` | Rank-0 Rail B IP (REQUIRED) | — | serve.sh `-e` |
+| `MOONCAKE_MASTER_PORT` | Master RPC port | `50051` | serve.sh |
+| `MOONCAKE_CLIENT_PORT` | Client TransferEngine port | `50053` | serve.sh |
+| `MOONCAKE_SEGMENT_SIZE_GIB` | Per-node DRAM segment | `16` | serve.sh |
+| `MOONCAKE_LOCAL_BUFFER_GIB` | vLLM rank local buffer | `4` | mooncake-env.sh |
+| `MOONCAKE_OFFLOAD_MAX_GIB` | SSD offload cap per node | `100` | serve.sh |
+| `MOONCAKE_CONFIG_PATH` | Store JSON path | `/tmp/pd-disagg/mooncake-store.json` | mooncake-env.sh |
+| `MOONCAKE_PREFERRED_SEGMENT` | Node-local client steering | `<railb-ip>:50053` | mooncake-env.sh |
+| `MOONCAKE_REQUESTER_LOCAL_HOSTNAME` | vLLM rank Rail B IP | `<railb-ip>` | mooncake-env.sh |
+| `PYTHONHASHSEED` | **MUST be `0`** — hash-based dedup silently breaks otherwise | `0` | mooncake-env.sh |
+| `PD_DECODE_MASTER_ADDR` | Decode sub-group master IP (REQUIRED, NNODES=4) | — | serve.sh `-e` |
+| `PD_DECODE_NODE_IPS` | Decode ranks' IPs CSV (rank-2 first) | — | serve.sh `-e` |
+| `PD_ROUTER_ENABLED` / `PD_ROUTER_PORT` / `PD_ROUTER_START_DELAY` | Proxy control | `1` / `8000` / `30` | recipe env |
+| `PD_ROUTER_SCRIPT` | Proxy override path | mod-local `pd_proxy.py` | dispatch.sh |
+| `PD_TP_PREFILL` / `PD_TP_DECODE` | Sub-group TP (MUST be 2) | `2` | dispatch.sh |
 
-## Prerequisites
+Shared parity vars (`PD_NUM_SPECULATIVE_TOKENS=7`, `PD_BLOCK_SIZE=128`,
+`PD_MAX_MODEL_LEN=1048576`, `PD_MAX_NUM_SEQS=32`,
+`PD_MAX_NUM_BATCHED_TOKENS=16384`, KV `fp8` with sliding_window skip-layers)
+are hashed into `PD_PARITY_SHA256` by run.sh and re-verified by every
+dispatch.sh invocation — cross-role config drift fail-closes the launch.
 
-1. Compose mod stack (recipes/pd-disagg-mimo-uncensored-exl3-4x.yaml —
-   uncensored EXL3 pack on both prefill and decode roles):
-   `mods/pd-disagg`, `mods/exl3-mimo`, `mods/fes-weights`,
-   `mods/mimo-v2.6-flash`, `mods/mimo-diffkv-fp8-kv`,
-   `mods/kv-cache-guard-override`, `mods/b12x-kernel-cache`.
-2. Staging (per node):
-   - ranks 0–1: uncensored EXL3 pack assembled by `scripts/exl3-pack-drive.sh`
-     (TP=2 split), staged under `XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3` via
-     mods/fes-weights; `MIMO_V26_MODEL_ID` must point at the same assembled
-     checkpoint so the DFlash drafter resolves from its `dflash/` sibling.
-   - ranks 2–3: the same uncensored EXL3 pack (TP=2 split) + DFlash drafter
-     (`/workspace/MiMo-V2.6-Flash-RL-dflash`).
-3. Launch:
-   ```
-   cluster-config/scripts/spark-vllm-docker-serve.sh --recipe pd-disagg-mimo-uncensored-exl3-4x
-     --apply-mod mods/pd-disagg --apply-mod mods/exl3-mimo --apply-mod mods/fes-weights
-     --apply-mod mods/mimo-v2.6-flash --apply-mod mods/mimo-diffkv-fp8-kv
-     --apply-mod mods/kv-cache-guard-override --apply-mod mods/b12x-kernel-cache
-     -n gx10-node1,gx10-node2,gx10-node3,gx10-node4
-     -e PD_DECODE_NODE_IPS=10.100.171.12,10.100.171.13
-     -e PD_DECODE_MASTER_ADDR=10.100.171.12
-   ```
-4. Verify:
-   - `PD_PARITY_SHA256` identical across all four roles' boot logs.
-   - Router `http://<head>:8000/v1/models` responds; prefill 8100 / decode
-     8200 listening (probe with `ss -tln 'sport = :PORT'` — NEVER `nc -z` or
-     any connect(): it steals one-shot NCCL rendezvous accepts).
-   - NIXL metrics on decode: `nixl_bytes_transferred > 0` and no failed
-     transfers (KV actually moved producer→consumer).
+## Deployment
 
-## Known limitations
+1. Recipe `recipes/pd-disagg-mimo-uncensored-exl3-4x.yaml` (mods: fes-weights,
+   mimo-v2.6-flash, mimo-diffkv-fp8-kv, kv-cache-guard-override, exl3-mimo,
+   pd-disagg, b12x-kernel-cache, b12x-reclaim-gate).
+2. `cluster-config/scripts/spark-vllm-docker-serve.sh --recipe
+   pd-disagg-mimo-uncensored-exl3-4x --rank-order <4 hosts> --recreate
+   --daemon` — serve.sh starts mooncake-master (rank-0 host) and
+   mooncake-client (every host) as sibling containers from the
+   `mooncake-store:v0.3.12.post1-1` image BEFORE launching the engines,
+   then derives `MOONCAKE_MASTER_SERVER_ADDRESS` and the decode-subgroup
+   `-e` vars from `--rank-order` + `NODE_RAILB_IPS` (same pattern as
+   `PD_DECODE_MASTER_ADDR`).
+3. Health: `docker ps` shows `mooncake-master` (rank-0 only) +
+   `mooncake-client` (4x); `/v1/models` on 8100 and 8200 → 200;
+   `:8000/v1/chat/completions` round-trips.
 
-- **4-node only.** `NNODES != 4` fails closed. Decode TP=2 sub-group requires
-  `PD_DECODE_MASTER_ADDR` (fail-closed REQUIRED at NNODES=4).
-- **Host-mirror KV profiling**: on GB10, NIXL KV pages are host-staged;
-  1M-context single-request guard must stay overridden
-  (mods/kv-cache-guard-override) and capacity pre-checked.
-- **DFlash on decode only.** PD + speculative decode on MiMo is exercised
-  only in the decode role; prefill runs plain EXL3.
-- Router dialing decode needs `PD_DECODE_NODE_IPS` (rank-0 env); it is not
-  auto-discovered.
+## Constraints
 
-## Vendored router
+- **4-node only** (NNODES=4; TP=2 sub-groups).
+- **DFlash on decode only** (depth 7); store connector's hash dedup is
+  orthogonal — no NIXL-style whole-config handshake to break.
+- **SSD tier is write-once/immutable** (bucket backend); corruption requires
+  a wipe + re-put (`docker exec mooncake-client` / wipe `/nvme/mooncake_offload`
+  while stopped). `--offload_on_evict` stays false (spill-only semantics).
+- **`PYTHONHASHSEED=0` everywhere** — vLLM connectors + client must agree.
+- `MOONCAKE_OFFLOAD_USE_URING=false` (GB10 io_uring + DirectIO alignment);
+  only set if SSD restore surfaces alignment faults.
+- `VLLM_MOONCAKE_BOOTSTRAP_PORT` (8998) is MooncakeConnector-only — NOT set
+  in store-only mode.
 
-`mods/pd-disagg/toy_proxy_server.py` is copied verbatim (byte-identical body,
-provenance header prepended) from the pinned FES vLLM fork
-`gpu-cluster-forks/vllm` at commit
-`311b3513af33bc29b4acb2fde2e9313e5e9966a0`, path
-`tests/v1/kv_connector/nixl_integration/toy_proxy_server.py`
-(upstream vllm-project/vllm; Apache-2.0, SPDX headers preserved; the upstream
-`examples/online_serving/pd_disaggregation/toy_proxy_server.py` path does not
-exist in the pinned ref). `dispatch.sh` defaults `PD_ROUTER_SCRIPT` to this
-mod-local copy; `/workspace/toy_proxy_server.py` remains as override.
+## Provenance
 
-## See also
-
-- `tmp/spark-vllm-docker/pd-3x-completion-plan.md` (topology)
-- `tmp/spark-vllm-docker/perf-concepts/pd-disaggregation-upstream-vllm.md` (NIXL)
-- `tmp/spark-vllm-docker/perf-concepts/repo-orchestration-analysis.md` (TP-trimming footgun)
-- `recipes/mimo-v2.6-flash-rl-uncensored-exl3-2x.yaml` (TP=2 flag source of truth)
-- `mods/exl3-mimo/EXL3_MIMO_PACK.md`, `docs/NETWORKING.md`
-- vLLM PRs: #35760 (PD+SD), #43733 (DFlash UX), #58470 (KV mis-transfer TP)
+- Proxy: `infra/cluster-config/docker/pd-proxy/pd_proxy.py` (byte-identical
+  copy shipped as `mods/pd-disagg/pd_proxy.py`, sha256
+  `fd2a5cb23c3bafcd6f009d369ed0114c5ab50eb441f09fa15e73ac9e8d79154d`).
+- Daemon units mirrored from `infra/cluster-config/templates/mooncake-{master,client}.service.tmpl`
+  and `scripts/setup-mooncake-pd.sh` (qwen38 store-only deployment).
+- Prior art: `nixl-gb10-optimization/.kilo/plans/1787311123732-mooncake-store-only-migration.md`,
+  `1787348070015-mooncake-pd-1p2d-support.md`,
+  `1787331814960-mooncake-store-staging-ring-buffer.md`.
+- vLLM connector contract: `gpu-cluster-forks/vllm/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/worker.py`
+  (MooncakeStoreConfig.from_file), `docs/features/mooncake_store_connector_usage.md`.

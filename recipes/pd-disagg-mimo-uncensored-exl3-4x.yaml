@@ -104,8 +104,14 @@ defaults:
   pd_prefill_port: 8100
   # Decode vLLM API (ranks 2-3, headless on rank 3).
   pd_decode_port: 8200
-  # NIXL side channel, per-node OWN IP:port (dispatch.sh).
-  pd_nixl_port: 5600
+  # Mooncake daemon ports (sibling containers, serve.sh-launched):
+  # master = rank-0 metadata-only TCP; client = per-node TransferEngine.
+  # Master address itself is auto-derived by serve.sh from --rank-order
+  # (MOONCAKE_MASTER_SERVER_ADDRESS=-e), same pattern as PD_DECODE_MASTER_ADDR.
+  pd_mooncake_master_port: 50051
+  pd_mooncake_client_port: 50053
+  pd_mooncake_segment_size_gib: 16
+  pd_mooncake_offload_max_gib: 100
   # Decode sub-group master port (rank 2 master, rank 3 --headless);
   # consumed NOW that TP_DECODE=2.
   pd_decode_master_port: 29502
@@ -161,4 +167,4 @@ env:
 # this as the LAST line, appending --nnodes/--node-rank/--master-addr/
 # --master-port. dispatch.sh derives per-role vLLM commands; vLLM-level
 # tensor-parallel comes ONLY from PD_TP_PREFILL/PD_TP_DECODE (NOT trimmed).
-command: PD_NIXL_PORT={pd_nixl_port} PD_PREFILL_PORT={pd_prefill_port} PD_DECODE_PORT={pd_decode_port} PD_ROUTER_PORT={pd_router_port} PD_NUM_SPECULATIVE_TOKENS={num_speculative_tokens} PD_MAX_MODEL_LEN={max_model_len} PD_BLOCK_SIZE={block_size} PD_MAX_NUM_SEQS={max_num_seqs} PD_MAX_NUM_BATCHED_TOKENS={max_num_batched_tokens} PD_TP_PREFILL={pd_tp_prefill} PD_TP_DECODE={pd_tp_decode} PD_DECODE_MASTER_PORT={pd_decode_master_port} /workspace/mods/pd-disagg/dispatch.sh
+command: PD_KV_BACKEND=mooncake PD_PREFILL_PORT={pd_prefill_port} PD_DECODE_PORT={pd_decode_port} PD_ROUTER_PORT={pd_router_port} PD_NUM_SPECULATIVE_TOKENS={num_speculative_tokens} PD_MAX_MODEL_LEN={max_model_len} PD_BLOCK_SIZE={block_size} PD_MAX_NUM_SEQS={max_num_seqs} PD_MAX_NUM_BATCHED_TOKENS={max_num_batched_tokens} PD_TP_PREFILL={pd_tp_prefill} PD_TP_DECODE={pd_tp_decode} PD_DECODE_MASTER_PORT={pd_decode_master_port} /workspace/mods/pd-disagg/dispatch.sh
