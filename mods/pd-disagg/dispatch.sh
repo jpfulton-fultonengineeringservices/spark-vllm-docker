@@ -311,7 +311,7 @@ if [ "$NODE_RANK" -ge 2 ]; then
     --kv-cache-dtype-skip-layers sliding_window
     --max-num-seqs "$PD_MAX_NUM_SEQS"
     --max-num-batched-tokens "$PD_MAX_NUM_BATCHED_TOKENS"
-    --gpu-memory-utilization "${PD_DECODE_GMU:-0.65}"
+    --gpu-memory-utilization "${PD_DECODE_GMU:-0.68}"
     --enable-chunked-prefill
     --async-scheduling
     --enable-prefix-caching
