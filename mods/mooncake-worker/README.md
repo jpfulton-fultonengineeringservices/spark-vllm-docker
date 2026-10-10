@@ -23,13 +23,29 @@ final staging fixes:
 
 ## What it ships
 
-- `worker.py` — the `store/worker.py` from the branch tip (2574 lines,
-  md5 `b11bd659baf724298b2f347dad503b4e`). Installed over the image's
-  `/usr/local/lib/python3.12/dist-packages/vllm/distributed/kv_transfer/
-  kv_connector/v1/mooncake/store/worker.py`.
-- `run.sh` — fail-closed SHA-gated install: verify the installed file's
-  md5 matches the known image version (`e93769fd9b` →
-  `13aa4784d38f8c1ff0d9284d0033a335`) before replacing; skip if already
+`store/` — the full 8-file `store/` package from the branch tip, installed
+as a matched set over the image's
+`/usr/local/lib/python3.12/dist-packages/vllm/distributed/kv_transfer/
+kv_connector/v1/mooncake/store/`:
+
+| file | purpose |
+|---|---|
+| `worker.py` | KV store worker with `_StagingSlotPool` host-staging (2574 lines, md5 `b11bd659baf724298b2f347dad503b4e`) |
+| `data.py` | `ReqMeta`/`PoolKey`/hash plumbing (matched to worker) |
+| `connector.py` | `MooncakeStoreConnector` (scheduler+worker facade) |
+| `scheduler.py` | store scheduler (builds `ReqMeta`, block pinning) |
+| `coordinator.py` | block-pool coordination |
+| `protocol.py`, `metrics.py`, `__init__.py` | supporting |
+
+**Whole-package, not lone worker**: the FES `worker.py` reads
+`ReqMeta.partial_tail_offloads` while the stock image `data.py` defines
+`boundary_state_offloads` (b12x/DiffKV lineage). A worker-only swap would
+`AttributeError`; `worker.py` and `data.py` (plus the scheduler building
+`ReqMeta`) are one coherent set and move together.
+
+- `run.sh` — fail-closed SHA-gated install: verify the installed
+  `store/worker.py` md5 matches the known stock image
+  (`b180493c964225f6a9282b30a47fb967`) before replacing; skip if already
   ported; refuse on unknown base (image drift).
 
 ## Runtime requirements (shipped elsewhere)
