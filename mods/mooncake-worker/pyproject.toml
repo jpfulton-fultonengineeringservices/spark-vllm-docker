@@ -1,0 +1,46 @@
+[project]
+name = "mooncake-worker"
+version = "0.1.0"
+description = "Host-staged Mooncake store connector package installer for GB10 (vllm-node-b12x)"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov",
+  "ruff>=0.6",
+  "mypy>=1.11",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mooncake_worker"]
+
+# Vendor store files are data, not modules: exclude from wheel, keep in repo.
+[tool.hatch.build.targets.wheel.force-include]
+"vendor/store" = "mooncake_worker/vendor/store"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+extend-exclude = ["src/mooncake_worker/vendor"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src/mooncake_worker"]
+exclude = ["src/mooncake_worker/vendor"]
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
