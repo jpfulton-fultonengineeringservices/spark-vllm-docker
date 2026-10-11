@@ -97,8 +97,11 @@ Two interchangeable KV-transfer paths; the rest of the topology is identical.
   RDMA to the same master), `valkey` (Dell), `fs_native` (NFS). Adds chunk
   management, CacheBlend-capable L1, and cross-instance reuse, at one extra hop.
   Requires the **lmcache-mooncake wheel variant** (native `lmcache.lmcache_mooncake`),
-  the `lmcache-server` image, and vLLM prefix caching **off** (the MP connector
-  owns cache management — dispatch.sh strips `--enable-prefix-caching`).
+  the `lmcache-server` image. vLLM prefix caching stays **on** with
+  `--prefix-caching-hash-algo xxhash` on both roles (dispatch.sh emits the
+  stance explicitly — positive or negative flag — so the default can never
+  silently disagree; the connector consumes the same BlockHash list APC
+  maintains, mirroring the proven nemotron MooncakeStoreConnector pairing).
 
 Select with recipe `pd_kv_backend: lmcache` (or `PD_KV_BACKEND=lmcache` in env).
 
