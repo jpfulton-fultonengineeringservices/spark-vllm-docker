@@ -108,4 +108,39 @@ remote_storage_plugins:
   - "valkey://10.10.10.53:6379"
 EOF
 
+# --- 3. Fork patch: uniformity probe must not raise on mixed windows ----------
+# With --disable-hybrid-kv-cache-manager, get_kv_cache_groups() first runs
+# unify_hybrid_kv_cache_specs(), which probes uniformity via
+# is_kv_cache_spec_uniform(). That probe calls specs[0].merge(all) and catches
+# ONLY AssertionError -- but FullAttentionSpec.merge's merge_window_sizes()
+# raises ValueError on a mixed window set (MiMo: SWA layers window=128 vs
+# full-attention layers window=None). Observed live 2026-10-11:
+#   ValueError: All attention layers in the same KV cache group must have the
+#   same window size. (via _promote_local_kv_cache_specs -> probe)
+# Catching ValueError lets the probe correctly report "not uniform"; the
+# per-layer promotion then yields FullAttentionSpec(128)/FullAttentionSpec(None),
+# which FullAttentionSpec.merge unifies by filtering None windows -> ONE group,
+# the single-group invariant the LMCache v1 adapter requires. Idempotent.
+python3 - <<'PYEOF'
+import sys
+
+path = "/usr/local/lib/python3.12/dist-packages/vllm/v1/core/kv_cache_utils.py"
+with open(path) as f:
+    src = f.read()
+old = """    except AssertionError:
+        return False
+    return True"""
+new = """    except (AssertionError, ValueError):
+        return False
+    return True"""
+if new in src:
+    print("[lmcache-offload] kv_cache_utils uniformity-probe patch already applied")
+elif old in src:
+    with open(path, "w") as f:
+        f.write(src.replace(old, new, 1))
+    print("[lmcache-offload] patched is_kv_cache_spec_uniform to catch ValueError (mixed-window probe)")
+else:
+    print("[lmcache-offload] WARN: uniformity-probe patch target not found (fork drift?); continuing", file=sys.stderr)
+PYEOF
+
 echo "$PREFIX ok config=${CONFIG_FILE} l1=${L1_GIB}G l2_disk=${DISK_GIB}G dir=${L2_DIR} l2_valkey=10.10.10.53:6379"
