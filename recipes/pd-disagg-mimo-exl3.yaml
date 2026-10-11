@@ -3,8 +3,9 @@
 # Concept (inverted, matches mods/pd-disagg/dispatch.sh): ranks 0-1 run the
 # EXL3-v1 MiMo pack prefill instance with tensor-parallel=2 (kv_role
 # kv_producer); the last rank (NNODES-1) runs the source-precision decode
-# instance tensor-parallel=1 + DFlash (kv_role kv_consumer). NIXL moves KV
-# from prefill to decode. A toy_proxy_server on rank 0 routes completions.
+# instance with tensor-parallel=1 + DFlash (kv_role kv_consumer). NIXL moves KV
+# from prefill to decode. A rank-0 vllm-router sibling container (cluster-config
+# serve.sh compose) routes completions — NOT an in-engine process.
 #
 # This recipe is a cluster-only, research target. It is intentionally
 # conservative: it defines the minimum viable PD shape for the 3-node cap
@@ -23,7 +24,7 @@
 #
 # Acceptance gate (before accepting PD traffic):
 #   - nixl_bytes_transferred > 0 on decode side AND no nixl_num_failed_transfers.
-#   - toy_proxy_server reachable on PD_ROUTER_PORT, /v1/models lists both.
+#   - vllm-router container reachable on PD_ROUTER_PORT (:8000), /v1/models lists both.
 
 recipe_version: "1"
 name: MiMo-V2.6-Flash-RL PD-Disaggregated EXL3
@@ -73,8 +74,8 @@ defaults:
 env:
  # Enable this mod and dispatcher.
  PD_DISAGG_ENABLED: "1"
- # Router runs on the shared rank-0 node.
- PD_ROUTER_ENABLED: "1"
+ # Request router: rank-0 sibling vllm-router container (:8000 API, :29000 /metrics),
+ # owned by cluster-config serve.sh compose — NOT an in-engine process.
  # Use the B12X kernel-cache wrapper (provided by mods/b12x-kernel-cache).
  PD_VLLM_SERVE: "b12x-kcache exec vllm serve"
  # Source checkpoint for decode instance and drafter staging.
