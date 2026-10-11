@@ -142,4 +142,57 @@ else:
     print("[lmcache-offload] WARN: uniformity-probe patch target not found (fork drift?); continuing", file=sys.stderr)
 PYEOF
 
+# --- 4. Fork patch: GPU connector device ordinal must clamp to device_count() ---
+# LMCacheConnectorV1 reads metadata.local_worker_id and passes it directly to
+# torch_dev.set_device(local_worker_id). In cross-host TP=2, rank1 has
+# local_worker_id=1 (correct per-host TP index) but node carries one GPU
+# (device_count=1, so only device 0 exists). The set_device(1) raises
+# CUDA error: invalid device ordinal, putting that rank's LMCache into
+# degraded recompute mode. Clamp: local_worker_id % device_count.
+python3 - <<'PYEOF'
+import sys
+path = "/usr/local/lib/python3.12/dist-packages/lmcache/v1/gpu_connector/__init__.py"
+with open(path) as f:
+    src = f.read()
+old = "local_worker_id = metadata.local_worker_id\n        torch_dev.set_device(local_worker_id)"
+new = "local_worker_id = metadata.local_worker_id % max(1, torch_dev.device_count())\n        torch_dev.set_device(local_worker_id)"
+if new in src:
+    print("[lmcache-offload] gpu_connector device-ordinal patch already applied")
+elif old in src:
+    src = src.replace(old, new, 2)  # two occurrences: SGLang + vLLM paths
+    with open(path, "w") as f:
+        f.write(src)
+    print("[lmcache-offload] patched gpu_connector to clamp device ordinal to device_count() (cross-host TP)")
+else:
+    print("[lmcache-offload] WARN: gpu_connector device-ordinal target not found (wheel drift?); continuing", file=sys.stderr)
+# Also fix the device string following (same pattern, second occurrence)
+old2 = 'torch_dev.set_device(local_worker_id)\n        device = torch.device(f"{torch_device_type}:{local_worker_id}")'
+new2 = 'torch_dev.set_device(local_worker_id)\n        device = torch.device(f"{torch_device_type}:{safe_id}")'
+# Check if already fixed
+if 'safe_id' in src:
+    print("[lmcache-offload] gpu_connector device-string patch already applied")
+else:
+    # Just fix set_device line, device line uses local_worker_id directly
+    # Wrap both with safe_id
+    import re
+    # The second occurrence (line 169-171 in source)
+    count = 0
+    def fix_second(m):
+        global count
+        count += 1
+        if count == 2:
+            return 'safe_id = metadata.local_worker_id % max(1, torch_dev.device_count())\n        torch_dev.set_device(safe_id)\n        device = torch.device(f"{torch_device_type}:{safe_id}")'
+        return m.group(0)
+    new_src = re.sub(
+        r'local_worker_id = metadata\.local_worker_id\n\s+torch_dev\.set_device\(local_worker_id\)\n\s+device = torch\.device\(f"\{torch_device_type\}:\{local_worker_id\}"\)',
+        fix_second, src
+    )
+    if new_src != src:
+        with open(path, "w") as f:
+            f.write(new_src)
+        print("[lmcache-offload] patched gpu_connector device string (second occurrence) for safe_id")
+    else:
+        print("[lmcache-offload] WARN: gpu_connector device-string regex target not found; continuing", file=sys.stderr)
+PYEOF
+
 echo "$PREFIX ok config=${CONFIG_FILE} l1=${L1_GIB}G l2_disk=${DISK_GIB}G dir=${L2_DIR} l2_remote=valkey://10.10.10.53:6379"
