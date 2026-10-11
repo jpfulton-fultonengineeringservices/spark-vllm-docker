@@ -9,8 +9,10 @@
 # Topology (NNODES must be 4; see tmp/spark-vllm-docker/pd-3x-completion-plan.md):
 #   ranks 0..1  PREFILL  : EXL3 pack, tensor-parallel 2 (2-rank sub-group,
 #                         mirrors recipes/mimo-v2.6-flash-rl-uncensored-exl3-2x.yaml),
-#                         API port 8100, rank 0 also runs the pd-proxy router.
-#   ranks 2..3  DECODE   : same EXL3 pack TP=2 sub-group + DFlash speculative
+# API port 8100. The request router is NOT an in-engine process: a rank-0
+# sibling `vllm-router` container (:8000 OpenAI API, :29000 Prometheus
+# /metrics) — owned by cluster-config serve.sh compose — fronts the stack.
+# ranks 2..3  DECODE   : same EXL3 pack TP=2 sub-group + DFlash speculative
 #                         decoding, API port 8200, kv_consumer. Both roles serve
 #                         PD_EXL3_MODEL so prefill/decode quantization match.
 #
@@ -229,38 +231,6 @@ if [ "$NODE_RANK" -lt 2 ]; then
 
   echo "$PREFIX role=PREFILL rank=$NODE_RANK tp=$TP_PREFILL kv=mooncake-store segment=${MOONCAKE_PREFERRED_SEGMENT:-unset} prefill_master=$PREFILL_MASTER_ADDR:$PREFILL_MASTER_PORT PD_PARITY_SHA256=$PD_PARITY_SHA256"
 
-  # Proxy only on rank 0 (prefill needs to boot first; see PD_ROUTER_START_DELAY).
-  if [ "$NODE_RANK" -eq 0 ] && [ "${PD_ROUTER_ENABLED:-0}" = "1" ]; then
-    # pd-proxy (cluster-config docker/pd-proxy/pd_proxy.py) replaces the NIXL-era
-    # toy_proxy_server: same FastAPI proxy used by the proven qwen38 store-only
-    # deployment. Decodes a single endpoint: the decode sub-group MASTER (rank 2,
-    # first PD_DECODE_NODE_IPS entry) — headless rank 3 never binds 8200.
-    PROXY_SCRIPT="${PD_ROUTER_SCRIPT:-$(dirname "$0")/pd_proxy.py}"
-    if [ -f "$PROXY_SCRIPT" ]; then
-      PD_ROUTER_START_DELAY="${PD_ROUTER_START_DELAY:-30}"
-      # The decode dial target is the decode sub-group MASTER only (first
-      # PD_DECODE_NODE_IPS entry = rank 2); headless rank 3 never binds 8200.
-      router_decoder_host="${PD_DECODE_NODE_IPS%%,*}"
-      # Sleep-gated start (README + recipe promise the 30s gate); subshell
-      # keeps set -e safe. pd-proxy has no --host flag (uvicorn default binds
-      # 0.0.0.0); --verify-timeout 1800 lets engines finish EXL3 loading.
-      # pd-proxy validate_instances expects BARE host:port (splits on ':' and
-      # requires exactly two parts) — NOT a http:// URL, which would be
-      # rejected as "Invalid instance format".
-      ( sleep "$PD_ROUTER_START_DELAY"; exec python3 "$PROXY_SCRIPT" \
-        --model "${PD_EXL3_MODEL}" \
-        --prefill "${NODE_IP}:${PD_PREFILL_PORT:-8100}" \
-        --decode "${router_decoder_host}:${PD_DECODE_PORT:-8200}" \
-        --port "${PD_ROUTER_PORT:-8000}" \
-        --verify-timeout 1800 \
-      ) >/tmp/pd-proxy.log 2>&1 &
-      echo "$PREFIX proxy scheduled (delay=${PD_ROUTER_START_DELAY}s, port=${PD_ROUTER_PORT:-8000}, log=/tmp/pd-proxy.log)"
-    else
-      echo "$PREFIX WARN proxy script not found (PD_ROUTER_SCRIPT=$PROXY_SCRIPT); skipping proxy" >&2
-    fi
-  fi
-
-  # shellcheck disable=SC2206
   PREFILL_CMD=("${VLLM_SERVE[@]}" "${PD_EXL3_MODEL:-XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3}"
     --host 0.0.0.0
     --port "${PD_PREFILL_PORT:-8100}"
