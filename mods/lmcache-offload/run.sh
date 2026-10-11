@@ -28,9 +28,18 @@ PREFIX="[lmcache-offload]"
 fail() { echo "$PREFIX LMCACHE_OFFLOAD_FAIL $*" >&2; return 1; }
 info() { echo "$PREFIX $*"; }
 
-# Opt-in: inert unless the recipe sets LMCACHE_OFFLOAD_ENABLED=1.
-if [ "${LMCACHE_OFFLOAD_ENABLED:-0}" != "1" ]; then
-    echo "$PREFIX inert (set LMCACHE_OFFLOAD_ENABLED=1 to enable)"
+# Opt-in. The recipe env (LMCACHE_OFFLOAD_ENABLED=1) is NOT visible here: mods
+# run BEFORE the exec-script that exports recipe env, in a separate process.
+# So the mod self-activates from the exec-script it can read in-container
+# (launch-cluster.sh copies /workspace/exec-script.sh before applying mods):
+# grep for the config-file pointer the recipe pins. LMCACHE_OFFLOAD_ENABLED=1
+# in the calling env still forces activation (debug / bare-mod testing).
+EXEC_SCRIPT="${WORKSPACE_DIR:-/workspace}/exec-script.sh"
+if [ "${LMCACHE_OFFLOAD_ENABLED:-0}" = "1" ] \
+   || { [ -f "$EXEC_SCRIPT" ] && grep -q 'LMCACHE_CONFIG_FILE' "$EXEC_SCRIPT" 2>/dev/null; }; then
+    :
+else
+    echo "$PREFIX inert (recipe exec-script does not reference LMCACHE_CONFIG_FILE; export LMCACHE_OFFLOAD_ENABLED=1 to force)"
     return 0 2>/dev/null || exit 0
 fi
 
