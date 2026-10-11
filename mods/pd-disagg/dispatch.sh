@@ -277,7 +277,6 @@ if [ "$NODE_RANK" -lt 2 ]; then
     --block-size "$PD_BLOCK_SIZE"
     --max-model-len "$PD_MAX_MODEL_LEN"
     --kv-cache-dtype fp8
-    --kv-cache-dtype-skip-layers sliding_window
     --max-num-seqs "$PD_MAX_NUM_SEQS"
     --max-num-batched-tokens "$PD_MAX_NUM_BATCHED_TOKENS"
     --gpu-memory-utilization "${PD_PREFILL_GMU:-0.65}"
@@ -303,6 +302,11 @@ if [ "$NODE_RANK" -lt 2 ]; then
   fi
   if [ "${PD_DISABLE_HYBRID:-0}" = "1" ]; then
     PREFILL_CMD+=(--disable-hybrid-kv-cache-manager)
+  else
+    # Skip-layers is for hybrid (DiffKV/SWA) groups; after HMA-unification
+    # (~disable-hybrid) the sliding-window spec is promoted to full-attention
+    # and skip-layers would crash get_kv_cache_groups during cudagraph profile.
+    PREFILL_CMD+=(--kv-cache-dtype-skip-layers sliding_window)
   fi
   # Outer-engine trailing args (post-`--`, e.g. OTLP trace flags) forwarded
   # verbatim to the prefill engine.
@@ -345,7 +349,6 @@ if [ "$NODE_RANK" -ge 2 ]; then
     --linear-backend b12x
     --block-size "$PD_BLOCK_SIZE"
     --kv-cache-dtype fp8
-    --kv-cache-dtype-skip-layers sliding_window
     --max-num-seqs "$PD_MAX_NUM_SEQS"
     --max-num-batched-tokens "$PD_MAX_NUM_BATCHED_TOKENS"
     --gpu-memory-utilization "${PD_DECODE_GMU:-0.68}"
@@ -367,6 +370,8 @@ if [ "$NODE_RANK" -ge 2 ]; then
   fi
   if [ "${PD_DISABLE_HYBRID:-0}" = "1" ]; then
     DECODE_CMD+=(--disable-hybrid-kv-cache-manager)
+  else
+    DECODE_CMD+=(--kv-cache-dtype-skip-layers sliding_window)
   fi
   # Outer-engine trailing args (post-`--`) forwarded verbatim to the decode
   # engine as well, so trace/metric flags apply symmetrically to both roles.
