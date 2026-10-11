@@ -102,6 +102,45 @@ fi
 
 fi  # PD_KV_BACKEND=mooncake
 
+# LMCache backend: the vLLM rank imports the LMCacheMPConnector shim, which
+# does `from lmcache.integration.vllm.utils import mla_enabled` — so the
+# `lmcache` package (NOT just the MP server image) must be importable in the
+# engine image. The vllm-node-b12x image does not ship it; install the
+# GB10/sm_121 wheel at boot (same dgx-spark-wheels release the lmcache-server
+# image uses). --no-deps: torch and the C++ extensions' runtime libs are
+# already in the image.
+if [ "${PD_KV_BACKEND:-mooncake}" = "lmcache" ]; then
+    : "${PD_LMCACHE_WHEEL_URL:=https://github.com/Fulton-Engineering-Services/dgx-spark-wheels/releases/download/lmcache-mooncake-v0.5.5rc1-cu13.3/lmcache-0.5.5rc1+cu13.3torch2.13.glibc239-cp312-cp312-linux_aarch64.whl}"
+    if ! python3 -c 'from lmcache.integration.vllm.utils import mla_enabled' >/dev/null 2>&1; then
+        if [ "${PD_DISAGG_INSTALL_LMCACHE:-1}" = "1" ]; then
+            info "lmcache module missing; installing from ${PD_LMCACHE_WHEEL_URL##*/}"
+            python3 -m pip install --no-cache-dir --no-deps "${PD_LMCACHE_WHEEL_URL}" >&2 \
+                || fail "op=install_lmcache url='${PD_LMCACHE_WHEEL_URL}' reason=pip_failed"
+            # Runtime deps from the canonical requirements list (bundled beside
+            # this script; same set the lmcache-server image installs).
+            # Excludes: torch (image has the from-source cu13.3 build),
+            # cufile-python (GDS unsupported on GB10), setuptools* (build deps),
+            # pytest (test dep), numpy (image pins its own), nixl (already in
+            # the image as nixl_cu13). Installed WITH resolution.
+            req="${MOD_DIR}/lmcache-requirements-common.txt"
+            if [ -f "$req" ]; then
+                info "installing lmcache runtime deps from ${req##*/}"
+                grep -v '^\s*#' "$req" | grep -v '^\s*$' \
+                    | grep -vE '^(torch|numpy|cufile-python|pytest|setuptools|setuptools_scm|nixl)([<>=!].*)?$' \
+                    > /tmp/lmcache-reqs-filtered.txt
+                python3 -m pip install --no-cache-dir -r /tmp/lmcache-reqs-filtered.txt >&2 \
+                    || fail "op=install_lmcache_deps reason=pip_failed hint='see ${req##*/}'"
+                rm -f /tmp/lmcache-reqs-filtered.txt
+            fi
+        fi
+        python3 -c 'from lmcache.integration.vllm.utils import mla_enabled' >/dev/null 2>&1 \
+            || fail "op=import_lmcache reason=absent hint='set PD_DISAGG_INSTALL_LMCACHE=1 or bake the lmcache wheel into the engine image'"
+        info "lmcache module installed"
+    else
+        info "lmcache module already present"
+    fi
+fi  # PD_KV_BACKEND=lmcache
+
 source "$MOD_DIR/mooncake-env.sh"
 
 # --- 2. publish env for dispatch.sh -------------------------------------
