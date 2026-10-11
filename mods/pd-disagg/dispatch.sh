@@ -206,7 +206,14 @@ if [ "${PD_KV_BACKEND:-mooncake}" = "lmcache" ]; then
   PD_DISABLE_HYBRID=1
   echo "$PREFIX kv_backend=lmcache mp=${LMCACHE_MP_HOST}:${LMCACHE_MP_PORT} prefix_caching=on(hash=xxhash)"
 else
-  KV_PRODUCER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_producer","kv_connector_extra_config":{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048}}'
+  # enable_lookup=false on the PRODUCER (prefill): the prefill role never
+  # loads KV from the store — it only produces. Leaving the store-side
+  # prefix-cache lookup enabled made the prefill scheduler block on a
+  # ZMQ lookup against STALE keys (persisted across boots) and defer every
+  # request forever in WAITING_FOR_REMOTE_KVS (running=0, waiting grows),
+  # leaking litellm's max_parallel_requests slots. The CONSUMER (decode)
+  # keeps the lookup — that IS the PD KV transfer path.
+  KV_PRODUCER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_producer","kv_connector_extra_config":{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048,"enable_lookup":false}}'
   KV_CONSUMER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_consumer","kv_connector_extra_config":{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048}}'
 fi
 

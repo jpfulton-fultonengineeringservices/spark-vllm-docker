@@ -2484,12 +2484,12 @@ class LookupKeyClient:
     def __init__(self, vllm_config: VllmConfig):
         self.ctx = zmq.Context()  # type: ignore[attr-defined]
         socket_path = get_zmq_rpc_path_lookup(vllm_config)
-        self.socket = make_zmq_socket(
-            self.ctx,
-            socket_path,
-            zmq.REQ,  # type: ignore[attr-defined]
-            bind=False,
-        )
+        self._socket_path = socket_path
+        # Bound every REQ round-trip (SND + RCV): an unbounded blocking recv
+        # here runs on the vLLM scheduler's critical path
+        # (get_num_new_matched_tokens), so a wedged worker-side server would
+        # hard-hang the scheduler. A timed-out REQ is rebuilt on demand.
+        self.socket = self._make_socket()
 
         # Async lookup support
         self.executor = ThreadPoolExecutor(
@@ -2505,9 +2505,47 @@ class LookupKeyClient:
             hash_len.to_bytes(2, byteorder="big"),
             b"".join(block_hashes),
         )
-        self.socket.send_multipart(all_frames, copy=False)
-        resp = self.socket.recv()
+        try:
+            self.socket.send_multipart(all_frames, copy=False)
+            resp = self.socket.recv()
+        except zmq.Again:
+            # Timed out inside the socket bound (10s). A REQ socket that
+            # sent but never received is stuck in send-pending state and
+            # cannot be reused; rebuild it here, on the executor thread
+            # that owns it (never from the scheduler thread).
+            logger.error(
+                "Mooncake lookup socket timed out; rebuilding and "
+                "treating this lookup as a miss."
+            )
+            self._rebuild_socket()
+            return 0
         return int.from_bytes(resp, "big")
+
+    def _make_socket(self) -> Any:
+        """Create the REQ socket with bounded send/recv timeouts."""
+        socket = make_zmq_socket(
+            self.ctx,
+            self._socket_path,
+            zmq.REQ,  # type: ignore[attr-defined]
+            bind=False,
+        )
+        # 10s SND/RCV bound: over an in-process IPC socket a healthy
+        # lookup answers in milliseconds; anything longer means the
+        # worker-side server is wedged. Kept well under the 30s
+        # future.result bound so the executor thread's zmq.Again wins the
+        # race and owns the socket rebuild.
+        socket.setsockopt(zmq.SNDTIMEO, 10_000)
+        socket.setsockopt(zmq.RCVTIMEO, 10_000)
+        return socket
+
+    def _rebuild_socket(self) -> None:
+        """Replace the REQ socket after a timed-out round-trip.
+
+        Called only from the executor thread (``_lookup``) that owns the
+        socket, so there is no concurrent access race.
+        """
+        self.socket.close(linger=0)
+        self.socket = self._make_socket()
 
     def lookup(
         self,
@@ -2525,7 +2563,14 @@ class LookupKeyClient:
         if non_block and not future.done():
             return None
         try:
-            return future.result()
+            return future.result(timeout=30.0)
+        except TimeoutError:
+            logger.error(
+                "Mooncake lookup timed out for %s after 30s; "
+                "treating as miss.",
+                req_id,
+            )
+            return 0
         except Exception as e:
             logger.error("Async Mooncake lookup failed for %s: %s", req_id, e)
             return 0
