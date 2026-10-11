@@ -206,23 +206,17 @@ if [ "${PD_KV_BACKEND:-mooncake}" = "lmcache" ]; then
   PD_DISABLE_HYBRID=1
   echo "$PREFIX kv_backend=lmcache mp=${LMCACHE_MP_HOST}:${LMCACHE_MP_PORT} prefix_caching=on(hash=xxhash)"
 else
-  # enable_lookup=false on the PRODUCER (prefill): the prefill role never
-  # loads KV from the store — it only produces. Leaving the store-side
-  # prefix-cache lookup enabled made the prefill scheduler block on a
-  # ZMQ lookup against STALE keys (persisted across boots) and defer every
-  # request forever in WAITING_FOR_REMOTE_KVS (running=0, waiting grows),
- # leaking litellm's max_parallel_requests slots. CONSUMER (decode)
- # keeps lookup — IS PD KV transfer path.
-  KV_PRODUCER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_producer","kv_connector_extra_config":{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048,"enable_lookup":false}}'
-  # lookup_async=true on the CONSUMER (decode): the decoder legitimately
-  # looks up prefill's KV in the store, but with lookup_async=false (the
-  # default) that blocking ZMQ round-trip runs on the scheduler's critical
-  # path every schedule pass. A miss/re-entry then re-issued a blocking
-  # lookup that wedged the decode EngineCore (running=0, 2 requests stuck
-  # deferred) exactly like the producer wedge. Non-blocking lookup returns
-  # None while in flight (scheduler retries without blocking) and the load
-  # issues as soon as the lookup resolves.
-  KV_CONSUMER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_consumer","kv_connector_extra_config":{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048,"lookup_async":true,"load_async":true}}'
+  # P2P MooncakeConnector: the upstream vllm-project/router --kv-connector
+  # mooncake mode uses this, with in-process MooncakeBootstrapServer (default
+  # port 8998) and the fork's _PinnedStagingArena (host_staging=true) to
+  # work around GB10's GPU-VA RDMA failure (ibv_reg_mr EFAULT -600; both
+  # nvidia-peermem and DMA-BUF paths are architecturally unavailable on GB10
+  # UMA — see mods/mooncake-worker/vendor/store/staging.py docstring).
+  # WITH_NVIDIA_PEERMEM=0 prevents the TransferEngine from attempting
+  # nvidia-peermem GPU-VA registration (which fails on GB10). Required.
+  export WITH_NVIDIA_PEERMEM=0
+  KV_PRODUCER='{"kv_connector":"MooncakeConnector","kv_role":"kv_producer","kv_connector_extra_config":{"host_staging":true,"staging_send_mib":512,"staging_recv_mib":6144,"num_workers":10,"mooncake_protocol":"rdma"}}'
+  KV_CONSUMER='{"kv_connector":"MooncakeConnector","kv_role":"kv_consumer","kv_connector_extra_config":{"host_staging":true,"staging_send_mib":512,"staging_recv_mib":6144,"num_workers":10,"mooncake_protocol":"rdma"}}'
 fi
 
 # Shared flag payload (identical on both roles): everything from the live

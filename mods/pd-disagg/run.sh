@@ -69,8 +69,9 @@ if [ "${PD_KV_BACKEND:-mooncake}" = "mooncake" ]; then
 # `from mooncake.store import ...`). The vllm-node-b12x image does not ship
 # the wheel; install it at boot if absent (mirrors the retired NIXL install
 # path). RDMA runtime deps (libmlx5/libibverbs) are already in the image.
-# Pin to the same version the sibling mooncake-store image runs.
-: "${PD_MOONCAKE_SPEC:=mooncake-transfer-engine-cuda13==0.3.12.post1}"
+# Pin to v0.3.13.post1: TCP deadline, handshake hardening, put completion,
+# data-corruption fix, host-memory segment sharing across TP.
+: "${PD_MOONCAKE_SPEC:=mooncake-transfer-engine-cuda13==0.3.13.post1}"
 if ! python3 -c 'import mooncake' >/dev/null 2>&1; then
     if [ "${PD_DISAGG_INSTALL_MOONCAKE:-1}" = "1" ]; then
         info "mooncake module missing; installing '${PD_MOONCAKE_SPEC}'"
