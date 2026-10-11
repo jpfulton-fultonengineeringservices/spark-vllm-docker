@@ -126,6 +126,8 @@ import sys
 path = "/usr/local/lib/python3.12/dist-packages/vllm/v1/core/kv_cache_utils.py"
 with open(path) as f:
     src = f.read()
+
+# 3a. is_kv_cache_spec_uniform: catch ValueError from merge_window_sizes
 old = """    except AssertionError:
         return False
     return True"""
@@ -140,6 +142,38 @@ elif old in src:
     print("[lmcache-offload] patched is_kv_cache_spec_uniform to catch ValueError (mixed-window probe)")
 else:
     print("[lmcache-offload] WARN: uniformity-probe patch target not found (fork drift?); continuing", file=sys.stderr)
+
+# 3b. Normalize mixed sliding_window values after promotion to None.
+# The normalization catches layers (e.g. DFlash drafter) that are already
+# FullAttentionSpec with a non-None window, which the drop in 3a doesn't
+# cover.  Code identical in structure to the vendored-source fix in
+# gpu-cluster-forks/vllm/vllm/v1/core/kv_cache_utils.py _promote_local_kv_cache_specs.
+fallback_promote = '''    if not (
+        is_kv_cache_spec_uniform(promoted_specs)
+        or UniformTypeKVCacheSpecs.is_uniform_type(promoted_specs)
+    ):
+        raise ValueError("Failed to promote local KV cache specs to one unified type.")'''
+fallback_after = '''    if not (
+        is_kv_cache_spec_uniform(promoted_specs)
+        or UniformTypeKVCacheSpecs.is_uniform_type(promoted_specs)
+    ):
+        for name, spec in promoted_specs.items():
+            if isinstance(spec, FullAttentionSpec) and spec.sliding_window is not None:
+                promoted_specs[name] = dataclasses.replace(spec, sliding_window=None)
+    if not (
+        is_kv_cache_spec_uniform(promoted_specs)
+        or UniformTypeKVCacheSpecs.is_uniform_type(promoted_specs)
+    ):
+        raise ValueError("Failed to promote local KV cache specs to one unified type.")'''
+if fallback_after in src:
+    print("[lmcache-offload] promote-local normalise-fallback patch already applied")
+elif fallback_promote in src:
+    with open(path, "w") as f:
+        f.write(src.replace(fallback_promote, fallback_after, 1))
+    print("[lmcache-offload] patched _promote_local_kv_cache_specs to normalise mixed windows")
+else:
+    print("[lmcache-offload] WARN: promote-local fallback patch target not found (fork drift?); continuing", file=sys.stderr)
+
 PYEOF
 
 # --- 4. Fork patch: GPU connector device ordinal must clamp to device_count() ---
