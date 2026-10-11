@@ -141,6 +141,19 @@ if [ "${PD_KV_BACKEND:-mooncake}" = "lmcache" ]; then
     fi
 fi  # PD_KV_BACKEND=lmcache
 
+# APC block-hash backend: dispatch.sh pins --prefix-caching-hash-algo xxhash
+# (1M-token contexts make sha256 hashing visible). The xxhash module is not
+# in the vllm-node-b12x image, and vLLM only raises ModuleNotFoundError the
+# first time it computes a block hash — killing EngineCore minutes into
+# serving. Install it unconditionally whenever the engine image lacks it.
+if ! python3 -c 'import xxhash' >/dev/null 2>&1; then
+    info "xxhash module missing; installing 'xxhash' (APC xxhash hashing)"
+    python3 -m pip install --no-cache-dir 'xxhash' >&2 \
+        || fail "op=install_xxhash reason=pip_failed hint='needed by --prefix-caching-hash-algo xxhash'"
+fi
+python3 -c 'import xxhash' >/dev/null 2>&1 \
+    || fail "op=import_xxhash reason=absent hint='bake xxhash into the engine image'"
+
 # --- 2.a. Fork patch: uniformity probe must not raise on mixed windows ---------
 # Same fix as mods/lmcache-offload/run.sh:110-143. With --disable-hybrid-kv-cache-
 # manager, get_kv_cache_groups() first runs unify_hybrid_kv_cache_specs(), which
