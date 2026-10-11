@@ -302,6 +302,9 @@ if [ "$NODE_RANK" -lt 2 ]; then
   fi
   if [ "${PD_DISABLE_HYBRID:-0}" = "1" ]; then
     PREFILL_CMD+=(--disable-hybrid-kv-cache-manager)
+    # DFlash draft model loads B12xNoncausalAttention (both prefill+decode)
+    # which requires bf16 KV dtype (b12x_noncausal.py:99 assertion). Override.
+    PREFILL_CMD+=(--kv-cache-dtype bfloat16)
   else
     # Skip-layers is for hybrid (DiffKV/SWA) groups; after HMA-unification
     # (~disable-hybrid) the sliding-window spec is promoted to full-attention
@@ -370,6 +373,7 @@ if [ "$NODE_RANK" -ge 2 ]; then
   fi
   if [ "${PD_DISABLE_HYBRID:-0}" = "1" ]; then
     DECODE_CMD+=(--disable-hybrid-kv-cache-manager)
+    DECODE_CMD+=(--kv-cache-dtype bfloat16)
   else
     DECODE_CMD+=(--kv-cache-dtype-skip-layers sliding_window)
   fi
