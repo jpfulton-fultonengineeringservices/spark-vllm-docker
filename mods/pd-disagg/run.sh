@@ -173,6 +173,40 @@ else:
     print("[pd-disagg] WARN: uniformity-probe patch target not found (fork drift?); continuing", file=sys.stderr)
 PYEOF
 
+# 3b. Normalize mixed sliding_window after promotion (same fix as lmcache-offload).
+python3 - <<'PYEOF2'
+import sys
+
+path = "/usr/local/lib/python3.12/dist-packages/vllm/v1/core/kv_cache_utils.py"
+with open(path) as f:
+    src = f.read()
+fallback_promote = '''    if not (
+        is_kv_cache_spec_uniform(promoted_specs)
+        or UniformTypeKVCacheSpecs.is_uniform_type(promoted_specs)
+    ):
+        raise ValueError("Failed to promote local KV cache specs to one unified type.")'''
+fallback_after = '''    if not (
+        is_kv_cache_spec_uniform(promoted_specs)
+        or UniformTypeKVCacheSpecs.is_uniform_type(promoted_specs)
+    ):
+        for name, spec in promoted_specs.items():
+            if isinstance(spec, FullAttentionSpec) and spec.sliding_window is not None:
+                promoted_specs[name] = dataclasses.replace(spec, sliding_window=None)
+    if not (
+        is_kv_cache_spec_uniform(promoted_specs)
+        or UniformTypeKVCacheSpecs.is_uniform_type(promoted_specs)
+    ):
+        raise ValueError("Failed to promote local KV cache specs to one unified type.")'''
+if fallback_after in src:
+    print("[pd-disagg] promote-local normalise-fallback patch already applied")
+elif fallback_promote in src:
+    with open(path, "w") as f:
+        f.write(src.replace(fallback_promote, fallback_after, 1))
+    print("[pd-disagg] patched _promote_local_kv_cache_specs to normalise mixed windows")
+else:
+    print("[pd-disagg] WARN: promote-local fallback patch target not found (fork drift?); continuing", file=sys.stderr)
+PYEOF2
+
 source "$MOD_DIR/mooncake-env.sh"
 
 # --- 2. publish env for dispatch.sh -------------------------------------
