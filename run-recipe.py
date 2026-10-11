@@ -824,6 +824,11 @@ Examples:
         dest="max_model_len",
         help="Override max model length",
     )
+    override_group.add_argument(
+        "--pd-kv-backend",
+        dest="pd_kv_backend",
+        help="Override defaults.pd_kv_backend (e.g. mooncake | lmcache)",
+    )
 
     # Launch options (passed to launch-cluster.sh)
     launch_group = parser.add_argument_group(
@@ -1317,6 +1322,7 @@ Examples:
         "tensor_parallel",
         "gpu_memory_utilization",
         "max_model_len",
+        "pd_kv_backend",
     ]:
         value = getattr(args, key, None)
         if value is not None:
