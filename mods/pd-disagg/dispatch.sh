@@ -199,6 +199,11 @@ if [ "${PD_KV_BACKEND:-mooncake}" = "lmcache" ]; then
   KV_CONSUMER="{\"kv_connector\":\"LMCacheMPConnector\",\"kv_role\":\"kv_consumer\",\"kv_connector_extra_config\":${LMCACHE_MP_EXTRA}}"
   # MP connector owns cache management -> vLLM-level prefix caching must be off.
   PD_PREFIX_CACHING=0
+  # LMCacheMPConnector declares SupportsHMA, keeping hybrid KV cache manager
+  # ON -> MiMo's DiffKV/SWA layers produce multiple KVCacheGroups -> rejected
+  # by connector's reformat_block_ids() and worker's _single_group_block_ids().
+  # --disable-hybrid-kv-cache-manager collapses groups into one for LMCache.
+  PD_DISABLE_HYBRID=1
   echo "$PREFIX kv_backend=lmcache mp=${LMCACHE_MP_HOST}:${LMCACHE_MP_PORT} prefix_caching=off"
 else
   KV_PRODUCER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_producer","kv_connector_extra_config":{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048}}'
@@ -296,6 +301,9 @@ if [ "$NODE_RANK" -lt 2 ]; then
   if [ "$PD_PREFIX_CACHING" = "1" ]; then
     PREFILL_CMD+=(--enable-prefix-caching)
   fi
+  if [ "${PD_DISABLE_HYBRID:-0}" = "1" ]; then
+    PREFILL_CMD+=(--disable-hybrid-kv-cache-manager)
+  fi
   # Outer-engine trailing args (post-`--`, e.g. OTLP trace flags) forwarded
   # verbatim to the prefill engine.
   PREFILL_CMD+=("${PD_ENGINE_ARGS[@]+"${PD_ENGINE_ARGS[@]}"}")
@@ -356,6 +364,9 @@ if [ "$NODE_RANK" -ge 2 ]; then
   # LMCache MP mode owns cache management -> no vLLM prefix caching.
   if [ "$PD_PREFIX_CACHING" = "1" ]; then
     DECODE_CMD+=(--enable-prefix-caching)
+  fi
+  if [ "${PD_DISABLE_HYBRID:-0}" = "1" ]; then
+    DECODE_CMD+=(--disable-hybrid-kv-cache-manager)
   fi
   # Outer-engine trailing args (post-`--`) forwarded verbatim to the decode
   # engine as well, so trace/metric flags apply symmetrically to both roles.
