@@ -188,7 +188,13 @@ PD_PREFIX_CACHING=1
 if [ "${PD_KV_BACKEND:-mooncake}" = "lmcache" ]; then
   LMCACHE_MP_HOST="${LMCACHE_MP_HOST:-tcp://127.0.0.1}"
   LMCACHE_MP_PORT="${LMCACHE_MP_PORT:-5555}"
-  LMCACHE_MP_EXTRA="{\"lmcache.mp.host\":\"${LMCACHE_MP_HOST}\",\"lmcache.mp.port\":${LMCACHE_MP_PORT}}"
+  # transfer_mode=engine_driven: the default "auto" routes CUDA traffic to the
+  # lmcache_driven zero-copy path, whose cross-container CUDA IPC buffer
+  # mapping (_new_shared_cuda -> cudaErrorMapBufferObjectFailed) fails on GB10
+  # unified memory between the vLLM container and the MP-server container.
+  # engine_driven does the gather/scatter copy worker-side over ZMQ instead.
+  # The MP server loads BOTH modules under "auto", so no server-side flag.
+  LMCACHE_MP_EXTRA="{\"lmcache.mp.host\":\"${LMCACHE_MP_HOST}\",\"lmcache.mp.port\":${LMCACHE_MP_PORT},\"lmcache.mp.mp_transfer_mode\":\"engine_driven\"}"
   KV_PRODUCER="{\"kv_connector\":\"LMCacheMPConnector\",\"kv_role\":\"kv_producer\",\"kv_connector_extra_config\":${LMCACHE_MP_EXTRA}}"
   KV_CONSUMER="{\"kv_connector\":\"LMCacheMPConnector\",\"kv_role\":\"kv_consumer\",\"kv_connector_extra_config\":${LMCACHE_MP_EXTRA}}"
   # MP connector owns cache management -> vLLM-level prefix caching must be off.
