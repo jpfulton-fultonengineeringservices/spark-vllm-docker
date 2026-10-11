@@ -183,7 +183,7 @@ fork branch `cuda13.3-aarch64-gb10-glm5next-modular` (tip `4e79d6be6f`)"
   connector package target is
   `vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store`
   (`installer.py:20`).
-- What it installs (the matched 8-file set): `worker.py` (md5 `b11bd659…`), `data.py`,
+- What it installs (the matched 8-file set): `worker.py` (md5 `09388dea…`), `data.py`,
   `connector.py`, `scheduler.py`, `coordinator.py`, `protocol.py`, `metrics.py`,
   `__init__.py` (`README.md:38-43`); shipped because the FES `worker.py` reads
   `ReqMeta.partial_tail_offloads` while the stock image `data.py` defines
@@ -195,7 +195,7 @@ fork branch `cuda13.3-aarch64-gb10-glm5next-modular` (tip `4e79d6be6f`)"
   The b12x image ships the upstream connector (worker md5 `b180493c…`, 2633 lines,
   `host_staging` count 0) which predates the staging series (`README.md:32-34`).
 - Gates: `gates.verify_vendor()`, `gates.classify_installed()` → `stock` (`b180493c…`) |
-  `already_ported` (`b11bd659…`) | `unknown`; installer **fails closed** on `unknown`
+  `already_ported` (`09388dea…`) | `unknown`; installer **fails closed** on `unknown`
   (`README.md:52-57`; md5 constants at `src/mooncake_worker/gates.py:14-16`).
   `envs_shim.inject()` adds a `vllm.envs` dict entry (not annotation) for
   `VLLM_PREFIX_CACHE_RETENTION_INTERVAL` (FES default `None`), anchor-count-gated,
