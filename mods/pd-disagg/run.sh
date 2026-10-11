@@ -141,6 +141,38 @@ if [ "${PD_KV_BACKEND:-mooncake}" = "lmcache" ]; then
     fi
 fi  # PD_KV_BACKEND=lmcache
 
+# --- 2.a. Fork patch: uniformity probe must not raise on mixed windows ---------
+# Same fix as mods/lmcache-offload/run.sh:110-143. With --disable-hybrid-kv-cache-
+# manager, get_kv_cache_groups() first runs unify_hybrid_kv_cache_specs(), which
+# probes uniformity via is_kv_cache_spec_uniform(). That probe calls
+# specs[0].merge(all) and catches ONLY AssertionError -- but
+# FullAttentionSpec.merge's merge_window_sizes() raises ValueError on a mixed
+# window set (MiMo: SWA layers window=128 vs full-attention layers window=None).
+# Catching ValueError lets the probe correctly report "not uniform"; per-layer
+# promotion then yields FullAttentionSpec(128)/FullAttentionSpec(None), which
+# FullAttentionSpec.merge unifies by filtering None windows -> single group.
+python3 - <<'PYEOF'
+import sys
+
+path = "/usr/local/lib/python3.12/dist-packages/vllm/v1/core/kv_cache_utils.py"
+with open(path) as f:
+    src = f.read()
+old = """    except AssertionError:
+        return False
+    return True"""
+new = """    except (AssertionError, ValueError):
+        return False
+    return True"""
+if new in src:
+    print("[pd-disagg] kv_cache_utils uniformity-probe patch already applied")
+elif old in src:
+    with open(path, "w") as f:
+        f.write(src.replace(old, new, 1))
+    print("[pd-disagg] patched is_kv_cache_spec_uniform to catch ValueError (mixed-window probe)")
+else:
+    print("[pd-disagg] WARN: uniformity-probe patch target not found (fork drift?); continuing", file=sys.stderr)
+PYEOF
+
 source "$MOD_DIR/mooncake-env.sh"
 
 # --- 2. publish env for dispatch.sh -------------------------------------
