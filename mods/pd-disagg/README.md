@@ -7,13 +7,16 @@ KV transfer (hash-dedup'd distributed KV pool, NVMe-durable across restarts).
 Topology (4 nodes, `NNODES=4` fail-closed):
 
 - Ranks 0–1 (gx10-node1, gx10-node2): **PREFILL** — EXL3 TP=2 sub-group
-  (NCCL init port 29501), API 8100, `kv_role=kv_producer`. Rank 0 also runs
-  the pd-proxy (port 8000).
+  (NCCL init port 29501), API 8100, `kv_role=kv_producer`.
 - Ranks 2–3 (gx10-node3, gx10-node4): **DECODE** — EXL3 TP=2 sub-group with
   DFlash (init port 29502), API 8200, `kv_role=kv_consumer`.
 - **mooncake-master** (rank-0 node only): sibling container from the dedicated
   `mooncake-store` image, metadata-only TCP on 50051 (`--network host`; no
   GPUs, no uverbs).
+- **vllm-router** (rank-0 node only): sibling `vllm/vllm-router` container
+  owned by cluster-config serve.sh compose — upstream Rust router in
+  `--vllm-pd-disaggregation` mode; OpenAI API :8000, Prometheus :29000.
+  NOT an in-engine process.
 - **mooncake-client** (every node): sibling container from the dedicated
   image; owns the node's 16 GiB DRAM segment + 100 GiB NVMe SSD offload tier;
   RoCE RDMA via `roceP2p1s0f1` (uverbs1/uverbs3 + rdma_cm, memlock=-1);
@@ -30,7 +33,7 @@ flowchart LR
     P0["PREFILL rank 0<br/>EXL3 TP=2, API 8100<br/>kv_producer"]
     MM["mooncake-master<br/>:50051 metadata-only"]
     MC1["mooncake-client<br/>:50053 DRAM+SSD"]
-    PX["pd-proxy<br/>:8000"]
+    RT["vllm-router<br/>:8000 API, :29000 /metrics"]
   end
   subgraph N2["gx10-node2 (rank 1)"]
     P1["PREFILL rank 1 --headless<br/>kv_producer"]
@@ -44,8 +47,8 @@ flowchart LR
     D3["DECODE rank 3 --headless"]
     MC4["mooncake-client :50053"]
   end
-  PX -->|:8000 /v1| P0
-  PX -->|decode| D2
+  RT -->|:8000 /v1| P0
+  RT -->|decode| D2
   P0 -->|"KV PUT (host-staged RDMA)"| MC1
   P1 -->|"KV PUT"| MC2
   D2 -->|"KV GET (node-local preferred)"| MC3
@@ -53,7 +56,7 @@ flowchart LR
   MC1 & MC2 & MC3 & MC4 -->|"register / lookup"| MM
 ```
 
-Port map: 8000 (pd-proxy), 8100 (prefill API), 8200 (decode API),
+Port map: 8000 (vllm-router API), 29000 (vllm-router /metrics), 8100 (prefill API), 8200 (decode API),
 50051 (mooncake-master), 50053 (mooncake-client). No NIXL 5600.
 
 ## Environment variables
@@ -74,8 +77,7 @@ Port map: 8000 (pd-proxy), 8100 (prefill API), 8200 (decode API),
 | `PYTHONHASHSEED` | **MUST be `0`** — hash-based dedup silently breaks otherwise | `0` | mooncake-env.sh |
 | `PD_DECODE_MASTER_ADDR` | Decode sub-group master IP (REQUIRED, NNODES=4) | — | serve.sh `-e` |
 | `PD_DECODE_NODE_IPS` | Decode ranks' IPs CSV (rank-2 first) | — | serve.sh `-e` |
-| `PD_ROUTER_ENABLED` / `PD_ROUTER_PORT` / `PD_ROUTER_START_DELAY` | Proxy control | `1` / `8000` / `30` | recipe env |
-| `PD_ROUTER_SCRIPT` | Proxy override path | mod-local `pd_proxy.py` | dispatch.sh |
+| `PD_ROUTER_PORT` | vllm-router container API port (compose config; recipe default feeds serve.sh) | `8000` | serve.sh |
 | `PD_TP_PREFILL` / `PD_TP_DECODE` | Sub-group TP (MUST be 2) | `2` | dispatch.sh |
 
 Shared parity vars (`PD_NUM_SPECULATIVE_TOKENS=7`, `PD_BLOCK_SIZE=128`,
@@ -113,12 +115,16 @@ Select with recipe `pd_kv_backend: lmcache` (or `PD_KV_BACKEND=lmcache` in env).
 | `LMCACHE_MOONCAKE_GLOBAL_SEGMENT_BYTES` | MP server's registered segment | `17179869184` (16 GiB) |
 | `LMCACHE_MOONCAKE_LOCAL_BUFFER_BYTES` | MP server's local buffer | `4294967296` (4 GiB) |
 | `LMCACHE_SUPPORTED_TRANSFER_MODE` | MP server transfer mode; MUST match the connector | `engine_driven` |
+| `LMCACHE_L2_DISABLED` | Disable all L2 adapters (parity default 2026-10-11; L1-only fallback for upstream engine_driven L2 prefetch bug) | `1` |
 
 The per-node MP server is `lmcache server` from
 `infra/cluster-config/docker/lmcache-server/Dockerfile`, launched via
 `infra/cluster-config/scripts/lmcache-server-entrypoint.sh` (its `mooncake_store`
 L2 block is gated on `LMCACHE_MOONCAKE_MASTER_ADDR`, with `--no-l1-use-lazy` for
 the RDMA L1 preregistration the adapter requires).
+When `LMCACHE_L2_DISABLED=1` (the 2026-10-11 parity default), ALL L2 adapter
+blocks are skipped — the MP server runs L1-only (host DRAM). See the "lmcache L2
+parity default" section below.
 
 ### lmcache runtime notes (GB10, verified live)
 
@@ -143,6 +149,24 @@ the RDMA L1 preregistration the adapter requires).
 - **MPServerConfig `supported_transfer_mode` default is `lmcache_driven`**,
   not `auto` — do not assume both modules load.
 
+### lmcache L2 parity default (2026-10-11)
+
+The LMCache 0.5.5rc1 engine_driven L2 prefetch path has two upstream bugs
+that deadlock the vLLM scheduler — see
+`docs/pd-router/lmcache-parity-fixes.md` for the full root-cause analysis with
+live-metric and py-spy evidence. Until the upstream fixes ship in a wheel
+bump, the lmcache MP recipe runs **L1-only** as the parity configuration:
+`LMCACHE_L2_DISABLED=1` (set in `cluster.env`, gated in
+`lmcache-server-entrypoint.sh`) skips all L2 adapters (mooncake_store,
+fs_native, valkey, P2P). The MP server still owns L1 (host DRAM) and the
+engine_driven ZMQ+CUDA-IPC transfer path; lookups resolve immediately from L1
+(`submit_prefetch_task` returns `prefetch_request_id=-1` →
+`query_prefetch_status` returns `l1_hit_chunks` synchronously → no
+None-forever wedge). KV transfer between prefill and decode roles still works
+— the L1 host-DRAM pool is the hot cache; L2 (NFS/valkey/mooncake/P2P) was
+only the persistent/cross-instance tier. Set `LMCACHE_L2_DISABLED=0` (or
+unset) to re-enable L2 adapters once the upstream fixes land.
+
 ## Deployment
 
 1. Recipe `recipes/pd-disagg-mimo-uncensored-exl3-4x.yaml` (mods: fes-weights,
@@ -158,8 +182,10 @@ the RDMA L1 preregistration the adapter requires).
    `-e` vars from `--rank-order` + `NODE_RAILB_IPS` (same pattern as
    `PD_DECODE_MASTER_ADDR`).
 3. Health: `docker ps` shows `mooncake-master` (rank-0 only) +
-   `mooncake-client` (4x); `/v1/models` on 8100 and 8200 → 200;
-   `:8000/v1/chat/completions` round-trips.
+   `mooncake-client` (4x) + `vllm-router` (rank-0 only); `/v1/models` on
+   8100 and 8200 → 200; `:8000/v1/chat/completions` round-trips through
+   the router; `:29000/metrics` → 200 and exposes `pd_*` counters +
+   `vllm_router_pd_requests_total`.
 
 ## Constraints
 
@@ -177,9 +203,12 @@ the RDMA L1 preregistration the adapter requires).
 
 ## Provenance
 
-- Proxy: `infra/cluster-config/docker/pd-proxy/pd_proxy.py` (byte-identical
-  copy shipped as `mods/pd-disagg/pd_proxy.py`, sha256
-  `fd2a5cb23c3bafcd6f009d369ed0114c5ab50eb441f09fa15e73ac9e8d79154d`).
+- Request router: upstream `vllm-project/router` (`vllm/vllm-router` image,
+  pinned in `infra/cluster-config/cluster.env`), run as a rank-0 sibling
+  container by cluster-config serve.sh compose — NOT shipped in this mod.
+  The retired Python proxy (`pd_proxy.py`, sha256
+  `fd2a5cb23c3bafcd6f009d369ed0114c5ab50eb441f09fa15e73ac9e8d79154d`) is
+  removed; see `docs/pd-router/cutover-vllm-router.md`.
 - Daemon units mirrored from `infra/cluster-config/templates/mooncake-{master,client}.service.tmpl`
   and `scripts/setup-mooncake-pd.sh` (qwen38 store-only deployment).
 - Prior art: `nixl-gb10-optimization/.kilo/plans/1787311123732-mooncake-store-only-migration.md`,
