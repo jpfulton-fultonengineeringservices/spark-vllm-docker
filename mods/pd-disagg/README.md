@@ -109,6 +109,7 @@ Select with recipe `pd_kv_backend: lmcache` (or `PD_KV_BACKEND=lmcache` in env).
 | `LMCACHE_MOONCAKE_WORKERS` | native connector worker threads | `4` |
 | `LMCACHE_MOONCAKE_GLOBAL_SEGMENT_BYTES` | MP server's registered segment | `17179869184` (16 GiB) |
 | `LMCACHE_MOONCAKE_LOCAL_BUFFER_BYTES` | MP server's local buffer | `4294967296` (4 GiB) |
+| `LMCACHE_SUPPORTED_TRANSFER_MODE` | MP server transfer mode; MUST match the connector | `engine_driven` |
 
 The per-node MP server is `lmcache server` from
 `infra/cluster-config/docker/lmcache-server/Dockerfile`, launched via
@@ -116,14 +117,38 @@ The per-node MP server is `lmcache server` from
 L2 block is gated on `LMCACHE_MOONCAKE_MASTER_ADDR`, with `--no-l1-use-lazy` for
 the RDMA L1 preregistration the adapter requires).
 
+### lmcache runtime notes (GB10, verified live)
+
+- **Transfer mode must be `engine_driven` on BOTH sides.** The default
+  `auto`/`lmcache_driven` path shares KV via cross-container CUDA IPC
+  (`_new_shared_cuda`), which fails on GB10 unified memory with
+  `cudaErrorMapBufferObjectFailed`; the engine then dies `LMCache server did
+  not respond to register_kv_caches within 300s`. The vLLM side sets
+  `lmcache.mp.mp_transfer_mode=engine_driven` (dispatch.sh); the MP server
+  sets `--supported-transfer-mode engine_driven` (entrypoint; the server's
+  own default is `lmcache_driven`, which loads no engine_driven handler).
+- **Segment sizing is shared on GB10.** The MP server's `mooncake_store`
+  segment comes out of the same unified pool as vLLM's KV budget, so it is
+  sized from the recipe's `pd_mooncake_segment_size_gib` (served through the
+  MP-server systemd drop-in), NOT the entrypoint's 16 GiB default.
+- **The standalone `mooncake-client` cohort must NOT run** in lmcache mode —
+  the MP server's L2 adapter self-registers its own segment. serve.sh gates
+  the client behind the compose `client` profile and only starts master+MP.
+- **Boot install**: the `vllm-node-b12x` engine image lacks the `lmcache`
+  package (+ 6 deps), so `run.sh` installs the wheel + filtered requirements
+  at boot for `PD_KV_BACKEND=lmcache`.
+- **MPServerConfig `supported_transfer_mode` default is `lmcache_driven`**,
+  not `auto` — do not assume both modules load.
+
 ## Deployment
 
 1. Recipe `recipes/pd-disagg-mimo-uncensored-exl3-4x.yaml` (mods: fes-weights,
    mimo-v2.6-flash, mimo-diffkv-fp8-kv, kv-cache-guard-override, exl3-mimo,
    pd-disagg, b12x-kernel-cache, b12x-reclaim-gate).
-2. `cluster-config/scripts/spark-vllm-docker-serve.sh --recipe
+2. `cluster-config/scripts/spark-vllm-docker-serve.sh launch --recipe
    pd-disagg-mimo-uncensored-exl3-4x --rank-order <4 hosts> --recreate
-   --daemon` — serve.sh starts mooncake-master (rank-0 host) and
+   --daemon` (add `--kv-backend lmcache` for the MP path) — serve.sh starts
+   mooncake-master (rank-0 host) and
    mooncake-client (every host) as sibling containers from the
    `mooncake-store:v0.3.12.post1-1` image BEFORE launching the engines,
    then derives `MOONCAKE_MASTER_SERVER_ADDRESS` and the decode-subgroup
