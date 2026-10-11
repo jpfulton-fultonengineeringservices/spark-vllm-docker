@@ -38,7 +38,8 @@ staging series.
 `vendor/store/` — all eight files move together because the FES `worker.py`
 reads `ReqMeta.partial_tail_offloads` while the stock image `data.py` defines
 `boundary_state_offloads` (b12x/DiffKV lineage): a lone-worker swap would
-`AttributeError`. `worker.py` (md5 `b11bd659baf724298b2f347dad503b4e`),
+`AttributeError`. `worker.py` (md5 `09388dea01fd935d7cb0335fb0cf736e` —
+2026-10-11 lookup-client timeout hardening),
 `data.py`, `connector.py`, `scheduler.py`, `coordinator.py`, `protocol.py`,
 `metrics.py`, `__init__.py`.
 
@@ -52,7 +53,7 @@ store-only path.
 - `gates.verify_vendor()` — vendor set complete, every file parses, worker md5
   == branch tip.
 - `gates.classify_installed()` — `stock` (`b180493c…`) | `already_ported`
-  (`b11bd659…`) | `unknown`.
+  (`09388dea…`) | `unknown`.
 - Installer **fails closed** on `unknown` (image drift): re-port the vendored
   set, never blind-overwrite.
 - `envs_shim.inject()` — `vllm.envs` resolves attributes through its

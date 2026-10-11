@@ -18,7 +18,9 @@ MD5_STOCK_WORKER = "b180493c964225f6a9282b30a47fb967"
 # The vendored branch tip
 # (Fulton-Engineering-Services/vllm @ cuda13.3-aarch64-gb10-glm5next-modular,
 #  4e79d6be6f, 2574 lines — carries the completed host-staging series).
-MD5_MOD_WORKER = "b11bd659baf724298b2f347dad503b4e"
+# 2026-10-11: + LookupKeyClient SND/RCVTIMEO + rebuild-on-Again (2574→2619
+# lines, fix-prefill-lookup-livelock).
+MD5_MOD_WORKER = "09388dea01fd935d7cb0335fb0cf736e"
 
 PACKAGE_FILES: tuple[str, ...] = (
     "__init__.py",
