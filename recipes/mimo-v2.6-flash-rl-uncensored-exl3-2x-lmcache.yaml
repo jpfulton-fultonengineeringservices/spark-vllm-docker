@@ -55,6 +55,7 @@ mods:
   - mods/mimo-diffkv-fp8-kv
   - mods/kv-cache-guard-override
   - mods/b12x-kernel-cache
+  - mods/b12x-reclaim-gate
   - mods/lmcache-offload
 
 defaults:
@@ -91,6 +92,14 @@ env:
   # exec (separate process), so the pointer lives here.
   LMCACHE_OFFLOAD_ENABLED: "1"
   LMCACHE_CONFIG_FILE: "/tmp/lmcache-config.yaml"
+  # b12x-reclaim-gate: LMCacheConnectorV1 registers KV memory, which joins
+  # b12x's retained-owner set -- the same condition that makes b12x's
+  # evict_unretained reclamation sweep spin at 100% CPU with no cycle guard
+  # (observed live 2026-10-11: worker wedged in
+  # b12x/_lib/compile_plan.py retained_program_keys via evict_unretained,
+  # determine_available_memory never returning). Skip the sweep. See
+  # mods/b12x-reclaim-gate/README.md.
+  B12X_SKIP_RECLAIM: "1"
 
 command: |
   # LMCacheConnectorV1 pins/registers KV memory; PyTorch's CUDA-VMM
