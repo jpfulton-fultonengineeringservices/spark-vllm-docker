@@ -93,6 +93,12 @@ env:
   LMCACHE_CONFIG_FILE: "/tmp/lmcache-config.yaml"
 
 command: |
+  # LMCacheConnectorV1 pins/registers KV memory; PyTorch's CUDA-VMM
+  # expandable_segments remaps KV virtual addresses and invalidates registered
+  # memory (the same constraint the PD dispatch.sh unsets at mods/pd-disagg/
+  # dispatch.sh:80-85; vLLM errors at boot if it's set without the cumem
+  # allocator). launch-cluster.sh exports expandable_segments:True by default.
+  unset PYTORCH_CUDA_ALLOC_CONF
   b12x-kcache exec vllm serve XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3 \
       --trust-remote-code \
       --host {host} \
