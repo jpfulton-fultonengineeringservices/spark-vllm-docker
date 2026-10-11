@@ -109,6 +109,19 @@ class MooncakeStoreScheduler:
         if request.num_tokens < align:
             return 0, False
 
+        # Idempotent re-entry: the scheduler can revisit a still-waiting
+        # request across steps. Re-running the lookup here would both
+        # re-issue a blocking store round-trip AND clobber an existing
+        # LoadSpec's can_load (set by update_state_after_alloc), which
+        # permanently stalls the load. Once a spec exists, return its
+        # derived need without touching the client or the spec.
+        existing = self.load_specs.get(request.request_id)
+        if existing is not None:
+            need = existing.kvpool_cached_tokens - existing.vllm_cached_tokens
+            if need <= 0:
+                return 0, False
+            return need, self.load_async
+
         num_external_hit_tokens = self.client.lookup(
             request.request_id,
             request.num_tokens,

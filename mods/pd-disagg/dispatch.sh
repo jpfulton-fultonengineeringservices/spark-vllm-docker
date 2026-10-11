@@ -211,10 +211,18 @@ else
   # prefix-cache lookup enabled made the prefill scheduler block on a
   # ZMQ lookup against STALE keys (persisted across boots) and defer every
   # request forever in WAITING_FOR_REMOTE_KVS (running=0, waiting grows),
-  # leaking litellm's max_parallel_requests slots. The CONSUMER (decode)
-  # keeps the lookup — that IS the PD KV transfer path.
+ # leaking litellm's max_parallel_requests slots. CONSUMER (decode)
+ # keeps lookup — IS PD KV transfer path.
   KV_PRODUCER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_producer","kv_connector_extra_config":{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048,"enable_lookup":false}}'
-  KV_CONSUMER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_consumer","kv_connector_extra_config":{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048}}'
+  # lookup_async=true on the CONSUMER (decode): the decoder legitimately
+  # looks up prefill's KV in the store, but with lookup_async=false (the
+  # default) that blocking ZMQ round-trip runs on the scheduler's critical
+  # path every schedule pass. A miss/re-entry then re-issued a blocking
+  # lookup that wedged the decode EngineCore (running=0, 2 requests stuck
+  # deferred) exactly like the producer wedge. Non-blocking lookup returns
+  # None while in flight (scheduler retries without blocking) and the load
+  # issues as soon as the lookup resolves.
+  KV_CONSUMER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_consumer","kv_connector_extra_config":{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048,"lookup_async":true,"load_async":true}}'
 fi
 
 # Shared flag payload (identical on both roles): everything from the live
