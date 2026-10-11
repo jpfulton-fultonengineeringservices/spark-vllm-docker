@@ -119,7 +119,6 @@ command: |
       --block-size {block_size} \
       --max-model-len {max_model_len} \
       --kv-cache-dtype fp8 \
-      --kv-cache-dtype-skip-layers sliding_window \
       --max-num-seqs {max_num_seqs} \
       --max-num-batched-tokens {max_num_batched_tokens} \
       --gpu-memory-utilization {gpu_memory_utilization} \
