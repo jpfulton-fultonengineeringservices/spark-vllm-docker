@@ -209,6 +209,58 @@ PYEOF2
 
 source "$MOD_DIR/mooncake-env.sh"
 
+# --- 3b. Engine-driven transfer: collapse identical multi-group block ids ---
+# With PD_DISABLE_HYBRID=1 the engine runs a single KV pool, but LMCache may
+# still split layers into multiple groups by physical identity (MiMo's
+# SWA/full-attention tensor sets). expand_engine_block_ids() then hands the
+# worker one inner list per LMCache group and _single_group_block_ids()
+# hard-rejects len != 1, failing every store/retrieve with
+# "engine-driven transfer does not support hybrid KV cache groups". Under a
+# disabled hybrid manager every group draws from the same engine pool, so
+# divergent per-group lists would be a real defect; identical lists are the
+# expected shape. Collapse identical lists, fail closed on divergence.
+if [ "${PD_KV_BACKEND:-mooncake}" = "lmcache" ]; then
+python3 - <<'PYEOF3'
+import sys
+
+path = "/usr/local/lib/python3.12/dist-packages/lmcache/v1/multiprocess/transfer_context/worker_transfer.py"
+with open(path) as f:
+    src = f.read()
+old = '''def _single_group_block_ids(block_ids: list[list[int]]) -> list[int]:
+    """Return the flat block-id list for transports without HMA support."""
+    if len(block_ids) != 1:
+        raise RuntimeError(
+            "engine-driven transfer does not support hybrid KV cache groups"
+        )
+    return block_ids[0]'''
+new = '''def _single_group_block_ids(block_ids: list[list[int]]) -> list[int]:
+    """Return the flat block-id list for transports without HMA support.
+
+    Under --disable-hybrid-kv-cache-manager the engine has one pool, so every
+    group's list must be identical; collapse that case instead of raising.
+    Divergent lists still fail closed (real hybrid manager defect).
+    """
+    if len(block_ids) > 1 and any(b != block_ids[0] for b in block_ids[1:]):
+        raise RuntimeError(
+            "engine-driven transfer does not support hybrid KV cache groups "
+            "(divergent per-group block ids: "
+            + ",".join(str(len(b)) for b in block_ids)
+            + ")"
+        )
+    if not block_ids:
+        return []
+    return block_ids[0]'''
+if new in src:
+    print("[pd-disagg] engine-driven collapse patch already applied")
+elif old in src:
+    with open(path, "w") as f:
+        f.write(src.replace(old, new, 1))
+    print("[pd-disagg] patched _single_group_block_ids to collapse identical multi-group block ids")
+else:
+    print("[pd-disagg] WARN: engine-driven collapse patch target not found (fork drift?); continuing", file=sys.stderr)
+PYEOF3
+fi
+
 # --- 2. publish env for dispatch.sh -------------------------------------
 pd_num_speculative_tokens="${PD_NUM_SPECULATIVE_TOKENS:-7}"
 pd_block_size="${PD_BLOCK_SIZE:-128}"
