@@ -132,7 +132,7 @@ defaults:
   # PD_DECODE_GMU to 0.7 (same proven ~55 GB/rank 2x footprint per role).
   pd_tp_prefill: 2
   pd_tp_decode: 2
-  # REQUIRED at NNODES=4 (decode ranks 2-3 rendezvous): rank-2 host IP,
+  # REQUIRED NNODES=4 (decode ranks 2-3 rendezvous): rank-2 host IP,
   # auto-derived by serve.sh from --rank-order and passed via docker -e.
   # Deliberately NOT a command-template placeholder: run-recipe.py renders
   # command: with str.format(**params) at script-generation time, so an
@@ -153,6 +153,13 @@ env:
   PD_DISAGG_ENABLED: "1"
   # Consumed by run.sh (env) AND dispatch.sh; "lmcache" enables the LMCache MP path.
   PD_KV_BACKEND: "{pd_kv_backend}"
+  # GMU: on GB10 the unified pool is shared with the per-node LMCache MP
+  # server (~14 GiB: 1 GiB L1 + 8 GiB mooncake_store segment + 4 GiB buffer)
+  # and the bge-m3 embed co-tenant, so the vLLM role budget must leave room.
+  # dispatch.sh defaults (0.65 prefill / 0.68 decode) put decode ~0.2 GiB
+  # short (81.73 free vs 81.94 desired) and the engine dies at startup.
+  PD_PREFILL_GMU: "0.62"
+  PD_DECODE_GMU: "0.64"
   # toy_proxy_server on rank 0 only (PD_ROUTER_START_DELAY default 30s).
   PD_ROUTER_ENABLED: "1"
   # b12x-kcache wrapper (mods/b12x-kernel-cache): "b12x-kcache exec vllm serve".
