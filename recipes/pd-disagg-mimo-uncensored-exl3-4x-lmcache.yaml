@@ -152,8 +152,15 @@ defaults:
 
 env:
   PD_DISAGG_ENABLED: "1"
-  # Consumed by run.sh (env) AND dispatch.sh; "lmcache" enables the LMCache MP path.
-  PD_KV_BACKEND: "{pd_kv_backend}"
+  # PD_KV_BACKEND is deliberately NOT set here: run-recipe.py emits env: values
+  # VERBATIM (no str.format), so a "{pd_kv_backend}" placeholder would export the
+  # literal string. The command: line below sets PD_KV_BACKEND={pd_kv_backend}
+  # (correctly substituted) as a prefix on the dispatch.sh invocation, which
+  # covers dispatch.sh AND the run.sh it sources in-process. A bare export here
+  # is redundant at best -- and harmful when dispatch.sh is run without the
+  # prefix (e.g. a manual docker exec): the literal "{pd_kv_backend}" matches
+  # neither "mooncake" nor "lmcache", so run.sh silently falls into the mooncake
+  # branch and dies at mooncake-env.sh:33 (MOONCAKE_MASTER_SERVER_ADDRESS required).
   # toy_proxy_server on rank 0 only (PD_ROUTER_START_DELAY default 30s).
   PD_ROUTER_ENABLED: "1"
   # b12x-kcache wrapper (mods/b12x-kernel-cache): "b12x-kcache exec vllm serve".
