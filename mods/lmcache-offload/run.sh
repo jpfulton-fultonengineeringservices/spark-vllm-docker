@@ -104,8 +104,7 @@ local_disk: ${L2_DIR}
 max_local_disk_size: ${DISK_GIB}
 save_unfull_chunk: false
 save_decode_cache: true
-remote_storage_plugins:
-  - "valkey://10.10.10.53:6379"
+remote_url: "valkey://10.10.10.53:6379"
 EOF
 
 # --- 3. Fork patch: uniformity probe must not raise on mixed windows ----------
@@ -143,4 +142,4 @@ else:
     print("[lmcache-offload] WARN: uniformity-probe patch target not found (fork drift?); continuing", file=sys.stderr)
 PYEOF
 
-echo "$PREFIX ok config=${CONFIG_FILE} l1=${L1_GIB}G l2_disk=${DISK_GIB}G dir=${L2_DIR} l2_valkey=10.10.10.53:6379"
+echo "$PREFIX ok config=${CONFIG_FILE} l1=${L1_GIB}G l2_disk=${DISK_GIB}G dir=${L2_DIR} l2_remote=valkey://10.10.10.53:6379"
