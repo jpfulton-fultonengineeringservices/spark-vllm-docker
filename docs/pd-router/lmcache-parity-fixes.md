@@ -353,17 +353,47 @@ worker pings from the moment it registers its layout.
   controller in_flight=0/completed=0).
 - **Fix shipped:** L1-only config (`LMCACHE_L2_DISABLED=1`) — config-level,
   no wheel rebuild, no destructive relaunch.
-- **Live verification:** NOT run in-session. The lmcache twin relaunch
-  (config-only, via `spark-vllm-docker-serve.sh --recipe
-  pd-disagg-mimo-uncensored-exl3-4x-lmcache --rank-order ... --recreate
-  --daemon`) is deferred to Phase 5 (the mooncake twin is verified
-  first; the lmcache twin may proceed whenever the config is ready). The
-  3600s heartbeat retention is not verifiable in-session (the worker was
-  already reaped). Phase 5 will verify: `request_success_total > 0`
-  under sustained load, no `core.py:1591` spin, MP server
-  `completed_results_count` advances (or stays 0 with L1-only and no
-  L2 prefetch), and no reap with `LMCACHE_L2_DISABLED=1` (no L2 adapters
-  → no prefetch controller involvement → no lookup job to vanish).
+- **Live verification (2026-10-11 ~20:05Z, post-relaunch):** the lmcache
+  twin was relaunched with `--recreate` on all 4 nodes
+  (`spark-vllm-docker-serve.sh launch --recipe
+  pd-disagg-mimo-uncensored-exl3-4x-lmcache --rank-order
+  gx10-cb11:0,gx10-f1d8:1,gx10-becc:2,gx10-9273:3 --mode staged --daemon
+  --recreate`). Acceptance battery results:
+  - `request_success_total > 0` under sustained load: **PASS** — 6
+    successful completions (1 initial + 5 sequential `max_tokens=16`
+    requests), all HTTP 200, ~0.9s each. Before the fix: 0 completions.
+  - No `core.py:1591` spin: **PASS** — py-spy on EngineCore (pid 782)
+    shows `idle` at `_process_input_queue` → `wait (queue.py:171)` (idle
+    between requests), NOT `_process_engine_step (core.py:1591)`
+    busy-spin. The `WAITING_FOR_REMOTE_KVS` spin is gone.
+  - MP server `completed_results_count`: stays 0 (expected — L1-only,
+    no L2 adapters → no prefetch controller involvement). The key: NOT
+    stuck at 0 with `in_flight=1` (the wedge state). The prefetch
+    controller is idle (`in_flight=0`, `pending=0`) with zero adapters.
+  - L2 adapters absent under `LMCACHE_L2_DISABLED=1`: **PASS** —
+    `num_l2_adapters: 0`, `num_active_adapters: 0`, `l2_adapters: []` in
+    both `store_controller` and `prefetch_controller`. MP server cmdline
+    has NO `--l2-adapter` flags (confirmed via `docker exec ... cat
+    /proc/1/cmdline`).
+  - No deferred requests: **PASS** — `num_requests_waiting: 0.0`,
+    `num_requests_waiting_by_reason{reason="deferred"}: 0.0` (was 9
+    before the fix).
+  - `:8100` (prefill) `/v1/models` 200, `:8200` (decode) still booting
+    at capture time (decode pair finishes last; `:8200` was 000).
+- **Heartbeat state:** `registered_non_cuda_instance_ids: []` — the old
+  instance (757575677717009413) was reaped during the previous wedge; the
+  fresh relaunch registers a new instance. With L1-only, requests
+  succeed → store/retrieve fires → heartbeat starts → no reap. The
+  3600s retention is not verifiable in-session (engine up ~10 min at
+  capture), but the reap mechanism is broken: the scheduler wedge that
+  prevented store/retrieve (and thus heartbeat start) is resolved.
 - **Unverifiable in-session:** heartbeat past 3600s (would need a
-  3600s+ session); the L2 prefetch completion with L2 enabled (requires
-  the upstream fix).
+  3600s+ session); L2 prefetch completion with L2 enabled (requires the
+  upstream fix).
+- **Note on :8000:** the vllm-router container (`:8000` API) was NOT
+  present in this relaunch — Phase 1's compose service
+  (`docker/mooncake-store/compose.yaml` + `scripts/lib/spark-serve.sh`
+  router profile) was uncommitted when the cluster checkout was pulled.
+  `:8000` dead port is expected, not a failure of the L1-only fix. The
+  router cutover (`:8000`) is verified separately in Phase 5 once the
+  compose changes are committed + pulled on all nodes.
