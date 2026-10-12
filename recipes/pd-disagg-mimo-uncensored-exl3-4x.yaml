@@ -68,13 +68,13 @@
 # - mods/mimo-diffkv-fp8-kv DiffKV + fp8 KV layout fix
 # - mods/kv-cache-guard-override skip 1M-token single-request guard
 # - mods/exl3-mimo          EXL3-to-MiMo runtime patch
-# - mods/pd-disagg          this PD mod (NIXL + role dispatcher)
+# - mods/pd-disagg          this PD mod (P2P host-staged KV + role dispatcher)
 # - mods/b12x-kernel-cache  B12X kernel cache wrapper
 # - mods/b12x-reclaim-gate skip b12x evict_unretained sweep (B12X_SKIP_RECLAIM)
 
 recipe_version: "1"
 name: MiMo-V2.6-Flash-RL-UNCENSORED PD-Disaggregated EXL3 (4x)
-description: "vLLM PD-disaggregated MiMo-V2.6-Flash-RL-UNCENSORED — EXL3 exl3-v1 pack TP=2 prefill (ranks 0-1) + EXL3 TP=2 + DFlash decode sub-group (ranks 2-3), NIXL KV, toy router (4-node GB10)"
+description: "vLLM PD-disaggregated MiMo-V2.6-Flash-RL-UNCENSORED — EXL3 exl3-v1 pack TP=2 prefill (ranks 0-1) + EXL3 TP=2 + DFlash decode sub-group (ranks 2-3), P2P host-staged Mooncake KV, vllm-router (4-node GB10)"
 
 # Packaging id for the FES-staged ASSEMBLED exl3-v1 checkpoint (never fetched
 # from HF; fes-weights hub shim only).
@@ -112,14 +112,15 @@ defaults:
   # (MOONCAKE_MASTER_SERVER_ADDRESS=-e), same pattern as PD_DECODE_MASTER_ADDR.
   pd_mooncake_master_port: 50051
   pd_mooncake_client_port: 50053
-  # KV-transfer backend: "mooncake" (MooncakeStoreConnector, vLLM talks to the
-  # sibling mooncake master/client cohort directly) or "lmcache" (LMCacheMPConnector,
-  # vLLM attaches to a per-node LMCache MP server that owns L1 + L2 adapters).
+  # KV-transfer backend: "mooncake" (P2P MooncakeConnector, host-staging —
+  # engine-to-engine RDMA via pinned host arenas; no store on the KV data
+  # path; bootstrap discovery :8998) or "lmcache" (LMCacheMPConnector, vLLM
+  # attaches to a per-node LMCache MP server that owns L1 + L2 adapters).
   # See mods/pd-disagg/README.md.
   pd_kv_backend: mooncake
-  # GB10 UMA: client DRAM segment + offload local buffer come out of the SAME
-  # pool vLLM sizes against (nvidia-smi "free on cuda:0" == MemAvailable).
-  # 8 GiB segment keeps vLLM's 0.7 GMU budget intact; 16 GiB starves KV cache.
+  # Store-cohort sizing — lmcache-twin-only knobs (the P2P mooncake backend
+  # never touches the store cohort; the master/client containers are inert
+  # for it).
   pd_mooncake_segment_size_gib: 8
   pd_mooncake_offload_max_gib: 100
   # Decode sub-group master port (rank 2 master, rank 3 --headless);

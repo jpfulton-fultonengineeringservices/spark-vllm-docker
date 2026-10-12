@@ -51,25 +51,27 @@ if [ "${PD_DISAGG_ENABLED:-0}" != "1" ]; then
     return 0 2>/dev/null || exit 0
 fi
 
-# --- 1. Mooncake store env (replaces NIXL/UCX) ---------------------------
-# MooncakeStoreConnector reads its config via MOONCAKE_CONFIG_PATH; the
-# sibling mooncake-client container owns the DRAM segment + SSD offload
-# tier, so vLLM ranks render a requester-only JSON (global_segment_size=0,
-# enable_offload=false). No UCX exports: Mooncake's engine.so links libmlx5
-# directly (mooncake-store Dockerfile) — UCX is not on the store data path.
+# --- 1. Mooncake env ------------------------------------------------------
+# P2P MooncakeConnector (host-staging) needs no store config: it starts its
+# own TransferEngine (P2PHANDSHAKE + rdma via kv_connector_extra_config) and
+# discovers peers through the bootstrap server (:8998). mooncake-env.sh
+# publishes the role-agnostic env; the master/client cohort containers stay
+# for the lmcache twin's L2 tier only.
 MOD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Backend gate: the mooncake/cupy boot installs below are only needed by the
-# MooncakeStoreConnector path (vLLM imports `mooncake` in-process and the
-# host-staged _StagingSlotPool needs cupy). PD_KV_BACKEND=lmcache attaches to
-# the MP server instead and needs neither.
+# P2P MooncakeConnector path (vLLM imports `mooncake.engine` in-process and
+# the _PinnedStagingArena needs cupy). PD_KV_BACKEND=lmcache attaches to the
+# MP server instead and needs neither.
 if [ "${PD_KV_BACKEND:-mooncake}" = "mooncake" ]; then
 
-# The connector imports `mooncake` in-process (worker.py:
-# `from mooncake.store import ...`). The vllm-node-b12x image does not ship
-# the wheel; install it at boot if absent (mirrors the retired NIXL install
-# path). RDMA runtime deps (libmlx5/libibverbs) are already in the image.
-# Pin to 0.3.12.post1 (NOT 0.3.13+): 0.3.13's rdma_context gates RNIC device
+# The connector imports `mooncake.engine` in-process (worker.py/staging.py:
+# `from mooncake.engine import TransferEngine`). The vllm-node-b12x image
+# does not ship the wheel; install it at boot if absent (mirrors the retired
+# NIXL install path). RDMA runtime deps (libmlx5/libibverbs) are already in
+# the image.
+# Pin to 0.3.12.post1 (NOT 0.3.13+): 0.3.12 is now load-bearing for the P2P
+# TransferEngine too. 0.3.13's rdma_context gates RNIC device
 # open on "GPU RDMA support present" (CU_DEVICE_ATTRIBUTE_DMA_BUF or
 # nvidia-peermem) and disables every RNIC when absent
 # (rdma_context.cpp:1328 "DMA BUF supported required for GPU RDMA without
@@ -93,6 +95,28 @@ if ! python3 -c 'import mooncake' >/dev/null 2>&1; then
     info "mooncake module installed"
 else
     info "mooncake module already present"
+fi
+
+# WITH_NVIDIA_PEERMEM=0: the P2P connector's _PinnedStagingArena registers
+# ONLY host-pinned buffers (torch pinned alloc + engine.register_memory on
+# the host ptr). GPU-VA buffer registration must stay OFF — on GB10 it
+# EFAULTs (ibv_reg_mr "Bad address [14]") and was the -600 register failure
+# of the Oct-11 P2P pivot. Correct GB10 P2P stack: host_staging +
+# WITH_NVIDIA_PEERMEM=0 + router --kv-connector mooncake. Published into
+# $ENV_FILE below so every role's engine sees it.
+WITH_NVIDIA_PEERMEM=0
+
+# peermem hardening (best-effort, NOT load-bearing on 0.3.12): load
+# nvidia_peermem if present so a future 0.3.13 wheel bump doesn't hit the
+# "DMA BUF supported required for GPU RDMA without nvidia-peermem" RNIC
+# gate. Persistence across reboots is cluster-config's node-setup
+# responsibility (modules-load.d); this only covers the current boot.
+if ! lsmod 2>/dev/null | awk '{print $1}' | grep -qx nvidia_peermem; then
+    if modprobe nvidia_peermem 2>/dev/null; then
+        info "nvidia_peermem loaded (0.3.13 RNIC-gate unlock, hardening only)"
+    else
+        info "nvidia_peermem not loadable (expected on GB10 UMA; 0.3.12 path unaffected)"
+    fi
 fi
 
 # cupy-cuda13x: required by the host-staged _StagingSlotPool (pinned slot
@@ -334,6 +358,11 @@ chmod 0644 "$ENV_FILE"
 {
     echo "export PD_KV_BACKEND=\"$PD_KV_BACKEND\""
     echo "export PYTHONHASHSEED=\"$PYTHONHASHSEED\""
+    if [ "$PD_KV_BACKEND" = "mooncake" ]; then
+        # P2P MooncakeConnector: GPU-VA registration must stay off (GB10
+        # ibv_reg_mr EFAULT); the staging arena registers host-pinned only.
+        echo "export WITH_NVIDIA_PEERMEM=\"$WITH_NVIDIA_PEERMEM\""
+    fi
     if [ "$PD_KV_BACKEND" = "lmcache" ]; then
         # LMCache MP mode: the MP server owns the store client; the vLLM rank
         # only needs the MP endpoint. globals are published for logging parity.
@@ -342,9 +371,8 @@ chmod 0644 "$ENV_FILE"
         echo "export MOONCAKE_MASTER_SERVER_ADDRESS=\"$MOONCAKE_MASTER_SERVER_ADDRESS\""
         echo "export MOONCAKE_MASTER_PORT=\"$MOONCAKE_MASTER_PORT\""
     else
-        echo "export MOONCAKE_CONFIG_PATH=\"$MOONCAKE_CONFIG_PATH\""
-        echo "export MOONCAKE_PREFERRED_SEGMENT=\"$MOONCAKE_PREFERRED_SEGMENT\""
-        echo "export MOONCAKE_REQUESTER_LOCAL_HOSTNAME=\"$MOONCAKE_REQUESTER_LOCAL_HOSTNAME\""
+        # P2P MooncakeConnector reads none of these; published for log parity
+        # and so a mid-session PD_KV_BACKEND flip to lmcache still has them.
         echo "export MOONCAKE_MASTER_SERVER_ADDRESS=\"$MOONCAKE_MASTER_SERVER_ADDRESS\""
         echo "export MOONCAKE_MASTER_PORT=\"$MOONCAKE_MASTER_PORT\""
         echo "export MOONCAKE_CLIENT_PORT=\"$MOONCAKE_CLIENT_PORT\""
@@ -355,8 +383,7 @@ info "mooncake env published to $ENV_FILE:"
 if [ "$PD_KV_BACKEND" = "lmcache" ]; then
     info "  PD_KV_BACKEND=lmcache LMCACHE_MP_HOST=$LMCACHE_MP_HOST LMCACHE_MP_PORT=$LMCACHE_MP_PORT"
 else
-    info "  MOONCAKE_CONFIG_PATH=$MOONCAKE_CONFIG_PATH"
-    info "  MOONCAKE_PREFERRED_SEGMENT=$MOONCAKE_PREFERRED_SEGMENT"
+    info "  WITH_NVIDIA_PEERMEM=$WITH_NVIDIA_PEERMEM (P2P host-pinned staging)"
 fi
 info "PD_PARITY_SHA256=$PD_PARITY_SHA256 payload={num_speculative_tokens=$pd_num_speculative_tokens,block_size=$pd_block_size,max_model_len=$pd_max_model_len,max_num_seqs=$pd_max_num_seqs,max_num_batched_tokens=$pd_max_num_batched_tokens,kv=fp8/sliding_window}"
 info "PD_DISAGG_OK op=prepare env_file=$ENV_FILE"
