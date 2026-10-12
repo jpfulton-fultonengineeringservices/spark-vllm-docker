@@ -7,7 +7,8 @@
 # package CLI. Mirrors the house mod pattern (fix-qwen3-next-autoround and
 # the exl3-pack uv package).
 #
-# Usage: run.sh [install | verify | selftest | manifest]   (default: install)
+# Usage: run.sh [install | verify | install-p2p | verify-p2p | selftest | manifest]
+#   (default: install — the store set; P2P is opt-in per recipe)
 #
 # Set VLLM_SITE_PACKAGES to override the dist-packages root.
 
