@@ -225,7 +225,7 @@ class _WorkerSetupMixin:
                     raise RuntimeError("Mooncake batch memory registration failed.")
     
             self.device_kv_caches = kv_caches
-            logger.debug(
+            logger.info(
                 "registered block_lens=%s kv_block_lens=%s",
                 self.block_len_per_layer,
                 self.kv_block_len_per_layer,
