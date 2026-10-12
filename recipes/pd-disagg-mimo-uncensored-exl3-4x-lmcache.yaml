@@ -74,7 +74,7 @@
 
 recipe_version: "1"
 name: MiMo-V2.6-Flash-RL-UNCENSORED PD-Disaggregated EXL3 (4x)
-description: "vLLM PD-disaggregated MiMo-V2.6-Flash-RL-UNCENSORED — EXL3 exl3-v1 pack TP=2 prefill (ranks 0-1) + EXL3 TP=2 + DFlash decode sub-group (ranks 2-3), NIXL KV, toy router (4-node GB10)"
+description: "vLLM PD-disaggregated MiMo-V2.6-Flash-RL-UNCENSORED — EXL3 exl3-v1 pack TP=2 prefill (ranks 0-1) + EXL3 TP=2 + DFlash decode sub-group (ranks 2-3), LMCache MP KV (L1+L2), vllm-router (4-node GB10)"
 
 # Packaging id for the FES-staged ASSEMBLED exl3-v1 checkpoint (never fetched
 # from HF; fes-weights hub shim only).

@@ -132,9 +132,9 @@ if [ -z "$NODE_IP" ]; then
 fi
 : "${NODE_IP:?op=env reason=missing_node_ip set_VLLM_HOST_IP}"
 
-# Mooncake store: vLLM ranks are pure requesters; env (MOONCAKE_CONFIG_PATH,
-# MOONCAKE_PREFERRED_SEGMENT, PYTHONHASHSEED=0) was published by run.sh into
-# $ENV_FILE and re-sourced above. No side-channel exports needed.
+# Mooncake P2P: no store config; env (PYTHONHASHSEED=0, requester hostname,
+# WITH_NVIDIA_PEERMEM=0) was published by run.sh into $ENV_FILE and
+# re-sourced above. Peers are discovered via the bootstrap server (:8998).
 
 # ---------------------------------------------------------------------------
 # Shared parity config: defaults first (so a bare boot still works), then a
@@ -206,23 +206,31 @@ if [ "${PD_KV_BACKEND:-mooncake}" = "lmcache" ]; then
   PD_DISABLE_HYBRID=1
   echo "$PREFIX kv_backend=lmcache mp=${LMCACHE_MP_HOST}:${LMCACHE_MP_PORT} prefix_caching=on(hash=xxhash)"
 else
-  # enable_lookup=false on the PRODUCER (prefill): the prefill role never
-  # loads KV from the store — it only produces. Leaving the store-side
-  # prefix-cache lookup enabled made the prefill scheduler block on a
-  # ZMQ lookup against STALE keys (persisted across boots) and defer every
-  # request forever in WAITING_FOR_REMOTE_KVS (running=0, waiting grows),
- # leaking litellm's max_parallel_requests slots. CONSUMER (decode)
- # keeps lookup — IS PD KV transfer path.
-  KV_PRODUCER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_producer","kv_connector_extra_config":{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048,"enable_lookup":false}}'
-  # lookup_async=true on the CONSUMER (decode): the decoder legitimately
-  # looks up prefill's KV in the store, but with lookup_async=false (the
-  # default) that blocking ZMQ round-trip runs on the scheduler's critical
-  # path every schedule pass. A miss/re-entry then re-issued a blocking
-  # lookup that wedged the decode EngineCore (running=0, 2 requests stuck
-  # deferred) exactly like the producer wedge. Non-blocking lookup returns
-  # None while in flight (scheduler retries without blocking) and the load
-  # issues as soon as the lookup resolves.
-  KV_CONSUMER='{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_consumer","kv_connector_extra_config":{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048,"lookup_async":true,"load_async":true}}'
+  # P2P MooncakeConnector (retired the store-only MooncakeStoreConnector path:
+  # its store-lookup scheduler path wedged twice in live hindsight traffic —
+  # producer livelock on stale store keys, then consumer WAITING_FOR_REMOTE_KVS
+  # never completing. P2P has NO store lookup at all; KV moves engine-to-engine.)
+  #
+  # host_staging=true: GB10 has no GPUDirect (nvidia-peermem won't load,
+  # CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED=0, ibv_reg_mr on CUDA VAs EFAULTs —
+  # model-opts/mooncake/gpup2p-dead-end.txt). KV crosses pinned host arenas
+  # (_PinnedStagingArena in mods/mooncake-worker's vendored P2P package:
+  # D2H -> RDMA -> H2D). send 512 MiB / recv 6144 MiB arena (branch defaults,
+  # proven qwen38 shapes). Both ends must run the same vendored build.
+  #
+  # mooncake_protocol=rdma: TransferEngine P2P mode over the RoCE HCAs
+  # (rocep1s0f1, roceP2p1s0f1). num_workers=10: producer sender-pool size
+  # (upstream default).
+  #
+  # The prefill rank-0 worker starts MooncakeBootstrapServer on
+  # VLLM_MOONCAKE_BOOTSTRAP_PORT (8998, injected by mods/mooncake-worker's
+  # envs shim); the Rust router (--kv-connector mooncake) queries
+  # GET {prefill}:8998/query and injects remote_bootstrap_addr +
+  # remote_engine_id into the decode leg.
+  P2P_CFG='{"kv_connector":"MooncakeConnector","kv_role":"%ROLE%","kv_connector_extra_config":{"host_staging":true,"staging_send_mib":512,"staging_recv_mib":6144,"num_workers":10,"mooncake_protocol":"rdma"}}'
+  KV_PRODUCER="${P2P_CFG/\%ROLE\%/kv_producer}"
+  KV_CONSUMER="${P2P_CFG/\%ROLE\%/kv_consumer}"
+  echo "$PREFIX kv_backend=mooncake-p2p connector=MooncakeConnector host_staging=on(512/6144MiB) bootstrap=8998 protocol=rdma"
 fi
 
 # Shared flag payload (identical on both roles): everything from the live
@@ -244,7 +252,7 @@ if [ "$NODE_RANK" -lt 2 ]; then
   PREFILL_MASTER_ADDR="${PD_PREFILL_MASTER_ADDR:-${MASTER_ADDR:-$NODE_IP}}"
   PREFILL_MASTER_PORT="${PD_PREFILL_MASTER_PORT:-29501}"
 
-  echo "$PREFIX role=PREFILL rank=$NODE_RANK tp=$TP_PREFILL kv=mooncake-store segment=${MOONCAKE_PREFERRED_SEGMENT:-unset} prefill_master=$PREFILL_MASTER_ADDR:$PREFILL_MASTER_PORT PD_PARITY_SHA256=$PD_PARITY_SHA256"
+  echo "$PREFIX role=PREFILL rank=$NODE_RANK tp=$TP_PREFILL kv=mooncake-p2p prefill_master=$PREFILL_MASTER_ADDR:$PREFILL_MASTER_PORT PD_PARITY_SHA256=$PD_PARITY_SHA256"
 
   PREFILL_CMD=("${VLLM_SERVE[@]}" "${PD_EXL3_MODEL:-XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3}"
     --host 0.0.0.0
@@ -325,7 +333,7 @@ fi
 if [ "$NODE_RANK" -ge 2 ]; then
   : "${PD_DECODE_MASTER_ADDR:?op=argparse reason=PD_DECODE_MASTER_ADDR_required_for_4x}"
 
-  echo "$PREFIX role=DECODE rank=$NODE_RANK tp=$TP_DECODE kv=mooncake-store segment=${MOONCAKE_PREFERRED_SEGMENT:-unset} decode_master=${PD_DECODE_MASTER_ADDR} PD_PARITY_SHA256=$PD_PARITY_SHA256"
+  echo "$PREFIX role=DECODE rank=$NODE_RANK tp=$TP_DECODE kv=mooncake-p2p decode_master=${PD_DECODE_MASTER_ADDR} PD_PARITY_SHA256=$PD_PARITY_SHA256"
 
   # shellcheck disable=SC2206
   DECODE_CMD=("${VLLM_SERVE[@]}" "${PD_EXL3_MODEL:-XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3}"

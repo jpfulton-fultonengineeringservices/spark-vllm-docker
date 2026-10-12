@@ -1,8 +1,10 @@
-# PD-disaggregated MiMo-V2.6-Flash-RL-UNCENSORED EXL3 (4-node GB10, Mooncake store-only)
+# PD-disaggregated MiMo-V2.6-Flash-RL-UNCENSORED EXL3 (4-node GB10, P2P host-staged Mooncake KV)
 
-Role-aware prefill/decode PD disaggregation with **MooncakeStoreConnector**
-KV transfer (hash-dedup'd distributed KV pool, NVMe-durable across restarts).
-**No Ray.** Replaces the retired NIXL path.
+Role-aware prefill/decode PD disaggregation with the P2P **MooncakeConnector**
+(host-staged KV: D2H -> pinned RDMA -> H2D; engine-to-engine transfer, no
+store on the KV data path). **No Ray.** Replaces the retired NIXL path and
+the retired store-only `MooncakeStoreConnector` KV path (double-wedged in
+live hindsight traffic).
 
 Topology (4 nodes, `NNODES=4` fail-closed):
 
@@ -32,7 +34,7 @@ flowchart LR
   subgraph N1["gx10-node1 (rank 0)"]
     P0["PREFILL rank 0<br/>EXL3 TP=2, API 8100<br/>kv_producer"]
     MM["mooncake-master<br/>:50051 metadata-only"]
-    MC1["mooncake-client<br/>:50053 DRAM+SSD"]
+    MC1["mooncake-client<br/>:50053 (lmcache L2 only)"]
     RT["vllm-router<br/>:8000 API, :29000 /metrics"]
   end
   subgraph N2["gx10-node2 (rank 1)"]
@@ -49,15 +51,14 @@ flowchart LR
   end
   RT -->|:8000 /v1| P0
   RT -->|decode| D2
-  P0 -->|"KV PUT (host-staged RDMA)"| MC1
-  P1 -->|"KV PUT"| MC2
-  D2 -->|"KV GET (node-local preferred)"| MC3
-  D3 -->|"KV GET"| MC4
-  MC1 & MC2 & MC3 & MC4 -->|"register / lookup"| MM
+  P0 & P1 -->|"KV send (host-staged RDMA, per-rank)"| D2 & D3
+  RT -.->|"GET :8998/query bootstrap"| P0
+  MC1 & MC2 & MC3 & MC4 -.->|"inert for P2P (lmcache L2 only)"| MM
 ```
 
 Port map: 8000 (vllm-router API), 29000 (vllm-router /metrics), 8100 (prefill API), 8200 (decode API),
-50051 (mooncake-master), 50053 (mooncake-client). No NIXL 5600.
+8998 (Mooncake bootstrap, prefill rank 0), 50051 (mooncake-master, lmcache twin only),
+50053 (mooncake-client, lmcache twin only). No NIXL 5600.
 
 ## Environment variables
 
@@ -65,16 +66,16 @@ Port map: 8000 (vllm-router API), 29000 (vllm-router /metrics), 8100 (prefill AP
 |---|---|---|---|
 | `PD_DISAGG_ENABLED` | Opt-in gate | `0` | recipe env |
 | `PD_KV_BACKEND` | KV backend selector (`mooncake`) | `mooncake` | recipe env |
-| `MOONCAKE_MASTER_SERVER_ADDRESS` | Rank-0 Rail B IP (REQUIRED) | — | serve.sh `-e` |
+| `MOONCAKE_MASTER_SERVER_ADDRESS` | Rank-0 Rail B IP (REQUIRED; store cohort + lmcache twin) | — | serve.sh `-e` |
 | `MOONCAKE_MASTER_PORT` | Master RPC port | `50051` | serve.sh |
 | `MOONCAKE_CLIENT_PORT` | Client TransferEngine port | `50053` | serve.sh |
 | `MOONCAKE_SEGMENT_SIZE_GIB` | Per-node DRAM segment | `16` | serve.sh |
 | `MOONCAKE_LOCAL_BUFFER_GIB` | vLLM rank local buffer | `4` | mooncake-env.sh |
 | `MOONCAKE_OFFLOAD_MAX_GIB` | SSD offload cap per node | `100` | serve.sh |
-| `MOONCAKE_CONFIG_PATH` | Store JSON path | `/tmp/pd-disagg/mooncake-store.json` | mooncake-env.sh |
-| `MOONCAKE_PREFERRED_SEGMENT` | Node-local client steering | `<railb-ip>:50053` | mooncake-env.sh |
 | `MOONCAKE_REQUESTER_LOCAL_HOSTNAME` | vLLM rank Rail B IP | `<railb-ip>` | mooncake-env.sh |
-| `PYTHONHASHSEED` | **MUST be `0`** — hash-based dedup silently breaks otherwise | `0` | mooncake-env.sh |
+| `PYTHONHASHSEED` | MUST be `0` — store connector dedup (lmcache twin) requires it; P2P keeps it for determinism | `0` | mooncake-env.sh |
+| `WITH_NVIDIA_PEERMEM` | **MUST be `0`** for the P2P backend — host-pinned staging only; GPU-VA registration EFAULTs on GB10 | `0` | run.sh (mooncake backend) |
+| `VLLM_MOONCAKE_BOOTSTRAP_PORT` | P2P bootstrap server port (prefill rank 0; injected into vllm/envs.py by mods/mooncake-worker) | `8998` | envs shim |
 | `PD_DECODE_MASTER_ADDR` | Decode sub-group master IP (REQUIRED, NNODES=4) | — | serve.sh `-e` |
 | `PD_DECODE_NODE_IPS` | Decode ranks' IPs CSV (rank-2 first) | — | serve.sh `-e` |
 | `PD_ROUTER_PORT` | vllm-router container API port (compose config; recipe default feeds serve.sh) | `8000` | serve.sh |
@@ -90,9 +91,18 @@ dispatch.sh invocation — cross-role config drift fail-closes the launch.
 
 Two interchangeable KV-transfer paths; the rest of the topology is identical.
 
-- **`mooncake`** (default) — `MooncakeStoreConnector`. Each vLLM rank host-stages
-  GPU KV into pinned DRAM and RDMA-writes into the sibling `mooncake-client`
-  cohort directly. Lowest indirection; one store hop.
+- **`mooncake`** (default) — P2P `MooncakeConnector` with **host staging**
+  (`_PinnedStagingArena`: D2H into a pinned send arena -> RDMA -> H2D from the
+  peer's pinned recv window). NO store on the KV data path — engine-to-engine
+  transfer with bootstrap discovery (`MooncakeBootstrapServer` on prefill
+  rank 0, `VLLM_MOONCAKE_BOOTSTRAP_PORT` = 8998; the Rust router queries
+  `GET {prefill}:8998/query` and injects `remote_bootstrap_addr` +
+  `remote_engine_id` into the decode leg). The store cohort (master/client
+  containers) stays up for the lmcache twin's L2 but is inert for this
+  backend. The retired store-only `MooncakeStoreConnector` path wedged twice
+  in live hindsight traffic (producer lookup livelock on stale keys, then
+  consumer `WAITING_FOR_REMOTE_KVS` never completing); P2P has no store
+  lookup at all.
 - **`lmcache`** — `LMCacheMPConnector`. Each vLLM rank attaches to a **per-node
   LMCache MP server** (`lmcache server`, localhost ZMQ + CUDA-IPC) that owns an
   L1 host-DRAM pool and fans out to L2 adapters: `mooncake_store` (native ext,
@@ -190,16 +200,27 @@ unset) to re-enable L2 adapters once the upstream fixes land.
 ## Constraints
 
 - **4-node only** (NNODES=4; TP=2 sub-groups).
-- **DFlash on decode only** (depth 7); store connector's hash dedup is
-  orthogonal — no NIXL-style whole-config handshake to break.
-- **SSD tier is write-once/immutable** (bucket backend); corruption requires
-  a wipe + re-put (`docker exec mooncake-client` / wipe `/nvme/mooncake_offload`
-  while stopped). `--offload_on_evict` stays false (spill-only semantics).
-- **`PYTHONHASHSEED=0` everywhere** — vLLM connectors + client must agree.
+- **DFlash on decode only** (depth 7); P2P transfer carries per-request KV,
+  no store dedup in the data path.
+- **SSD tier is write-once/immutable** (bucket backend, lmcache-twin L2 only);
+  corruption requires a wipe + re-put (`docker exec mooncake-client` / wipe
+  `/nvme/mooncake_offload` while stopped). `--offload_on_evict` stays false
+  (spill-only semantics).
+- **`PYTHONHASHSEED=0` everywhere** — deterministic across roles; the store
+  connector (lmcache twin's L2) still requires it for hash dedup.
 - `MOONCAKE_OFFLOAD_USE_URING=false` (GB10 io_uring + DirectIO alignment);
   only set if SSD restore surfaces alignment faults.
-- `VLLM_MOONCAKE_BOOTSTRAP_PORT` (8998) is MooncakeConnector-only — NOT set
-  in store-only mode.
+- **`VLLM_MOONCAKE_BOOTSTRAP_PORT` (8998) REQUIRED** for the P2P backend —
+  injected into `vllm/envs.py` by mods/mooncake-worker's envs shim
+  (`install-p2p`); the bootstrap server binds it on prefill rank 0 and the
+  Rust router queries it.
+- **`WITH_NVIDIA_PEERMEM=0` REQUIRED** for the P2P backend (published by
+  run.sh into the env file) — the staging arena registers host-pinned
+  buffers only; GPU-VA registration EFAULTs on GB10 (the Oct-11 `-600`
+  register failure).
+- **Wheel pin `0.3.12.post1`** — 0.3.13's `rdma_context` gates RNIC device
+  open on GPU-RDMA support (DMA-BUF attr or nvidia-peermem) and kills GB10
+  (model-opts/mooncake/gpup2p-dead-end.txt).
 
 ## Provenance
 

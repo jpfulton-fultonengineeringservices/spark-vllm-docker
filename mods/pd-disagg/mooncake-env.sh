@@ -15,9 +15,10 @@
 # libmlx5 directly (mooncake-store Dockerfile) — UCX is not on the store
 # data path, unlike NIXL.
 #
-# PYTHONHASHSEED=0 is a silent-correctness requirement: hash-based KV dedup
-# across ranks/instances must not vary between processes (store connector
-# usage doc + store-only prior plan).
+# PYTHONHASHSEED=0 kept for determinism. The P2P MooncakeConnector does NOT
+# hash-dedup KV (that was a store-connector concept); the export is harmless
+# and keeps cross-role runs byte-reproducible. The store connector (lmcache
+# twin's L2 path) still requires it — silent-correctness there.
 
 set -euo pipefail
 
@@ -73,29 +74,17 @@ if [ "$PD_KV_BACKEND" = "lmcache" ]; then
     return 0 2>/dev/null || exit 0
 fi
 
-# --- Render mooncake-store.json ---------------------------------------------
-MOONCAKE_CONFIG_PATH="${MOONCAKE_CONFIG_PATH:-/tmp/pd-disagg/mooncake-store.json}"
-mkdir -p "$(dirname "$MOONCAKE_CONFIG_PATH")"
-
-cat > "$MOONCAKE_CONFIG_PATH" <<EOF
-{
-  "mode": "standalone-store",
-  "metadata_server": "P2PHANDSHAKE",
-  "master_server_address": "${MOONCAKE_MASTER_SERVER_ADDRESS}:${MOONCAKE_MASTER_PORT}",
-  "global_segment_size": 0,
-  "local_buffer_size": "${MOONCAKE_LOCAL_BUFFER_GIB}GB",
-  "protocol": "rdma",
-  "device_name": "roceP2p1s0f1",
-  "enable_offload": false
-}
-EOF
-
-# --- Exports -----------------------------------------------------------------
-export MOONCAKE_CONFIG_PATH
-export MOONCAKE_PREFERRED_SEGMENT="${THIS_RAILB_IP}:${MOONCAKE_CLIENT_PORT}"
+# --- P2P MooncakeConnector: no store JSON ------------------------------------
+# The P2P connector (MooncakeConnector, host-staging) does NOT read
+# MOONCAKE_CONFIG_PATH: it initializes its own TransferEngine with
+# P2PHANDSHAKE + rdma protocol from kv_connector_extra_config
+# (mooncake_protocol/device_name), and the KV path never touches the store
+# cohort. The master/client containers stay up for the lmcache twin's L2;
+# the mooncake-backend ranks ignore them. No steering env needed either —
+# the TransferEngine discovers peers via the bootstrap server (:8998).
 export MOONCAKE_REQUESTER_LOCAL_HOSTNAME="${THIS_RAILB_IP}"
 export PYTHONHASHSEED=0
 
-echo "$PREFIX mooncake-store.json=$MOONCAKE_CONFIG_PATH"
-echo "$PREFIX preferred_segment=$MOONCAKE_PREFERRED_SEGMENT requester_host=$MOONCAKE_REQUESTER_LOCAL_HOSTNAME"
+echo "$PREFIX backend=mooncake-p2p (no store JSON; TransferEngine P2PHANDSHAKE/rdma; bootstrap :8998)"
+echo "$PREFIX requester_host=$MOONCAKE_REQUESTER_LOCAL_HOSTNAME"
 echo "$PREFIX MOONCAKE_ENV_OK master=${MOONCAKE_MASTER_SERVER_ADDRESS}:${MOONCAKE_MASTER_PORT} client=${MOONCAKE_CLIENT_PORT}"
