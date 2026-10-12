@@ -143,8 +143,8 @@ defaults:
   # Serve.sh is the single source; dispatch.sh aborts fail-closed if the
   # -e value is missing/empty when the decode sub-group forms.
   # DFlash speculative-decoding depth: hash-enforced cross-role
-  # (PD_PARITY_SHA256); must be 7 (coherent-proven, 2x recipe).
-  num_speculative_tokens: 7
+  # (PD_PARITY_SHA256); must be 8 (coherent-proven, 2x recipe).
+  num_speculative_tokens: 8
   max_model_len: 1048576
   block_size: 128
   max_num_seqs: 32
