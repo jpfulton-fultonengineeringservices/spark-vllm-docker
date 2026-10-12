@@ -363,9 +363,7 @@ class _WorkerSetupMixin:
     def _log_debug_cache_registration(
             self, layer_name: str, cache: torch.Tensor
         ) -> None:
-            if not logger.isEnabledFor(logging.DEBUG):
-                return
-            logger.debug(
+            logger.info(
                 "Mooncake register view layer=%s shape=%s stride=%s "
                 "storage_offset=%d contiguous=%s dense=%s data_ptr=%d",
                 layer_name,
