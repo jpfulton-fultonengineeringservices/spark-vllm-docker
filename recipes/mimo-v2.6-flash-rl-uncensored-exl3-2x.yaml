@@ -79,7 +79,7 @@ defaults:
   max_num_batched_tokens: 16384
   # DFlash speculative decoding: draft length 7 (same as the coherent-proven
   # exl3-4x recipe).
-  num_speculative_tokens: 7
+  num_speculative_tokens: 8
 
 env:
   CUTE_DSL_ARCH: "sm_121a"
