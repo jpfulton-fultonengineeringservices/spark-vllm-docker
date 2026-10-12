@@ -220,6 +220,44 @@ else:
     print("[pd-disagg] WARN: uniformity-probe patch target not found (fork drift?); continuing", file=sys.stderr)
 PYEOF
 
+# --- 2.b. Fork patch: TransferTopology.virtually_split_kv_in_blocks ----------
+# The P2P MooncakeConnector (mooncake-host-staging lineage) reads
+# TransferTopology.virtually_split_kv_in_blocks in _worker_setup.py
+# (register_kv_caches / transfer-region construction). The b12x image's
+# TransferTopology (kv_connector/utils.py, dev/karmic-kraken lineage,
+# vllm_commit 502d6cb5) lacks that property — its newer TransferTopology
+# dropped the K/V-split gate (Fulton branch utils.py carries it). Patch the
+# image class with the branch-identical property, idempotent, fail-open on
+# anchor drift (same class as the uniformity-probe patch above).
+python3 - <<'PYEOF'
+import sys
+
+path = "/usr/local/lib/python3.12/dist-packages/vllm/distributed/kv_transfer/kv_connector/utils.py"
+with open(path) as f:
+    src = f.read()
+anchor = "    def tp_ratio(self, remote_tp_size: int) -> int:"
+prop = '''    @property
+    def virtually_split_kv_in_blocks(self) -> bool:
+        # Fulton-branch parity patch (mods/pd-disagg): whether to logically
+        # split each block into two separately-indexable sub-regions. With K
+        # and V packed into the content dim, an attention block transfers as
+        # a single unit. Only Mamba/GDN still needs the split, to index its
+        # two state regions (conv/ssm) separately. Cross-layer blocks
+        # (per-layer interleaving) never half-split cleanly.
+        return self.is_mamba and not getattr(self, "_cross_layers_blocks", False)
+
+'''
+if "virtually_split_kv_in_blocks" in src:
+    print("[pd-disagg] TransferTopology virtually_split patch already applied")
+elif anchor in src:
+    with open(path, "w") as f:
+        f.write(src.replace(anchor, prop + anchor, 1))
+    print("[pd-disagg] patched TransferTopology.virtually_split_kv_in_blocks onto image utils.py")
+else:
+    print("[pd-disagg] WARN: TransferTopology tp_ratio anchor not found (fork drift?); continuing", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+
 # 3b. Normalize mixed sliding_window after promotion (same fix as lmcache-offload).
 python3 - <<'PYEOF2'
 import sys
