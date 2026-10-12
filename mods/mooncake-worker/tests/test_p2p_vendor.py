@@ -45,9 +45,18 @@ def test_p2p_no_rdma_utils_shipped() -> None:
     assert not (vendor / "rdma_utils.py").exists()
 
 
-def test_classify_p2p_fails_closed_before_stock_capture() -> None:
-    """Stock md5 is captured on the node; until then classify must raise."""
+def test_classify_p2p_fails_closed_on_uncaptured_stock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stock md5 captured 2026-10-12; simulate the pre-capture sentinel state."""
+    monkeypatch.setattr(gates, "MD5_STOCK_P2P_CONNECTOR", "UNKNOWN-CAPTURE-ON-NODE")
     with pytest.raises(gates.GateError, match="not captured"):
+        gates.classify_p2p_installed("whatever")
+
+
+def test_classify_p2p_fails_closed_on_missing_facade() -> None:
+    """A nonexistent facade path gates, never crashes with FileNotFoundError."""
+    with pytest.raises(gates.GateError, match="missing"):
         gates.classify_p2p_installed("whatever")
 
 

@@ -139,6 +139,8 @@ def classify_p2p_installed(installed_connector: str | Path) -> str:
             " vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py"
             " md5 on the cluster node before installing"
         )
+    if not Path(installed_connector).is_file():
+        raise GateError(f"installed P2P facade missing: {installed_connector}")
     actual = md5_of(installed_connector)
     if actual == MD5_MOD_P2P_CONNECTOR:
         return "p2p_ported"
