@@ -69,9 +69,19 @@ if [ "${PD_KV_BACKEND:-mooncake}" = "mooncake" ]; then
 # `from mooncake.store import ...`). The vllm-node-b12x image does not ship
 # the wheel; install it at boot if absent (mirrors the retired NIXL install
 # path). RDMA runtime deps (libmlx5/libibverbs) are already in the image.
-# Pin to v0.3.13.post1: TCP deadline, handshake hardening, put completion,
-# data-corruption fix, host-memory segment sharing across TP.
-: "${PD_MOONCAKE_SPEC:=mooncake-transfer-engine-cuda13==0.3.13.post1}"
+# Pin to 0.3.12.post1 (NOT 0.3.13+): 0.3.13's rdma_context gates RNIC device
+# open on "GPU RDMA support present" (CU_DEVICE_ATTRIBUTE_DMA_BUF or
+# nvidia-peermem) and disables every RNIC when absent
+# (rdma_context.cpp:1328 "DMA BUF supported required for GPU RDMA without
+# nvidia-peermem" -> RdmaTransport: No available RNIC -> Transfer Engine
+# init failed -> engine dies at kv-transfer init). GB10 has neither: UMA
+# exposes no DMA-BUF attr, and the peermem probe EFAULTs (see
+# infra/cluster-config model-opts/mooncake/gpup2p-dead-end.txt). 0.3.12
+# opens the device unconditionally and registers only the connector's
+# host-pinned staging buffers — the exact shape the store path served KV
+# with. Re-test the gate after any driver bump via the 30s
+# CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED probe before re-attempting 0.3.13.
+: "${PD_MOONCAKE_SPEC:=mooncake-transfer-engine-cuda13==0.3.12.post1}"
 if ! python3 -c 'import mooncake' >/dev/null 2>&1; then
     if [ "${PD_DISAGG_INSTALL_MOONCAKE:-1}" = "1" ]; then
         info "mooncake module missing; installing '${PD_MOONCAKE_SPEC}'"
