@@ -23,6 +23,16 @@ from pathlib import Path
 
 TARGET_ENV = "VLLM_PREFIX_CACHE_RETENTION_INTERVAL"
 
+# P2P MooncakeConnector envs (Fulton fork mooncake-host-staging-decompose
+# @ 4a2519311): bootstrap server port (the P2P handshake surface the Rust
+# router queries on GET {prefill}:8998/query) and the abort-request
+# timeout the send/receive mixins read. Both absent from the stock image
+# tree (verified 2026-10-12: vendored store worker has neither).
+P2P_ENV_TARGETS: tuple[str, ...] = (
+    "VLLM_MOONCAKE_BOOTSTRAP_PORT",
+    "VLLM_MOONCAKE_ABORT_REQUEST_TIMEOUT",
+)
+
 # Anchor line inside the environment_variables dict (verified against
 # vllm-node-b12x vLLM 0.1.dev21546+g502d6cb5a, envs.py:2413).
 DICT_ANCHOR = '    "VLLM_NIC_SELECTION_VARS": lambda: os.getenv("VLLM_NIC_SELECTION_VARS", ""),\n'
@@ -51,6 +61,56 @@ def _atomic_write(path: Path, text: str) -> None:
 def needs_shim(envs_py: str | Path) -> bool:
     """True when the env is absent from envs.py entirely."""
     return TARGET_ENV not in Path(envs_py).read_text()
+
+
+def _env_lambda(name: str, default: str) -> str:
+    return (
+        f'    "{name}": lambda: (\n'
+        f'        int(os.environ["{name}"])\n'
+        f'        if "{name}" in os.environ\n'
+        f"        else {default}\n"
+        f"    ),\n"
+    )
+
+
+P2P_ENV_ENTRIES: dict[str, str] = {
+    # Upstream defaults: vllm/envs.py @ 311b3513a (bootstrap :8998,
+    # abort timeout 60s per _protocol.py/_worker_*.py usage).
+    "VLLM_MOONCAKE_BOOTSTRAP_PORT": _env_lambda("VLLM_MOONCAKE_BOOTSTRAP_PORT", "8998"),
+    "VLLM_MOONCAKE_ABORT_REQUEST_TIMEOUT": _env_lambda("VLLM_MOONCAKE_ABORT_REQUEST_TIMEOUT", "60"),
+}
+
+
+def missing_p2p_envs(envs_py: str | Path) -> list[str]:
+    """P2P envs absent from envs.py entirely (need injection)."""
+    text = Path(envs_py).read_text()
+    return [name for name in P2P_ENV_TARGETS if name not in text]
+
+
+def inject_p2p_envs(envs_py: str | Path) -> int:
+    """Add the P2P env lambdas to the environment_variables dict.
+
+    Same anchor-gated, AST-validated, idempotent pattern as inject().
+    Returns the count of entries added.
+    """
+    path = Path(envs_py)
+    text = path.read_text()
+    missing = missing_p2p_envs(path)
+    if not missing:
+        return 0
+    if text.count(DICT_ANCHOR) != 1:
+        raise EnvShimError(
+            f"envs.py anchor found {text.count(DICT_ANCHOR)}x (expected 1);"
+            " image shape unknown — fail closed"
+        )
+    injection = "".join(P2P_ENV_ENTRIES[name] for name in missing)
+    patched = text.replace(DICT_ANCHOR, DICT_ANCHOR + injection, 1)
+    try:
+        ast.parse(patched)
+    except SyntaxError as exc:
+        raise EnvShimError(f"injected envs.py does not parse: {exc}") from exc
+    _atomic_write(path, patched)
+    return len(missing)
 
 
 def inject(envs_py: str | Path) -> bool:
@@ -90,6 +150,15 @@ def verify(envs_py: str | Path) -> None:
     if not needs_shim(envs_py):
         return
     raise EnvShimError(f"{TARGET_ENV} still absent from {envs_py}")
+
+
+def verify_p2p_envs(envs_py: str | Path) -> None:
+    """Require every P2P env to be present (and the file to parse)."""
+    text = Path(envs_py).read_text()
+    ast.parse(text)
+    missing = missing_p2p_envs(envs_py)
+    if missing:
+        raise EnvShimError(f"P2P envs still absent from {envs_py}: {missing}")
 
 
 def _selftest() -> int:

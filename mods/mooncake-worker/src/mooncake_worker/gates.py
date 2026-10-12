@@ -33,6 +33,43 @@ PACKAGE_FILES: tuple[str, ...] = (
     "worker.py",
 )
 
+# --- P2P connector vendored set -------------------------------------------
+# The image ships the P2P MooncakeConnector as a 2,666-line monolith
+# (mooncake_connector.py, pre-decomposition lineage) plus the welded
+# siblings (base.py, scheduler.py, worker.py). The Fulton fork
+# (mooncake-host-staging-decompose @ 4a2519311) replaces the whole
+# directory with the 13-file decomposed package carrying host-staging
+# (_PinnedStagingArena: D2H -> pinned RDMA -> H2D; GB10 has no GPUDirect).
+# One port edit vs the branch tip: the single get_kv_cache_layout() call
+# in worker.py is shimmed (_kv_cache_layout) because the b12x image tree
+# lacks that helper; every file's import of it was dropped with
+# NULL_BLOCK_ID kept. rdma_utils.py is NOT shipped (orphaned, no importers).
+P2P_PACKAGE_FILES: tuple[str, ...] = (
+    "__init__.py",
+    "base.py",
+    "mooncake_connector.py",
+    "scheduler.py",
+    "worker.py",
+    "_worker_send.py",
+    "_worker_receive.py",
+    "_worker_setup.py",
+    "_transfer_planning.py",
+    "_protocol.py",
+    "staging.py",
+    "stats.py",
+    "mooncake_utils.py",
+)
+
+# Vendored branch tip (mooncake-host-staging-decompose @ 4a2519311) after
+# the port shim. Facade md5 doubles as the install-verify sentinel (the
+# file the connector factory imports by class name).
+MD5_MOD_P2P_CONNECTOR = "8bd9c7fc214e032271c843dbce51ce5d"
+
+# The stock image's monolith connector. Captured on the cluster node
+# before first install (Phase-1 boot gate); placeholder forces fail-closed
+# until captured — classify_p2p_installed raises on this sentinel.
+MD5_STOCK_P2P_CONNECTOR = "UNKNOWN-CAPTURE-ON-NODE"
+
 
 class GateError(RuntimeError):
     """A fail-closed gate rejected the operation."""
@@ -52,6 +89,62 @@ def vendor_dir(package_root: Path | None = None) -> Path:
     if not vendor.is_dir():
         raise GateError(f"vendored store package missing: {vendor}")
     return vendor
+
+
+def p2p_vendor_dir(package_root: Path | None = None) -> Path:
+    root = package_root if package_root is not None else Path(__file__).resolve().parent
+    vendor = root / "vendor" / "p2p"
+    if not vendor.is_dir():
+        raise GateError(f"vendored p2p package missing: {vendor}")
+    return vendor
+
+
+def verify_p2p_vendor(package_root: Path | None = None) -> Path:
+    """Ensure the vendored P2P set is complete, parses, and facade md5 matches."""
+    vendor = p2p_vendor_dir(package_root)
+    for name in P2P_PACKAGE_FILES:
+        path = vendor / name
+        if not path.is_file():
+            raise GateError(f"p2p vendor set incomplete: missing {name}")
+        try:
+            compile(path.read_text(), str(path), "exec")
+        except SyntaxError as exc:
+            raise GateError(f"vendored p2p {name} does not parse: {exc}") from exc
+    actual = md5_of(vendor / "mooncake_connector.py")
+    if actual != MD5_MOD_P2P_CONNECTOR:
+        raise GateError(
+            f"vendored p2p mooncake_connector.py md5 {actual} != expected"
+            f" {MD5_MOD_P2P_CONNECTOR} (vendor set corrupted; re-extract from"
+            " branch tip 4a2519311 and re-apply the port shim)"
+        )
+    # The port shim must be present: no get_kv_cache_layout code refs outside
+    # the shim docstring, and the shim function exists in worker.py.
+    worker_src = (vendor / "worker.py").read_text()
+    if "def _kv_cache_layout(" not in worker_src:
+        raise GateError("p2p port shim (_kv_cache_layout) missing from worker.py")
+    return vendor
+
+
+def classify_p2p_installed(installed_connector: str | Path) -> str:
+    """Classify the installed P2P mooncake_connector.py state.
+
+    Returns one of:
+      - "p2p_ported"  (facade == vendored tip)
+      - "stock_p2p"   (facade == pristine image monolith)
+      - "unknown"     (image drift; installer must fail closed)
+    """
+    if MD5_STOCK_P2P_CONNECTOR.startswith("UNKNOWN"):
+        raise GateError(
+            "MD5_STOCK_P2P_CONNECTOR not captured yet — probe the image's"
+            " vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py"
+            " md5 on the cluster node before installing"
+        )
+    actual = md5_of(installed_connector)
+    if actual == MD5_MOD_P2P_CONNECTOR:
+        return "p2p_ported"
+    if actual == MD5_STOCK_P2P_CONNECTOR:
+        return "stock_p2p"
+    return "unknown"
 
 
 def verify_vendor(package_root: Path | None = None) -> Path:
