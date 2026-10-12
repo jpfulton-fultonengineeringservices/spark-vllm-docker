@@ -75,9 +75,12 @@ def _env_lambda(name: str, default: str) -> str:
 
 P2P_ENV_ENTRIES: dict[str, str] = {
     # Upstream defaults: vllm/envs.py @ 311b3513a (bootstrap :8998,
-    # abort timeout 60s per _protocol.py/_worker_*.py usage).
+    # abort timeout 480s — the send mixin's asyncio.wait timeout and the
+    # receive path's RCVTIMEO ((timeout+60)*1000 ms) both derive from it.
     "VLLM_MOONCAKE_BOOTSTRAP_PORT": _env_lambda("VLLM_MOONCAKE_BOOTSTRAP_PORT", "8998"),
-    "VLLM_MOONCAKE_ABORT_REQUEST_TIMEOUT": _env_lambda("VLLM_MOONCAKE_ABORT_REQUEST_TIMEOUT", "60"),
+    "VLLM_MOONCAKE_ABORT_REQUEST_TIMEOUT": _env_lambda(
+        "VLLM_MOONCAKE_ABORT_REQUEST_TIMEOUT", "480"
+    ),
 }
 
 
