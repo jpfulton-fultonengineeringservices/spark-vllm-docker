@@ -74,7 +74,7 @@ Port map: 8000 (vllm-router API), 29000 (vllm-router /metrics), 8100 (prefill AP
 | `MOONCAKE_OFFLOAD_MAX_GIB` | SSD offload cap per node | `100` | serve.sh |
 | `MOONCAKE_REQUESTER_LOCAL_HOSTNAME` | vLLM rank Rail B IP | `<railb-ip>` | mooncake-env.sh |
 | `PYTHONHASHSEED` | MUST be `0` — store connector dedup (lmcache twin) requires it; P2P keeps it for determinism | `0` | mooncake-env.sh |
-| `WITH_NVIDIA_PEERMEM` | **MUST be `0`** for the P2P backend — host-pinned staging only; GPU-VA registration EFAULTs on GB10 | `0` | run.sh (mooncake backend) |
+| `WITH_NVIDIA_PEERMEM` | **MUST be unset** for the P2P backend — mooncake engine.so treats it as a hard DMABUF gate (`=0` prunes every RNIC → engine init rc=-1, verified 2026-10-12); host_staging arenas are host-pinned by design so GPU-VA registration never occurs regardless | unset | run.sh (mooncake backend) |
 | `VLLM_MOONCAKE_BOOTSTRAP_PORT` | P2P bootstrap server port (prefill rank 0; injected into vllm/envs.py by mods/mooncake-worker) | `8998` | envs shim |
 | `PD_DECODE_MASTER_ADDR` | Decode sub-group master IP (REQUIRED, NNODES=4) | — | serve.sh `-e` |
 | `PD_DECODE_NODE_IPS` | Decode ranks' IPs CSV (rank-2 first) | — | serve.sh `-e` |
@@ -214,10 +214,12 @@ unset) to re-enable L2 adapters once the upstream fixes land.
   injected into `vllm/envs.py` by mods/mooncake-worker's envs shim
   (`install-p2p`); the bootstrap server binds it on prefill rank 0 and the
   Rust router queries it.
-- **`WITH_NVIDIA_PEERMEM=0` REQUIRED** for the P2P backend (published by
-  run.sh into the env file) — the staging arena registers host-pinned
-  buffers only; GPU-VA registration EFAULTs on GB10 (the Oct-11 `-600`
-  register failure).
+- **`WITH_NVIDIA_PEERMEM` MUST be unset** for the P2P backend — mooncake
+  engine.so's `rdma_context` gate reads it and prunes every RNIC when `=0`
+  ("DMA BUF supported required for GPU RDMA without nvidia-peermem" →
+  `RdmaTransport: No available RNIC` → engine init rc=-1; verified
+  in-container 2026-10-12). The staging arena registers host-pinned buffers
+  only (`host_staging=true`), so GPU-VA registration never occurs regardless.
 - **Wheel pin `0.3.12.post1`** — 0.3.13's `rdma_context` gates RNIC device
   open on GPU-RDMA support (DMA-BUF attr or nvidia-peermem) and kills GB10
   (model-opts/mooncake/gpup2p-dead-end.txt).

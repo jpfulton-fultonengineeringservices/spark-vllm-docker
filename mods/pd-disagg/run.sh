@@ -97,14 +97,13 @@ else
     info "mooncake module already present"
 fi
 
-# WITH_NVIDIA_PEERMEM=0: the P2P connector's _PinnedStagingArena registers
-# ONLY host-pinned buffers (torch pinned alloc + engine.register_memory on
-# the host ptr). GPU-VA buffer registration must stay OFF — on GB10 it
-# EFAULTs (ibv_reg_mr "Bad address [14]") and was the -600 register failure
-# of the Oct-11 P2P pivot. Correct GB10 P2P stack: host_staging +
-# WITH_NVIDIA_PEERMEM=0 + router --kv-connector mooncake. Published into
-# $ENV_FILE below so every role's engine sees it.
-WITH_NVIDIA_PEERMEM=0
+# WITH_NVIDIA_PEERMEM: do NOT export this. Assumed informational at the
+# Oct-11 P2P pivot, but mooncake engine.so consumes it as a hard RDMA gate:
+# =0 prunes every RNIC ("DMA BUF supported required for GPU RDMA without
+# nvidia-peermem" -> RdmaTransport: No available RNIC -> engine init rc=-1),
+# verified in-container 2026-10-12 (unset/=1 -> rc=0, GB10 HCAs fine).
+# The staging arena is host-pinned by design (host_staging=true), so GPU-VA
+# registration never happens regardless — the var carries no signal.
 
 # peermem hardening (best-effort, NOT load-bearing on 0.3.12): load
 # nvidia_peermem if present so a future 0.3.13 wheel bump doesn't hit the
@@ -358,11 +357,6 @@ chmod 0644 "$ENV_FILE"
 {
     echo "export PD_KV_BACKEND=\"$PD_KV_BACKEND\""
     echo "export PYTHONHASHSEED=\"$PYTHONHASHSEED\""
-    if [ "$PD_KV_BACKEND" = "mooncake" ]; then
-        # P2P MooncakeConnector: GPU-VA registration must stay off (GB10
-        # ibv_reg_mr EFAULT); the staging arena registers host-pinned only.
-        echo "export WITH_NVIDIA_PEERMEM=\"$WITH_NVIDIA_PEERMEM\""
-    fi
     if [ "$PD_KV_BACKEND" = "lmcache" ]; then
         # LMCache MP mode: the MP server owns the store client; the vLLM rank
         # only needs the MP endpoint. globals are published for logging parity.
@@ -383,7 +377,7 @@ info "mooncake env published to $ENV_FILE:"
 if [ "$PD_KV_BACKEND" = "lmcache" ]; then
     info "  PD_KV_BACKEND=lmcache LMCACHE_MP_HOST=$LMCACHE_MP_HOST LMCACHE_MP_PORT=$LMCACHE_MP_PORT"
 else
-    info "  WITH_NVIDIA_PEERMEM=$WITH_NVIDIA_PEERMEM (P2P host-pinned staging)"
+    info "  P2P host-pinned staging (WITH_NVIDIA_PEERMEM intentionally unset)"
 fi
 info "PD_PARITY_SHA256=$PD_PARITY_SHA256 payload={num_speculative_tokens=$pd_num_speculative_tokens,block_size=$pd_block_size,max_model_len=$pd_max_model_len,max_num_seqs=$pd_max_num_seqs,max_num_batched_tokens=$pd_max_num_batched_tokens,kv=fp8/sliding_window}"
 info "PD_DISAGG_OK op=prepare env_file=$ENV_FILE"
