@@ -65,10 +65,10 @@ P2P_PACKAGE_FILES: tuple[str, ...] = (
 # file the connector factory imports by class name).
 MD5_MOD_P2P_CONNECTOR = "8bd9c7fc214e032271c843dbce51ce5d"
 
-# The stock image's monolith connector. Captured on the cluster node
-# before first install (Phase-1 boot gate); placeholder forces fail-closed
-# until captured — classify_p2p_installed raises on this sentinel.
-MD5_STOCK_P2P_CONNECTOR = "UNKNOWN-CAPTURE-ON-NODE"
+# The stock image's monolith connector. Captured live 2026-10-12 on
+# gx10-node1 vllm_node (vLLM 0.1.dev21546+g502d6cb5a.d20261003):
+# image tree is monolith + mooncake_utils/rdma_utils/stats + store/.
+MD5_STOCK_P2P_CONNECTOR = "5697ebd6979f7fdcc92106a8f70103d5"
 
 
 class GateError(RuntimeError):
