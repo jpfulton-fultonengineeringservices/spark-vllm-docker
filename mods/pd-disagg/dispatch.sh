@@ -132,9 +132,11 @@ if [ -z "$NODE_IP" ]; then
 fi
 : "${NODE_IP:?op=env reason=missing_node_ip set_VLLM_HOST_IP}"
 
-# Mooncake P2P: no store config; env (PYTHONHASHSEED=0, requester hostname,
-# WITH_NVIDIA_PEERMEM=0) was published by run.sh into $ENV_FILE and
-# re-sourced above. Peers are discovered via the bootstrap server (:8998).
+# Mooncake P2P: no store config; env (PYTHONHASHSEED=0, requester hostname)
+# published by run.sh into $ENV_FILE and re-sourced above. Peers are
+# discovered via the bootstrap server (:8998). WITH_NVIDIA_PEERMEM is NOT
+# exported — mooncake engine.so treats it as a hard DMABUF gate (=0 prunes
+# every RNIC; host_staging arenas are host-pinned by design, no GPU-VA reg).
 
 # ---------------------------------------------------------------------------
 # Shared parity config: defaults first (so a bare boot still works), then a
