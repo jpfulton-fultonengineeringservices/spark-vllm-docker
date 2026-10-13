@@ -164,7 +164,17 @@ class MooncakeConnectorWorker(
             )
             self.staging_recv_mib = int(
                 kv_transfer_config.kv_connector_extra_config.get(  # type: ignore[union-attr]
-                    "staging_recv_mib", 6144
+                    "staging_recv_mib", 4096
+                )
+            )
+            self.staging_chunk = bool(
+                kv_transfer_config.kv_connector_extra_config.get(  # type: ignore[union-attr]
+                    "staging_chunk", True
+                )
+            )
+            self.staging_chunk_retries = int(
+                kv_transfer_config.kv_connector_extra_config.get(  # type: ignore[union-attr]
+                    "staging_chunk_retries", 2
                 )
             )
             self._staging_send_arena: _PinnedStagingArena | None = None
@@ -273,6 +283,7 @@ class MooncakeConnectorWorker(
     
             self.finished_sending_reqs: set[ReqId] = set()
             self.finished_recving_reqs: set[ReqId] = set()
+            self._recv_failed_block_ids: set[int] = set()
     
             self.xfer_stats = MooncakeKVConnectorStats()
     

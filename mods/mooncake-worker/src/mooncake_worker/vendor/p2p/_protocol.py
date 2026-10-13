@@ -6,7 +6,7 @@ import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import TYPE_CHECKING, Any
 import httpx
@@ -93,6 +93,17 @@ class MooncakeXferMetadata(
     registered_layer_names: list[str] = msgspec.field(default_factory=list)
     registered_layer_indices: list[int] = msgspec.field(default_factory=list)
     registered_group_indices: list[int] = msgspec.field(default_factory=list)
+    # Host-staging chunking (GB10): per-request, per-KV-group absolute start
+    # index into the producer's local block list for THIS round's contiguous
+    # chunk. Absent/empty => legacy single-round (full-request) behavior.
+    req_chunk_offsets: dict[ReqId, list[int]] = msgspec.field(default_factory=dict)
+    # Producer-side completion: True on the round whose chunk finishes the
+    # request on the consumer. Absent/empty => every round is treated as final
+    # (legacy).
+    req_chunk_is_last: dict[ReqId, bool] = msgspec.field(default_factory=dict)
+    # Host-staging chunking: per-request, per-KV-group total non-NULL block counts
+    # on the consumer, enabling tail-anchoring when decode has prefix cache hits.
+    req_chunk_totals: dict[ReqId, list[int]] = msgspec.field(default_factory=dict)
 
 class MooncakeXferResponseStatus(IntEnum):
     # Transfer finished
@@ -126,6 +137,17 @@ class PullReqMeta:
     # window. group_index -> (logical_slot_offset, filtered_logical_block_ids).
     # Only populated when host_staging is enabled.
     staging_slots: dict[int, tuple[int, list[int]]] | None = None
+    # Host-staging chunking: per-group absolute index (into this request's
+    # local_block_ids[group]) of the chunk currently assigned to the window.
+    chunk_offsets: dict[int, int] = field(default_factory=dict)
+    # Per-group consumed count; advanced after each round's H2D copy.
+    group_cursor: dict[int, int] = field(default_factory=dict)
+    # True when the round just assigned exhausts every group.
+    chunk_is_last: bool = False
+    # Chunk retry counter.
+    chunk_retries: int = 0
+    # True when the round's transfer completed successfully.
+    round_done: bool = False
 
 @dataclass
 class SendBlockMeta:
@@ -137,6 +159,8 @@ class SendBlockMeta:
     need_send: int = 0
     sent: int = 0
     sending: int = 0
+    # Per-round ack counter; pop when last_acked == need_send.
+    last_acked: int = 0
 
 class MooncakeConnectorMetadata(KVConnectorMetadata):
     def __init__(self):

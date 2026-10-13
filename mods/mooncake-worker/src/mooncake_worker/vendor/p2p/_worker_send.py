@@ -231,12 +231,13 @@ class _WorkerSendMixin:
                 return
             for d_req_id, (transfer_id, _) in meta.req_blocks.items():
                 if transfer_id not in self.reqs_need_send:
-                    # This req is not enqueued in P side yet, create it here.
+                # req not enqueued in P side yet, create it here.
                     self.reqs_need_send[transfer_id] = SendBlockMeta(
                         p_req_id="",
                         transfer_id=transfer_id,
                         local_block_ids=[],
                         ready=asyncio.Event(),
+                    last_acked=0,
                     )
                 send_meta = self.reqs_need_send[transfer_id]
                 pending_reqs[d_req_id] = send_meta
@@ -342,13 +343,31 @@ class _WorkerSendMixin:
     
                 for d_req_id, send_meta in ready_reqs:
                     send_meta.sending -= 1
-    
+
                     if d_req_id in err_req_set:
                         continue
-    
+
                     send_meta.sent += 1
+                    # Host-staging chunking: only increment last_acked if this round
+                    # is the final chunk for this request. Legacy peers (absent or
+                    # empty req_chunk_is_last) are always treated as final.
+                    is_last = True
+                    chunk_is_last = getattr(meta, "req_chunk_is_last", None)
+                    if chunk_is_last is not None:
+                        is_last = chunk_is_last.get(d_req_id, True)
+
+                    if is_last:
+                        send_meta.last_acked += 1
+                    
+                    # Host-staging chunking: refresh expire_time after each successful 
+                    # chunk ack to prevent premature block deallocation for long
+                    # multi-round transfers (original 480s budget).
+                    send_meta.expire_time = (
+                        time.perf_counter() + envs.VLLM_MOONCAKE_ABORT_REQUEST_TIMEOUT
+                    )
+
                     if (
-                        send_meta.sent == send_meta.need_send
+                        send_meta.last_acked >= send_meta.need_send
                         and self.reqs_need_send.pop(send_meta.transfer_id, None) is not None
                     ):
                         self.finished_sending_reqs.add(send_meta.p_req_id)
@@ -450,20 +469,49 @@ class _WorkerSendMixin:
     
                     n_local = len(local_group)
                     n_remote = len(remote_group)
-                    if n_local < n_remote:
-                        logger.error(
-                            "req %s: local blocks(%d) < remote blocks(%d) "
-                            "in a KV cache group (is_mamba_group=%s)",
-                            d_req_id,
-                            n_local,
-                            n_remote,
-                            is_mamba_group,
-                        )
-                        has_block_error = True
-                        break
-                    elif n_local > n_remote:
-                        # Partial prefix cache hit: just read uncomputed blocks.
-                        local_group = local_group[-n_remote:] if n_remote > 0 else []
+                    # Host-staging chunking: req_chunk_offsets present → use absolute offset
+                    # into this request's local_block_ids[group]. Legacy peers fall through
+                    # to the tail-anchor path below.
+                    chunk_offsets = getattr(agent_meta, "req_chunk_offsets", None) or {}
+                    chunk_totals = getattr(agent_meta, "req_chunk_totals", None) or {}
+                    off_list = chunk_offsets.get(d_req_id)
+                    total_list = chunk_totals.get(d_req_id)
+                    if off_list is not None and group_index < len(off_list):
+                        off = off_list[group_index]
+                        # Align with consumer's suffix if producer has more blocks (prefix hit).
+                        c_total = total_list[group_index] if (total_list is not None and group_index < len(total_list)) else n_local
+                        base_off = max(0, n_local - c_total) + off
+                        if base_off + n_remote > n_local:
+                            logger.error(
+                                "req %s: chunk base %d (off=%d) + n_remote %d exceeds local blocks %d "
+                                "in group %d (c_total=%d, is_mamba_group=%s)",
+                                d_req_id,
+                                base_off,
+                                off,
+                                n_remote,
+                                n_local,
+                                group_index,
+                                c_total,
+                                is_mamba_group,
+                            )
+                            has_block_error = True
+                            break
+                        local_group = local_group[base_off : base_off + n_remote] if n_remote > 0 else []
+                    else:
+                        # Legacy (single-round) path: prefix-cache tail anchor.
+                        if n_local < n_remote:
+                            logger.error(
+                                "req %s: local blocks(%d) < remote blocks(%d) "
+                                "in a KV cache group (is_mamba_group=%s)",
+                                d_req_id,
+                                n_local,
+                                n_remote,
+                                is_mamba_group,
+                            )
+                            has_block_error = True
+                            break
+                        elif n_local > n_remote:
+                            local_group = local_group[-n_remote:] if n_remote > 0 else []
                     local_block_ids_by_group.append(local_group)
                     remote_block_ids_by_group.append(remote_group)
     
