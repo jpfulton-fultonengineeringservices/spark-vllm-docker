@@ -164,3 +164,40 @@ an explicit `docker rm -f ... vllm-router`, so the router is recreated each
 relaunch and re-queries the live bootstrap server. Verified: after the fix
 the router's container age resets with the stack and adopts the live
 engine_id automatically.
+
+---
+
+## Follow-on defect 3: garbled decode output — dropped H2D region offset
+
+With all of the above fixed, the transfer ran clean and symmetric (prefill
+48 descs / 7,127,040 B == 9x81920 + 39x163840 exactly; decode 48 copies /
+6.80 MiB) yet the PD path returned garbled text that **varied with the
+prompt** and terminated on `length`. Both engines were coherent when served
+directly, so the corruption was in the transfer byte semantics.
+
+**Root cause: the H2D completion copy dropped the per-region arena offset.**
+The consumer's receive window stacks one region's block column after
+another; region *i*'s base is
+`bases[i] = arena_base + sum_{j<i}(block_len_j * window_blocks)`
+(`staging.py` carve). The producer writes RDMA into the advertised per-region
+base (`remote_region.base_addr == bases[i]`) + `slot * pitch`. But
+`_staging_h2d_copy_request` called `arena.h2d(slot * w_region.block_len, …)`
+— only the slot term — so **every region except region 0 read region 0's
+slot space** (`bases[0] == arena_base`), and decode copied wrong KV into its
+GPU pool. Prefill-direct and decode-direct stayed coherent because neither
+uses the window.
+
+**Fix:** precompute a `base_addr -> arena-relative offset` map for each
+window region (including expanded K/V halves) at setup, and index the arena
+as `region_offset + slot * block_len`. The H2D source then equals the
+producer's destination for every region+slot by construction.
+
+**Ruled out (recorded to save a future hunt):** the "9-vs-16" pitch ratio is
+NOT the corruption vector. MiMo's per-layer KV views share one backing
+allocation (`allocate_kv_cache` docstring: layer `l` of block `b` at
+`offset + l*layer_stride + b*block_stride`; cache groups overlay), and the
+unified cross-layer tensor is unavailable here — `prefer_cross_layer_blocks`
+returns False for MiMo on three counts (hybrid/MambaSpec groups, the `B12X`
+backend not in FLASH_ATTN/FLASHINFER/TRITON_ATTN, and layout `BLHNC` not
+`HND`). Per-layer views are independent and the per-layer region model is
+valid; only the copy offset was wrong.
