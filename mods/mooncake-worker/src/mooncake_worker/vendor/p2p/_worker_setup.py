@@ -201,28 +201,30 @@ class _WorkerSetupMixin:
                     if isinstance(layer_spec, (MLAAttentionSpec, SlidingWindowMLASpec)):
                         kv_block_len = layer_spec.page_size_bytes
                     else:
-                        # kv_block_len is the number of BYTES OF ONE KERNEL BLOCK
-                        # copied per transfer. block_len (stride(0)*elem) is the
-                        # ADDRESS PITCH between consecutive kernel blocks in this
-                        # layer's registered tensor; under MiMo's hybrid pooled KV
-                        # layout each layer tensor is a strided VIEW of a shared
-                        # pool, so its row pitch (block_len) is NOT the per-block
-                        # byte count and differs per role (prefill 737280/368640
-                        # vs decode 1310720 for identical specs). The per-block
-                        # byte count is the spec's page_size_bytes, which is
-                        # identical across roles (verified live 2026-10-13:
-                        # FullAttentionSpec 81920, SlidingWindowSpec 163840 both
-                        # roles). Using the pitch here made the cross-role
-                        # kv_block_len equality check (tp_ratio=1) fail and would
-                        # have copied the wrong byte count per block.
-                        page_size = getattr(layer_spec, "page_size_bytes", None)
-                        block_bytes = block_len if page_size is None else page_size
+                        # kv_block_len is the number of BYTES OF ONE KERNEL BLOCK'S
+                        # CONTIGUOUS CONTENT copied per transfer. The registered
+                        # cache is a strided VIEW into a shared pooled tensor
+                        # (MiMo hybrid KV): block_len = stride(0)*elem is the
+                        # ADDRESS PITCH between consecutive blocks in the pool and
+                        # differs per role by construction (live 2026-10-13:
+                        # prefill full/SWA 737280/368640 vs decode 1310720/655360).
+                        # The contiguous per-block content is prod(shape[1:])*elem
+                        # (inner dims are contiguous: e.g. shape (N,2,128,320) fp8
+                        # -> 2*128*320 = 81920 B), identical across roles and
+                        # families. layer_spec.page_size_bytes is the PADDED pool
+                        # page, NOT the content size: SWA pages are padded to
+                        # 2 x content (163840 vs 81920), so copying page_size_bytes
+                        # over-copies 2x on those layers (garbled decode output,
+                        # reproduced 2026-10-13). Use the content size; fall back to
+                        # block_len when the shape is unavailable (contiguous case).
+                        content = 1
+                        for dim in cache.shape[1:]:
+                            content *= int(dim)
+                        kv_block_len = content * cache.element_size()
                         if self.transfer_topo.virtually_split_kv_in_blocks and not isinstance(
                             layer_spec, MambaSpec
                         ):
-                            kv_block_len = block_bytes // 2
-                        else:
-                            kv_block_len = block_bytes
+                            kv_block_len = kv_block_len // 2
                     self.block_len_per_layer.append(block_len)
                     self.kv_block_len_per_layer.append(kv_block_len)
                     self.registered_layer_names.append(layer_name)
