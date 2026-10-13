@@ -103,3 +103,47 @@ pooled-view vs per-block divergence observable without a live debugger.
 - `f12a13a` / `9a5dbf5` promote registration logs to INFO
 - `56c1a02` dump per-layer spec geometry
 - `8de1104` **fix: use spec page size for `kv_block_len`**
+- `4e7e9ef` **fix: allow consumer-only trailing KV groups**
+- cluster-config `0013010` **fix: tear down profile-gated services on relaunch**
+
+---
+
+## Follow-on defect 1: consumer-only KV group (decode DFlash drafter)
+
+With the geometry fixed, the live request advanced to
+`KV group count mismatch: local=11, remote=12`. Prefill registers 11
+KV-cache groups; decode registers 12 — the decode-only DFlash drafter adds
+a trailing group. `metadata.reqs_to_send` (producer) and `req_blocks`
+(consumer) are group-indexed vectors, and the sender required exact count
+equality before zipping them, so any consumer-only group aborted every
+transfer.
+
+**Fix** (`_worker_send.py`): reject only a *producer* group the consumer
+lacks (`len(local) > len(remote)`); extra trailing consumer groups are
+dropped by the positional zip. Safe because the consumer-only group is
+computed decode-local and never transferred, and `_align_transfer_regions`
+still fail-closes on any real per-group divergence for shared layers
+(it asserts aligned regions share a `group_index`).
+
+## Follow-on defect 2: stale vllm-router Mooncake engine_id
+
+The router injects the prefill `engine_id` into each decode leg, read once
+from `GET {prefill}:8998/query` at the **router's** boot. `teardown_stack`
+ran `docker compose down` without profiles, so the profile-gated
+`vllm-router` survived every relaunch and kept injecting the engine_id from
+the previous engine generation. Decode then logged, on every request:
+
+```
+ERROR _worker_receive.py:286 Failed to find remote engine_id
+0274aaae-... from bootstrap server http://<prefill>:8998
+```
+
+while the live bootstrap server advertised the current id. Decode hung
+until the router was restarted.
+
+**Fix** (cluster-config `spark-serve.sh`): name the profiles in the teardown
+(`--profile rank0 --profile router down --remove-orphans`) and fall back to
+an explicit `docker rm -f ... vllm-router`, so the router is recreated each
+relaunch and re-queries the live bootstrap server. Verified: after the fix
+the router's container age resets with the stack and adopts the live
+engine_id automatically.
