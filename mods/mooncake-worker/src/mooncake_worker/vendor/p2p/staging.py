@@ -427,9 +427,13 @@ class _StagingMixin:
                     # every region -> garbled decode, live 2026-10-13). Resolve
                     # once per region (the unexpanded window base it descends
                     # from, plus any expanded-half delta).
-                    region_base_offset = self._staging_window_region_offsets.get(
-                        w_region.base_addr, 0
-                    )
+                    # Hard lookup: every window region was mapped at setup, so a
+                    # missing key means the region list diverged — fail loud
+                    # rather than silently copying from region 0's slot space
+                    # (the bug this offset fixes).
+                    region_base_offset = self._staging_window_region_offsets[
+                        w_region.base_addr
+                    ]
                     for idx, kernel_block_id in enumerate(kernel_ids):
                         slot = kernel_slot_base + idx
                         arena.h2d(
