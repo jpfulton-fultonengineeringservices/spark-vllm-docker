@@ -190,9 +190,10 @@ class _WorkerSetupMixin:
                     # what names the divergence, and page_size_bytes is the
                     # value a fix must equalize across roles.
                     logger.info(
-                        "Mooncake register spec layer=%s spec=%s "
+                        "Mooncake register spec layer=%s group=%s spec=%s "
                         "page_size_bytes=%s block_size=%s",
                         layer_name,
+                        self._layer_group_indices.get(layer_name),
                         type(layer_spec).__name__,
                         getattr(layer_spec, "page_size_bytes", None),
                         getattr(layer_spec, "block_size", None),
