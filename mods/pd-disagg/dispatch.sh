@@ -229,16 +229,26 @@ else
   # envs shim); the Rust router (--kv-connector mooncake) queries
   # GET {prefill}:8998/query and injects remote_bootstrap_addr +
   # remote_engine_id into the decode leg.
-  # Window sizing (2026-10-13): the receive window is a FIXED pinned arena
-  # carved into per-region columns; staging_window_blocks = recv_mib*2**20 //
+  # Window sizing (2026-10-13): the receive window is a FIXED pinned arena,
+  # allocated ONLY on the DECODE (kv_consumer) nodes (_setup_host_staging),
+  # carved into per-region columns: staging_window_blocks = recv_mib*2**20 //
   # sum(block_len_per_layer). Live MiMo EXL3 4x measures sum(block_len) ~
   # 60.24 MiB, so 6144 MiB held only 102 kernel blocks (~13k tokens, ~9% of
   # the 143k-token pool): any request/batch past 102 blocks overflowed, decode
   # dropped it (_worker_receive.py:229) and the producer timed out after 480s
-  # (_worker_setup.py:300) -- the request FAILED. 24576 MiB -> ~408 blocks
-  # (~52k tokens). Override via PD_STAGING_RECV_MIB (pinned host memory
-  # competes with the UMA KV pool, so raise deliberately).
-  pd_staging_recv_mib="${PD_STAGING_RECV_MIB:-24576}"
+  # (_worker_setup.py:300) -- the request FAILED.
+  #
+  # SIZE IS BOUNDED BY THE DECODE NODE'S UMA HEADROOM, not by capacity alone.
+  # The window is pinned host memory on a GB10 unified-memory node, competing
+  # with the vLLM KV pool + co-tenants. Measured (VictoriaMetrics, gx10-becc):
+  # MemAvailable on the DECODE node dipped to ~7.6 GiB with a 6144 MiB window
+  # even at GMU 0.68 -- already marginal. 24576 MiB was projected ~3 GiB
+  # OVER budget (would OOM the decode node); 12288 MiB (~203 blocks / ~26k
+  # tokens) doubles the original capacity while keeping ~9 GiB slack, and
+  # covers the 8x concurrent ~2853-token PD test (184 blocks). Raise ONLY
+  # with matched decode-GMU reduction and a re-checked node headroom;
+  # override via PD_STAGING_RECV_MIB.
+  pd_staging_recv_mib="${PD_STAGING_RECV_MIB:-12288}"
   pd_staging_send_mib="${PD_STAGING_SEND_MIB:-512}"
   P2P_CFG="{\"kv_connector\":\"MooncakeConnector\",\"kv_role\":\"%ROLE%\",\"kv_connector_extra_config\":{\"host_staging\":true,\"staging_send_mib\":${pd_staging_send_mib},\"staging_recv_mib\":${pd_staging_recv_mib},\"num_workers\":10,\"mooncake_protocol\":\"rdma\"}}"
   KV_PRODUCER="${P2P_CFG/\%ROLE\%/kv_producer}"
