@@ -290,11 +290,15 @@ if [ "$NODE_RANK" -lt 2 ]; then
     --gpu-memory-utilization "${PD_PREFILL_GMU:-0.65}"
     --enable-chunked-prefill
     --async-scheduling
-    --generation-config vllm
-    # Recipe command: templates use {{...}} because run-recipe.py renders them
-    # via str.format; dispatch.sh args are NEVER format-rendered (verbatim to
-    # vllm serve), so single braces -- {{...}} would fail argparse json.loads.
-    --override-generation-config '{"top_p":0.95}'
+    # FIDELITY (2026-10-13): the model's own generation_config.json ships the
+    # tuned sampling + eos set (eos_token_id [151643,151645,151672],
+    # do_sample:false, temperature 1.0, top_p 0.95, max_new_tokens 2048).
+    # vLLM defaults --generation-config to "auto" (load the model's file) and
+    # treats a null override-generation-config as a no-op -- so passing NEITHER
+    # flag is what preserves the checkpoint exactly. The old
+    # `--generation-config vllm` REPLACED the file with vLLM's generic defaults
+    # (dropping the model's extra eos ids), and the top_p-only override then
+    # papered over only one of the losses. Both removed.
     --reasoning-parser mimo
     --tool-call-parser mimo
     --enable-auto-tool-choice
@@ -374,8 +378,9 @@ if [ "$NODE_RANK" -ge 2 ]; then
     --enable-chunked-prefill
     --async-scheduling
     --speculative-config "$(shared_spec_cfg)"
-    --generation-config vllm
-    --override-generation-config '{"top_p":0.95}'
+    # FIDELITY (2026-10-13): load the model's own generation_config.json (vLLM
+    # default --generation-config auto); see the prefill block rationale. No
+    # override -- the checkpoint's tuned sampling/eos set is authoritative.
     --reasoning-parser mimo
     --tool-call-parser mimo
     --enable-auto-tool-choice

@@ -57,7 +57,7 @@ NEW = '''        with timing.span("program_reclamation"):
                 # entries, which are WeakValueDictionary-backed and reaped by
                 # CPython's automatic threshold collection.
                 removed = -1
-                logger.warning(
+                logger.warning_once(
                     "b12x-reclaim-gate: B12X_SKIP_RECLAIM=1; skipped "
                     "evict_unretained reclamation sweep"
                 )
