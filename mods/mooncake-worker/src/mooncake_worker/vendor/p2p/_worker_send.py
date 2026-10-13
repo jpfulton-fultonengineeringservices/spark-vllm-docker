@@ -395,7 +395,18 @@ class _WorkerSendMixin:
                 ):
                     continue
     
-                if len(send_meta.local_block_ids) != len(remote_block_ids_per_group):
+                # The producer (prefill) and consumer (decode) can carry a
+                # different number of KV groups when one role runs layers the
+                # other does not. Concretely: a decode-only DFlash drafter adds
+                # one trailing KV group on the consumer (live 2026-10-13:
+                # prefill 11 groups, decode 12). That group is computed
+                # decode-local and is never transferred, so it must not trip the
+                # gate. Require only that the producer does not reference a
+                # consumer-missing group; the positional zip below then pairs
+                # the shared groups (extra trailing consumer groups are dropped),
+                # and _align_transfer_regions still fail-closes on any real
+                # per-group divergence (layer/group index mismatch).
+                if len(send_meta.local_block_ids) > len(remote_block_ids_per_group):
                     logger.error(
                         "req %s: KV group count mismatch: local=%d, remote=%d",
                         d_req_id,
