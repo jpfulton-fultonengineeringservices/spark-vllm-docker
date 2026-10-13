@@ -299,10 +299,37 @@ class _WorkerReceiveMixin:
                 # owned by one batch at a time (slots reset per batch). The lock
                 # is held until the batch's transfers complete because
                 # receive_kv only spawns the per-worker tasks.
+                #
+                # BOUNDED (2026-10-13): the batch await MUST NOT be unbounded.
+                # A batch whose transfer never resolves (e.g. the producer side
+                # dropped an over-capacity request and freed its blocks only on
+                # its own 480s timeout, or a peer vanished) would otherwise hold
+                # _recv_staging_lock forever -> every later start_load_kv queues
+                # behind it -> the worker parks in get_finished
+                # (_worker_setup.py:332) and decode wedges (requests hang with
+                # /v1/models still 200). Bound it with the same budget the
+                # producer uses (VLLM_MOONCAKE_ABORT_REQUEST_TIMEOUT); on expiry
+                # release the lock and log loudly so the scheduler's error path
+                # can fail those reqs instead of hanging the engine.
                 if self._recv_staging_lock is None:
                     self._recv_staging_lock = asyncio.Lock()
                 async with self._recv_staging_lock:
-                    await self._start_load_kv_inner(reqs_to_recv, await_tasks=True)
+                    budget = float(envs.VLLM_MOONCAKE_ABORT_REQUEST_TIMEOUT) + 30.0
+                    try:
+                        await asyncio.wait_for(
+                            self._start_load_kv_inner(reqs_to_recv, await_tasks=True),
+                            timeout=budget,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.error(
+                            "host_staging: recv batch did not complete within "
+                            "%.0fs (%d engine(s)); releasing the staging window "
+                            "lock. Affected reqs will fail via the producer's "
+                            "timeout rather than wedging decode.",
+                            budget,
+                            len(reqs_to_recv),
+                        )
+                        self.xfer_stats.record_failed_recv()
                 return
             await self._start_load_kv_inner(reqs_to_recv, await_tasks=False)
     async def _start_load_kv_inner(
