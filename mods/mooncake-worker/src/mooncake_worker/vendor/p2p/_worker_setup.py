@@ -183,6 +183,20 @@ class _WorkerSetupMixin:
                     base_addr = cache.data_ptr()
                     block_len = cache.stride(0) * cache.element_size()
                     region_base_addresses.append(base_addr)
+                    # Phase-4b geometry dump: the per-layer spec drives the
+                    # registered row pitch (block_len). Prefill and decode
+                    # register different pitches (9 vs 16 blocks/row) even at
+                    # identical model/TP/dtype; the spec type + page size is
+                    # what names the divergence, and page_size_bytes is the
+                    # value a fix must equalize across roles.
+                    logger.info(
+                        "Mooncake register spec layer=%s spec=%s "
+                        "page_size_bytes=%s block_size=%s",
+                        layer_name,
+                        type(layer_spec).__name__,
+                        getattr(layer_spec, "page_size_bytes", None),
+                        getattr(layer_spec, "block_size", None),
+                    )
     
                     if isinstance(layer_spec, (MLAAttentionSpec, SlidingWindowMLASpec)):
                         kv_block_len = layer_spec.page_size_bytes
