@@ -95,6 +95,7 @@ mods:
   - mods/exl3-mimo
   - mods/pd-disagg
   - mods/mooncake-worker
+  - mods/mm-media-deps
   - mods/b12x-kernel-cache
   - mods/b12x-reclaim-gate
 

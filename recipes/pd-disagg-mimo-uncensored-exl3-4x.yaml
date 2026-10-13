@@ -95,6 +95,10 @@ mods:
   - mods/exl3-mimo
   - mods/pd-disagg
   - mods/mooncake-worker
+  # Multimodal media decoders (av/soundfile/torchcodec) absent from the pulled
+  # vllm-node-b12x image; required for audio_url/input_audio and the pyav/
+  # torchcodec video backends (images already work via PIL/cv2).
+  - mods/mm-media-deps
   - mods/b12x-kernel-cache
   - mods/b12x-reclaim-gate
 
