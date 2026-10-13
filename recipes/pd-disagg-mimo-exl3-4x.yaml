@@ -1,0 +1,189 @@
+# PD-disaggregated MiMo-V2.6-Flash-RL EXL3 (4-node GB10)
+#
+# 4-node topology (all-EXL3 pivot off the OOM'd inverted 3x; see
+# tmp/spark-vllm-docker/pd-3x-completion-plan.md):
+#   ranks 0-1  PREFILL: EXL3 pack (exl3-v1, traditional) TP=2 sub-group,
+#             API 8100, kv_producer, GMU 0.65 (~55 GB experts/rank).
+#   ranks 2-3  DECODE: EXL3 pack TP=2 decode sub-group + DFlash,
+#             API 8200, kv_consumer, GMU 0.7 -- same proven 2x footprint
+#             (~55 GB experts/rank; the 3x TP=1 source decode needed
+#             ~173 GB and OOM'd on 121.6 GiB UMA -- physics, not tuning).
+#             rank 2 is the decode sub-group master
+#             (--master-addr $PD_DECODE_MASTER_ADDR --master-port
+#             ${PD_DECODE_MASTER_PORT:-29502} --nnodes 2 --node-rank
+#             $((NODE_RANK-2))); rank 3 joins --headless.
+#   rank 0    vllm-router sibling container :8000 API + :29000 /metrics
+#             (owned by cluster-config serve.sh compose — NOT an in-engine process).
+#   NIXL/UCX  side channel 5600 per node (VLLM_NIXL_SIDE_CHANNEL_HOST=<own IP>,
+#             computed in-container by dispatch.sh; NEVER a remote IP).
+#
+# PD_DECODE_MASTER_ADDR is REQUIRED at NNODES=4 (fail-closed in
+# dispatch.sh): decode ranks 2-3 rendezvous on it. It is the rank-2 host
+# IP, passed via `-e` from the launcher, which derives it from
+# --rank-order (same derivation as PD_DECODE_NODE_IPS rank 2).
+#
+# EXL3 pack is the traditional `exl3-v1` assemble output
+# (/nas-1/models/mimo/mimo-v2.6-flash-rl-exl3-v2), served under PACKAGING
+# id `XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3` via fes-weights on ALL 4 ranks
+# -- prefill AND decode serve the same pack id (PD_EXL3_MODEL), staged
+# via cluster.env MIMO_V26_FLASH_RL_EXL3_SLUG. The id exists ONLY in
+# the local hub-cache shim (HF_HUB_OFFLINE=1); do NOT pass
+# --setup/--download-model (that would try to fetch it from HF).
+#
+# MIMO_V26_MODEL_ID points at the ASSEMBLED checkpoint id, so the DFlash
+# drafter staging (mods/mimo-v2.6-flash) resolves `dflash/` from the
+# pack -- same path on BOTH roles.
+#
+# PARITY BY CONSTRUCTION: every cross-role flag (DFlash method/depth incl.
+# PD_NUM_SPECULATIVE_TOKENS=7, PD_BLOCK_SIZE=128, fp8 KV +
+# --kv-cache-dtype-skip-layers sliding_window, PD_MAX_MODEL_LEN, seqs/batched
+# tokens) is derived ONLY from shared PD_* vars; dispatch.sh computes and
+# logs PD_PARITY_SHA256 at boot on every role and aborts if any required
+# shared var is missing/empty. Role-specific values (TP, GMU, ports, rank)
+# are excluded from the hash by construction. Both roles serve the
+# identical EXL3 quant, which kills the EXL3-vs-source KV fidelity
+# question outright (only the packaged id is ever transferred).
+#
+# Launch via cluster-config scripts/spark-vllm-docker-serve.sh
+# (stage the pack slug, then launch with --rank-order; NOT --setup):
+#   spark-vllm-docker-serve.sh --recipe pd-disagg-mimo-exl3-4x
+#     stage  # pack only: mimo-v2.6-flash-rl-exl3-v2
+#   spark-vllm-docker-serve.sh --recipe pd-disagg-mimo-exl3-4x \
+#     launch --daemon
+#     # PD_DECODE_MASTER_ADDR=<rank2-IP> is auto-derived by serve.sh from
+#     # --rank-order and passed via -e; no explicit override needed.
+#
+# Acceptance gate (per pd-disagg README): NIXL nixl_bytes_transferred > 0
+# with zero failed transfers, /v1/models reachable on 8000 (router), 8100
+# (prefill), 8200 (decode); port probes with `ss -tln sport = :PORT`
+# (/proc/net/tcp awk LISTEN fallback) -- NEVER `nc -z`, it steals one-shot
+# NCCL rendezvous accepts.
+#
+# Required mods:
+# - mods/fes-weights        staged-weight hub-cache shim (pack id, all ranks)
+# - mods/mimo-v2.6-flash    DFlash drafter staging (from MIMO_V26_MODEL_ID)
+# - mods/mimo-diffkv-fp8-kv DiffKV + fp8 KV layout fix
+# - mods/kv-cache-guard-override skip 1M-token single-request guard
+# - mods/exl3-mimo          EXL3-to-MiMo runtime patch
+# - mods/pd-disagg          this PD mod (P2P host-staged KV + role dispatcher)
+# - mods/mooncake-worker    Mooncake worker runtime components
+# - mods/b12x-kernel-cache  B12X kernel cache wrapper
+# - mods/b12x-reclaim-gate skip b12x evict_unretained sweep (B12X_SKIP_RECLAIM)
+
+recipe_version: "1"
+name: MiMo-V2.6-Flash-RL PD-Disaggregated EXL3 (4x)
+description: "vLLM PD-disaggregated MiMo-V2.6-Flash-RL — EXL3 exl3-v1 pack TP=2 prefill (ranks 0-1) + EXL3 TP=2 + DFlash decode sub-group (ranks 2-3), P2P host-staged Mooncake KV, vllm-router (4-node GB10)"
+
+# Packaging id for the FES-staged ASSEMBLED exl3-v1 checkpoint (never fetched
+# from HF; fes-weights hub shim only).
+model: XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3
+
+container: vllm-node-b12x
+
+build_args:
+  - --exp-b12x
+
+cluster_only: true
+
+mods:
+  - mods/fes-weights
+  - mods/mimo-v2.6-flash
+  - mods/mimo-diffkv-fp8-kv
+  - mods/kv-cache-guard-override
+  - mods/exl3-mimo
+  - mods/pd-disagg
+  - mods/mooncake-worker
+  - mods/b12x-kernel-cache
+  - mods/b12x-reclaim-gate
+
+defaults:
+  # Router (rank 0) API port; external clients point here.
+  port: 8000
+  pd_router_port: 8000
+  # Prefill vLLM API (ranks 0-1, headless on rank 1).
+  pd_prefill_port: 8100
+  # Decode vLLM API (ranks 2-3, headless on rank 3).
+  pd_decode_port: 8200
+  # Mooncake daemon ports (sibling containers, serve.sh-launched):
+  # master = rank-0 metadata-only TCP; client = per-node TransferEngine.
+  # Master address itself is auto-derived by serve.sh from --rank-order
+  # (MOONCAKE_MASTER_SERVER_ADDRESS=-e), same pattern as PD_DECODE_MASTER_ADDR.
+  pd_mooncake_master_port: 50051
+  pd_mooncake_client_port: 50053
+  # KV-transfer backend: "mooncake" (P2P MooncakeConnector, host-staging —
+  # engine-to-engine RDMA via pinned host arenas; no store on the KV data
+  # path; bootstrap discovery :8998) or "lmcache" (LMCacheMPConnector, vLLM
+  # attaches to a per-node LMCache MP server that owns L1 + L2 adapters).
+  # See mods/pd-disagg/README.md.
+  pd_kv_backend: mooncake
+  # Store-cohort sizing — lmcache-twin-only knobs (the P2P mooncake backend
+  # never touches the store cohort; the master/client containers are inert
+  # for it).
+  pd_mooncake_segment_size_gib: 8
+  pd_mooncake_offload_max_gib: 100
+  # Decode sub-group master port (rank 2 master, rank 3 --headless);
+  # consumed NOW that TP_DECODE=2.
+  pd_decode_master_port: 29502
+  # TP NOT set inline: the outer engine trims vLLM-level TP flags; ONLY
+  # PD_TP_PREFILL/PD_TP_DECODE below reach vLLM (see TP-trimming footgun in
+  # mods/pd-disagg/dispatch.sh).
+  # 4-node topology: 2-rank EXL3 prefill sub-group + 2-rank EXL3 decode
+  # sub-group. GMU: dispatch.sh defaults both PD_PREFILL_GMU (0.65) and
+  # PD_DECODE_GMU (0.70) (~55 GB/rank 2x footprint per role).
+  pd_tp_prefill: 2
+  pd_tp_decode: 2
+  # REQUIRED NNODES=4 (decode ranks 2-3 rendezvous): rank-2 host IP,
+  # auto-derived by serve.sh from --rank-order and passed via docker -e.
+  # Deliberately NOT a command-template placeholder: run-recipe.py renders
+  # command: with str.format(**params) at script-generation time, so an
+  # inline `PD_DECODE_MASTER_ADDR='{...}'` prefix assignment would stomp
+  # the inherited docker -e value (prefix assignments override inherited
+  # env even when empty) and trip dispatch.sh's :? fail-closed guard.
+  # Serve.sh is the single source; dispatch.sh aborts fail-closed if the
+  # -e value is missing/empty when the decode sub-group forms.
+  # DFlash speculative-decoding depth: hash-enforced cross-role
+  # (PD_PARITY_SHA256); must be 7 (coherent-proven, 2x recipe).
+  num_speculative_tokens: 7
+  max_model_len: 1048576
+  block_size: 128
+  max_num_seqs: 32
+  max_num_batched_tokens: 16384
+
+env:
+  PD_DISAGG_ENABLED: "1"
+  # PD_KV_BACKEND is deliberately NOT set here: run-recipe.py emits env: values
+  # VERBATIM (no str.format), so a "{pd_kv_backend}" placeholder would export the
+  # literal string. The command: line below sets PD_KV_BACKEND={pd_kv_backend}
+  # (correctly substituted) as a prefix on the dispatch.sh invocation, which
+  # covers dispatch.sh AND the run.sh it sources in-process. A bare export here
+  # is redundant at best -- and harmful when dispatch.sh is run without the
+  # prefix (e.g. a manual docker exec): the literal "{pd_kv_backend}" matches
+  # neither "mooncake" nor "lmcache", so run.sh silently falls into the mooncake
+  # branch and dies mooncake-env.sh:33 (MOONCAKE_MASTER_SERVER_ADDRESS required).
+  # Request router: rank-0 sibling vllm-router container (:8000 API,
+  # :29000 /metrics) owned by cluster-config serve.sh compose — NOT an
+  # in-engine process; no in-recipe router env is needed or honored.
+  # b12x-kcache wrapper (mods/b12x-kernel-cache): "b12x-kcache exec vllm serve".
+  PD_VLLM_SERVE: "b12x-kcache exec vllm serve"
+  # ASSEMBLED checkpoint id -> DFlash drafter resolves dflash/ from the pack.
+  MIMO_V26_MODEL_ID: "XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3"
+  # Both roles serve the EXL3 pack id (no PD_DECODE_MODEL source staging).
+  PD_EXL3_MODEL: "XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3"
+  CUTE_DSL_ARCH: "sm_121a"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+  VLLM_SKIP_KV_CACHE_MEMORY_CHECK: "1"
+  # Persistent b12x/torchinductor kernel cache (per-boot /tmp re-compiles
+  # otherwise).
+  TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
+  # Staged-weights only (fes-weights shim); never contact HF.
+  HF_HUB_OFFLINE: "1"
+  # b12x-reclaim-gate mod: skip b12x's evict_unretained reclamation sweep —
+  # its retained-owner walk (no cycle guard/memoization) spins at 100% CPU
+  # with NIXL-registered KV buffers in the retained set (see mods/b12x-reclaim-gate).
+  B12X_SKIP_RECLAIM: "1"
+
+# Single-line outer-engine recipe command: multi-node launch-cluster.sh runs
+# this as the LAST line, appending --nnodes/--node-rank/--master-addr/
+# --master-port. dispatch.sh derives per-role vLLM commands; vLLM-level
+# tensor-parallel comes ONLY from PD_TP_PREFILL/PD_TP_DECODE (NOT trimmed).
+command: PD_KV_BACKEND={pd_kv_backend} PD_PREFILL_PORT={pd_prefill_port} PD_DECODE_PORT={pd_decode_port} PD_ROUTER_PORT={pd_router_port} PD_NUM_SPECULATIVE_TOKENS={num_speculative_tokens} PD_MAX_MODEL_LEN={max_model_len} PD_BLOCK_SIZE={block_size} PD_MAX_NUM_SEQS={max_num_seqs} PD_MAX_NUM_BATCHED_TOKENS={max_num_batched_tokens} PD_TP_PREFILL={pd_tp_prefill} PD_TP_DECODE={pd_tp_decode} PD_DECODE_MASTER_PORT={pd_decode_master_port} /workspace/mods/pd-disagg/dispatch.sh
