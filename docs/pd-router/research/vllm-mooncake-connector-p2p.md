@@ -126,7 +126,9 @@ JSON; read by `MooncakeConnectorWorker.__init__`, `fork:worker.py`):
 |---|---|---|
 | `host_staging` | `False` | Enable `_PinnedStagingArena` host-staged transfer (GB10) |
 | `staging_send_mib` | `512` | Send arena size (MiB) |
-| `staging_recv_mib` | `6144` | Recv window size (MiB) |
+| `staging_recv_mib` | `4096` | Recv window size (MiB). Bounded by DECODE node UMA headroom protection (keeping sufficient MemAvailable for vLLM process memory and co-tenants on GB10). |
+| `staging_chunk` | `True` | Enable host-staging multi-round chunked KV transfer to decouple request size from the pinned receive window size. |
+| `staging_chunk_retries` | `2` | Maximum retry count per chunk before failing a transfer round. |
 | `num_workers` | `10` | Sender thread pool size |
 | `mooncake_protocol` | `"rdma"` | Transfer protocol (`fork:docs/features/mooncake_connector_usage.md`) |
 
@@ -248,7 +250,12 @@ The scheduler-side entry points (`fork:scheduler.py`,
   host-pinned arena, not GPU VAs.
   → **Works on GB10** (see §3).
 
----
+- **Multi-round host-staging chunking (`staging_chunk=True`):** Transfers
+  exceeding the receive arena size (`staging_recv_mib`, default 4096 MiB)
+  are chunked across multiple rounds. This decouples individual request token
+  lengths from the receive arena capacity, protecting decode node UMA headroom
+  while supporting arbitrary context lengths.
+
 
 ## 3. GB10 feasibility (critical)
 

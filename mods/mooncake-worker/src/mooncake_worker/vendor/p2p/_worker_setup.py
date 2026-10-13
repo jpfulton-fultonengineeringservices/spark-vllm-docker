@@ -283,6 +283,10 @@ class _WorkerSetupMixin:
             finished_recving_reqs = self.finished_recving_reqs
             self.finished_recving_reqs = set()
             return finished_recving_reqs
+    def drain_recv_failed_block_ids(self) -> set[int]:
+            ids = self._recv_failed_block_ids
+            self._recv_failed_block_ids = set()
+            return ids
     async def fetch_finished_sending_reqs(self) -> set[ReqId]:
             finished_sending_reqs = self.finished_sending_reqs
             self.finished_sending_reqs = set()

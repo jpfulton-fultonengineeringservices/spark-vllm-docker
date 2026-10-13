@@ -99,6 +99,26 @@ class _WorkerReceiveMixin:
                     req_id: (pull_meta.transfer_id, pull_meta.local_block_ids)
                     for req_id, pull_meta in pull_metas.items()
                 }
+            if self.host_staging and self.staging_chunk:
+                req_chunk_totals = {
+                    rid: [
+                        len([b for b in g if b != NULL_BLOCK_ID])
+                        for g in pm.local_block_ids
+                    ]
+                    for rid, pm in pull_metas.items()
+                }
+                req_chunk_offsets = {
+                    rid: [pm.chunk_offsets.get(g, 0) for g in range(len(pm.local_block_ids))]
+                    for rid, pm in pull_metas.items()
+                }
+                req_chunk_is_last = {
+                    rid: pm.chunk_is_last for rid, pm in pull_metas.items()
+                }
+            else:
+                req_chunk_offsets = {}
+                req_chunk_totals = {}
+                req_chunk_is_last = {}
+
             metadata = MooncakeXferMetadata(
                 remote_hostname=self.hostname,
                 remote_port=self.rpc_port,
@@ -111,6 +131,9 @@ class _WorkerReceiveMixin:
                 registered_layer_names=self.registered_layer_names,
                 registered_layer_indices=self.registered_layer_indices,
                 registered_group_indices=self.registered_group_indices,
+                req_chunk_offsets=req_chunk_offsets,
+                req_chunk_totals=req_chunk_totals,
+                req_chunk_is_last=req_chunk_is_last,
             )
     
             encoded_data = self._encoder.encode(metadata)
@@ -163,10 +186,11 @@ class _WorkerReceiveMixin:
                 # No race because we are in async loop.
                 pull_meta.pull_tasks_count -= 1
                 if pull_meta.pull_tasks_count == 0:
-                    if self.host_staging and pull_meta.staging_slots:
-                        # The producer's sync writes landed in the pinned recv
-                        # window; move KV into the real GPU blocks before the
-                        # scheduler is told the request is ready.
+                    if self.host_staging and self.staging_chunk and pull_meta.staging_slots is not None:
+                        # Chunked staging: mark round done; driver owns H2D copy and addition to finished_recving_reqs.
+                        pull_meta.round_done = True
+                    elif self.host_staging and pull_meta.staging_slots:
+                        # Legacy host_staging (non-chunked): existing H2D+add path.
                         try:
                             self._staging_h2d_copy_request(pull_meta)
                         except Exception:
@@ -177,7 +201,9 @@ class _WorkerReceiveMixin:
                             )
                             self.xfer_stats.record_failed_recv()
                             continue
-                    self.finished_recving_reqs.add(pull_meta.d_req_id)
+                        self.finished_recving_reqs.add(pull_meta.d_req_id)
+                    else:
+                        self.finished_recving_reqs.add(pull_meta.d_req_id)
     
             if ok_reqs:
                 logger.debug("pulling kv_caches for %s finished", ok_reqs)
@@ -219,8 +245,9 @@ class _WorkerReceiveMixin:
             self,
             remote_engine_id: EngineId,
             pull_metas: dict[ReqId, PullReqMeta],
+        assign_slots: bool = True,
         ) -> list[asyncio.Task] | None:
-            if self.host_staging:
+            if assign_slots and self.host_staging:
                 # Serialized in _start_load_kv: only one pull batch occupies the
                 # receive window at a time. Assign window slots before any
                 # metadata goes out.
@@ -270,27 +297,131 @@ class _WorkerReceiveMixin:
                 for worker_addr in worker_addrs
             ]
             return tasks if self.host_staging else None
-    async def handle_new_engine_id(
-            self,
-            remote_engine_id: EngineId,
-            pull_metas: dict[ReqId, PullReqMeta],
-        ) -> list[asyncio.Task] | None:
+    async def _ensure_remote_agents(
+            self, engine_id: EngineId, pull_metas: dict[ReqId, PullReqMeta]
+        ) -> bool:
+            """Wait for bootstrap queries and return whether engine_id is mapped."""
             remote_bootstrap_addr = next(iter(pull_metas.values())).remote_bootstrap_addr
             if remote_bootstrap_addr not in self._pending_bootstrap_queries:
                 self._pending_bootstrap_queries[remote_bootstrap_addr] = asyncio.Event()
                 await self._connect_to_prefiller_bootstrap(remote_bootstrap_addr)
             else:
                 await self._pending_bootstrap_queries[remote_bootstrap_addr].wait()
-    
-            if remote_engine_id not in self._remote_agents:
+
+            if engine_id not in self._remote_agents:
                 logger.error(
                     "Failed to find remote engine_id %s from bootstrap server %s",
-                    remote_engine_id,
+                    engine_id,
                     remote_bootstrap_addr,
                 )
-                return None
-    
-            return self.receive_kv(remote_engine_id, pull_metas)
+                return False
+            return True
+
+    async def handle_new_engine_id(
+            self,
+            remote_engine_id: EngineId,
+            pull_metas: dict[ReqId, PullReqMeta],
+        ) -> list[asyncio.Task] | None:
+            if await self._ensure_remote_agents(remote_engine_id, pull_metas):
+                return self.receive_kv(remote_engine_id, pull_metas)
+            return None
+    def _mark_recv_failed(self, req_id: ReqId, pull_meta: PullReqMeta) -> None:
+        """Mark request failed: add all non-NULL blocks to _recv_failed_block_ids and finish req."""
+        for group in pull_meta.local_block_ids:
+            for b in group:
+                if b != NULL_BLOCK_ID:
+                    self._recv_failed_block_ids.add(b)
+        self.finished_recving_reqs.add(req_id)
+        logger.error(
+            "host_staging: req %s failed after %d retries; releasing to recompute",
+            req_id,
+            pull_meta.chunk_retries,
+        )
+
+    def _chunk_retry(self, pull_meta: PullReqMeta) -> bool:
+        """Decrement/check retry budget for one request chunk."""
+        if pull_meta.chunk_retries >= self.staging_chunk_retries:
+            return False
+        pull_meta.chunk_retries += 1
+        return True
+
+    async def _receive_one_round(
+        self,
+        remote_engine_id: EngineId,
+        pull_metas: dict[ReqId, PullReqMeta],
+    ) -> bool:
+        """Send one chunked round of metadata, await worker tasks, return success."""
+        for pm in pull_metas.values():
+            pm.round_done = False
+        tasks = self.receive_kv(remote_engine_id, pull_metas, assign_slots=False)
+        if not tasks:
+            return False
+        await asyncio.gather(*tasks, return_exceptions=True)
+        return all(pm.round_done for pm in pull_metas.values())
+
+    async def _start_load_kv_staged_rounds(
+        self,
+        reqs_to_recv: dict[EngineId, dict[ReqId, PullReqMeta]],
+    ) -> None:
+        """Drive multi-round KV transfers sequentially per request."""
+        for remote_engine_id, pull_metas in reqs_to_recv.items():
+            if not await self._ensure_remote_agents(remote_engine_id, pull_metas):
+                for rid, pm in pull_metas.items():
+                    self._mark_recv_failed(rid, pm)
+                continue
+
+            for req_id, pull_meta in list(pull_metas.items()):
+                if not pull_meta.group_cursor:
+                    pull_meta.group_cursor = {
+                        g: 0 for g in range(len(pull_meta.local_block_ids))
+                    }
+                round_idx = 0
+                # req_chunk_offsets and chunk_is_last are set inside the loop
+                # below via _staging_assign_round_slots; we just need to ensure
+                # the initial values reflect an unstarted request.
+                pull_meta.chunk_is_last = False
+                while True:
+                    fits = self._staging_assign_round_slots({req_id: pull_meta})
+                    if not fits:
+                        self._mark_recv_failed(req_id, pull_meta)
+                        break
+                    pull_meta.chunk_is_last = self._round_is_last(pull_meta)
+                    round_idx += 1
+                    slots_count = sum(len(c) for _, c in pull_meta.staging_slots.values()) if pull_meta.staging_slots else 0
+                    logger.info(
+                        "host_staging: req %s round %d, %d slots, last=%s",
+                        req_id,
+                        round_idx,
+                        slots_count,
+                        pull_meta.chunk_is_last,
+                    )
+
+                    ok = await self._receive_one_round(remote_engine_id, {req_id: pull_meta})
+                    if not ok:
+                        if self._chunk_retry(pull_meta):
+                            continue
+                        self._mark_recv_failed(req_id, pull_meta)
+                        break
+
+                    try:
+                        self._staging_h2d_copy_request(pull_meta)
+                    except Exception:
+                        logger.exception(
+                            "host_staging: H2D copy failed for req %s round %d",
+                            req_id,
+                            round_idx,
+                        )
+                        self._mark_recv_failed(req_id, pull_meta)
+                        break
+
+                    if pull_meta.staging_slots:
+                        for g, (_, chunk) in pull_meta.staging_slots.items():
+                            pull_meta.group_cursor[g] += len(chunk)
+
+                    if pull_meta.chunk_is_last:
+                        self.finished_recving_reqs.add(req_id)
+                        break
+
     async def _start_load_kv(
             self, reqs_to_recv: dict[EngineId, dict[ReqId, PullReqMeta]]
         ):
@@ -310,26 +441,37 @@ class _WorkerReceiveMixin:
                 # /v1/models still 200). Bound it with the same budget the
                 # producer uses (VLLM_MOONCAKE_ABORT_REQUEST_TIMEOUT); on expiry
                 # release the lock and log loudly so the scheduler's error path
-                # can fail those reqs instead of hanging the engine.
+                # can fail those reqs instead of hanging the engine. This block
+                # handles BOTH staging_chunk=True (multi-round) and False
+                # (legacy single-round) paths — both must mark failed reqs on
+                # timeout so they enter recompute via _recv_failed_block_ids.
                 if self._recv_staging_lock is None:
                     self._recv_staging_lock = asyncio.Lock()
                 async with self._recv_staging_lock:
                     budget = float(envs.VLLM_MOONCAKE_ABORT_REQUEST_TIMEOUT) + 30.0
                     try:
-                        await asyncio.wait_for(
-                            self._start_load_kv_inner(reqs_to_recv, await_tasks=True),
-                            timeout=budget,
-                        )
+                        if self.staging_chunk:
+                            await asyncio.wait_for(
+                                self._start_load_kv_staged_rounds(reqs_to_recv),
+                                timeout=budget,
+                            )
+                        else:
+                            await asyncio.wait_for(
+                                self._start_load_kv_inner(reqs_to_recv, await_tasks=True),
+                                timeout=budget,
+                            )
                     except asyncio.TimeoutError:
                         logger.error(
                             "host_staging: recv batch did not complete within "
                             "%.0fs (%d engine(s)); releasing the staging window "
-                            "lock. Affected reqs will fail via the producer's "
-                            "timeout rather than wedging decode.",
+                            "lock. Marking reqs failed for local recompute.",
                             budget,
                             len(reqs_to_recv),
                         )
                         self.xfer_stats.record_failed_recv()
+                        for metas in reqs_to_recv.values():
+                            for rid, pm in metas.items():
+                                self._mark_recv_failed(rid, pm)
                 return
             await self._start_load_kv_inner(reqs_to_recv, await_tasks=False)
     async def _start_load_kv_inner(

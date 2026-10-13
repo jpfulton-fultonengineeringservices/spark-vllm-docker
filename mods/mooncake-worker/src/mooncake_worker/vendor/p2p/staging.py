@@ -364,6 +364,70 @@ class _StagingMixin:
                     pull_meta.staging_slots = None
                     overflow.append(req_id)
             return overflow
+    def _staging_assign_round_slots(
+            self, pull_metas: dict[ReqId, PullReqMeta]
+        ) -> list[ReqId]:
+            """Assign receive-window slots for one chunked staging round.
+
+            Logical blocks fit = window_blocks // expansion(g). Assign
+            staging_slots[g] = (0, chunk) for each group. Return the list of
+            fitting ReqIds. Distinguish "nothing to transfer" (fit) from
+            "capacity 0" (fail).
+            """
+            kernel_capacity = self._staging_window_blocks
+            fit: list[ReqId] = []
+            for req_id, pull_meta in pull_metas.items():
+                staging_slots: dict[int, tuple[int, list[int]]] = {}
+                round_fits = True
+                all_exhausted = True
+                for group_index, group in enumerate(pull_meta.local_block_ids):
+                    filtered = [b for b in group if b != NULL_BLOCK_ID]
+                    if not filtered:
+                        continue
+                    exp = self._staging_group_expansion(group_index)
+                    chunk_blocks = kernel_capacity // exp
+                    if chunk_blocks <= 0:
+                        logger.error(
+                            "host_staging: staging window capacity 0 for "
+                            "group %d (expansion=%d, window=%d blocks)",
+                            group_index,
+                            exp,
+                            kernel_capacity,
+                        )
+                        round_fits = False
+                        break
+                    # Chunk is the next window worth of blocks starting at cursor.
+                    cursor = pull_meta.group_cursor.get(group_index, 0)
+                    chunk = filtered[cursor : cursor + chunk_blocks]
+                    if not chunk:
+                        # Already exhausted this group.
+                        continue
+                    all_exhausted = False
+                    staging_slots[group_index] = (0, chunk)
+                if round_fits and (staging_slots or all_exhausted):
+                    pull_meta.staging_slots = staging_slots
+                    pull_meta.chunk_offsets = {
+                        g: pull_meta.group_cursor.get(g, 0)
+                        for g in staging_slots
+                    }
+                    fit.append(req_id)
+                else:
+                    pull_meta.staging_slots = None
+            return fit
+
+    def _round_is_last(self, pull_meta: PullReqMeta) -> bool:
+            """True when the current round's chunk exhausts every group."""
+            for group_index, group in enumerate(pull_meta.local_block_ids):
+                filtered = [b for b in group if b != NULL_BLOCK_ID]
+                if not filtered:
+                    continue
+                cursor = pull_meta.group_cursor.get(group_index, 0)
+                exp = self._staging_group_expansion(group_index)
+                chunk_blocks = self._staging_window_blocks // exp
+                if cursor + chunk_blocks < len(filtered):
+                    return False
+            return True
+
     def _staging_slot_block_ids(self, pull_meta: PullReqMeta) -> list[list[int]]:
             """Per-group slot ids to advertise in place of real block ids."""
             slots = pull_meta.staging_slots
