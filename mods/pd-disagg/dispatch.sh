@@ -287,7 +287,7 @@ if [ "$NODE_RANK" -lt 2 ]; then
     --kv-cache-dtype fp8
     --max-num-seqs "$PD_MAX_NUM_SEQS"
     --max-num-batched-tokens "$PD_MAX_NUM_BATCHED_TOKENS"
-    --gpu-memory-utilization "${PD_PREFILL_GMU:-0.7}"
+    --gpu-memory-utilization "${PD_PREFILL_GMU:-0.65}"
     --enable-chunked-prefill
     --async-scheduling
     --generation-config vllm
@@ -370,7 +370,7 @@ if [ "$NODE_RANK" -ge 2 ]; then
     --kv-cache-dtype fp8
     --max-num-seqs "$PD_MAX_NUM_SEQS"
     --max-num-batched-tokens "$PD_MAX_NUM_BATCHED_TOKENS"
-    --gpu-memory-utilization "${PD_DECODE_GMU:-0.7}"
+    --gpu-memory-utilization "${PD_DECODE_GMU:-0.65}"
     --enable-chunked-prefill
     --async-scheduling
     --speculative-config "$(shared_spec_cfg)"
