@@ -1,18 +1,18 @@
 #!/bin/bash
 #
-# [pd-disagg] Role-aware PD-disaggregated MiMo-V2.6-Flash-RL-UNCENSORED EXL3 (4-node GB10)
+# [pd-disagg] Role-aware PD-disaggregated MiMo-V2.6-Flash-RL EXL3 (4-node GB10)
 #
-# Sourced by recipes/pd-disagg-mimo-uncensored-exl3-4x.yaml's single-line recipe command,
+# Sourced from a pd-disagg-mimo-*-exl3-4x.yaml recipe's single-line recipe command,
 # which launch-cluster.sh's outer engine invokes per node with:
 #   dispatch.sh --nnodes N --node-rank R --master-addr HEAD --master-port P [--headless]
 #
 # Topology (NNODES must be 4; see tmp/spark-vllm-docker/pd-3x-completion-plan.md):
-#   ranks 0..1  PREFILL  : EXL3 pack, tensor-parallel 2 (2-rank sub-group,
-#                         mirrors recipes/mimo-v2.6-flash-rl-uncensored-exl3-2x.yaml),
-# API port 8100. The request router is NOT an in-engine process: a rank-0
-# sibling `vllm-router` container (:8000 OpenAI API, :29000 Prometheus
-# /metrics) — owned by cluster-config serve.sh compose — fronts the stack.
-# ranks 2..3  DECODE   : same EXL3 pack TP=2 sub-group + DFlash speculative
+#   ranks 0..1  PREFILL : EXL3 pack, tensor-parallel 2 (2-rank sub-group,
+#                         mirrors the corresponding 2x recipe),
+#                         API port 8100. Request router is NOT an in-engine process: rank-0
+#                         sibling `vllm-router` container (:8000 OpenAI API, :29000 Prometheus
+#                         /metrics) — owned by cluster-config serve.sh compose — fronts the stack.
+#   ranks 2..3  DECODE  : same EXL3 pack TP=2 sub-group + DFlash speculative
 #                         decoding, API port 8200, kv_consumer. Both roles serve
 #                         PD_EXL3_MODEL so prefill/decode quantization match.
 #
@@ -251,7 +251,7 @@ P2P_CFG="{\"kv_connector\":\"MooncakeConnector\",\"kv_role\":\"%ROLE%\",\"kv_con
 fi
 
 # Shared flag payload (identical on both roles): everything from the live
-# recipes/mimo-v2.6-flash-rl-uncensored-exl3-2x.yaml EXCEPT port / TP / GMU,
+# 2x EXL3 recipes EXCEPT port / TP / GMU,
 # which are role-specific and appended separately.
 shared_spec_cfg() {
   printf '{"method":"dflash","model":"%s","num_speculative_tokens":%s,"attention_backend":"B12X"}' \
