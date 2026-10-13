@@ -59,22 +59,39 @@ requested (drafter KV is computed decode-local).
 
 ## Fix
 
-`vendor/p2p/_worker_setup.py`: derive `kv_block_len` from the spec
-(`layer_spec.page_size_bytes`), keeping `block_len` as the addressing pitch.
+`vendor/p2p/_worker_setup.py`: derive `kv_block_len` from the contiguous
+per-block content; keep `block_len` as the addressing pitch.
 
 ```python
-page_size = getattr(layer_spec, "page_size_bytes", None)
-block_bytes = block_len if page_size is None else page_size
+content = 1
+for dim in cache.shape[1:]:
+    content *= int(dim)
+kv_block_len = content * cache.element_size()   # contiguous per-block bytes
 if self.transfer_topo.virtually_split_kv_in_blocks and not isinstance(layer_spec, MambaSpec):
-    kv_block_len = block_bytes // 2
-else:
-    kv_block_len = block_bytes
+    kv_block_len = kv_block_len // 2
 ```
 
-Addressing is unchanged and remains self-consistent: the host-staging window
-carve (`_setup_host_staging`) and the H2D copy base (`_staging_h2d_copy_request`)
-both use each side's own `block_len` pitch; only the copied length
-(`kv_block_len`) and the cross-role equality check use the spec page size.
+**Correction (2026-10-13, after the split test).** An intermediate revision
+used `layer_spec.page_size_bytes`. That is the *padded* pool page, not the
+block content: FullAttention pages equal the content (81920 B) but
+SlidingWindow pages are padded to **2× content** (163840 vs 81920). Copying
+`page_size_bytes` over-copied every SWA layer with padding, so the PD path
+emitted garbage while prefill-direct stayed coherent. The authoritative
+per-block copy length is the **contiguous content** `prod(shape[1:]) * elem`
+(inner dims are contiguous in the strided pooled view: `(N,2,128,320)` fp8 →
+81920 B; `(N,4,64,320)` → 81920 B), identical across roles and families.
+`block_len = stride(0)*elem` remains the addressing pitch and legitimately
+differs per role (prefill full/SWA 737280/368640; decode 1310720/655360).
+
+**How it was caught:** serving prefill directly (`:8100`) with the same
+weights answers coherently ("The capital of France is Paris.") while the PD
+path (`:8000`) returns repeated-token garbage — proving the pack/weights are
+fine and the corruption is in the KV transfer.
+
+Addressing unchanged and remains self-consistent: host-staging window
+carve (`_setup_host_staging`) and H2D copy base (`_staging_h2d_copy_request`)
+both each side's own `block_len` pitch; only copied length
+(`kv_block_len`) uses the contiguous content size.
 
 ## Instrumentation used
 
