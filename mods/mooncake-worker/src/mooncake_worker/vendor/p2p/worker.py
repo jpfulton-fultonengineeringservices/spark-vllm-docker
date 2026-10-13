@@ -293,6 +293,68 @@ class MooncakeConnectorWorker(
                     self._layer_specs[layer_name] = specs_by_layer.get(
                         layer_name, group_spec
                     )
+            # Exclude the speculative DFlash drafter's KV group from the P2P
+            # registration. The drafter exists ONLY on decode, builds its own KV
+            # during decode, and is never shipped from prefill: the producer has
+            # no region for it, so leaving it registered makes the consumer's
+            # staged H2D copy read UNWRITTEN window slots into decode's KV pool
+            # (live 2026-10-13: prefill sent 48 regions / 7.13 MB, decode copied
+            # 53 regions / 8.05 MiB -> garbled output while both engines served
+            # coherently standalone). Detection is fail-safe: only when
+            # speculative_config is set, and only for groups whose layers are all
+            # absent from the target model's own KV spec set (the target layers
+            # come from vllm_config.model_config's attention layers; the drafter
+            # layers are the draft model's, e.g. 'model.layers.48..' vs the
+            # target's 'language_model.model.layers.0..47').
+            self._excluded_layer_names: set[str] = set()
+            if getattr(vllm_config, "speculative_config", None) is not None:
+                try:
+                    # The target model's own attention layer names: index each
+                    # target layer via extract_layer_index and keep those below
+                    # hf_config.num_hidden_layers. Drafter layers are the draft
+                    # model's and live at/above that boundary.
+                    num_target_layers = getattr(
+                        vllm_config.model_config.hf_config,
+                        "num_hidden_layers",
+                        None,
+                    )
+                    target_indices = (
+                        set(range(int(num_target_layers)))
+                        if num_target_layers is not None
+                        else None
+                    )
+                    for group in kv_cache_config.kv_cache_groups:
+                        names = list(group.layer_names)
+                        if not names or target_indices is None:
+                            continue
+                        # Drafter group: every layer index is at/above the
+                        # target model's layer count (e.g. target 48 layers ->
+                        # drafter layers 48..52). Target groups always have all
+                        # indices < num_hidden_layers.
+                        group_indices = {
+                            extract_layer_index(name)
+                            for name in names
+                        }
+                        if group_indices and group_indices.isdisjoint(
+                            target_indices
+                        ):
+                            self._excluded_layer_names.update(names)
+                            logger.info(
+                                "Mooncake: excluding speculative-drafter KV "
+                                "group from P2P registration (%d layers, "
+                                "e.g. %s)",
+                                len(names),
+                                names[0],
+                            )
+                except Exception:
+                    # Detection is best-effort; on any failure fall back to
+                    # registering every group (previous behaviour) rather than
+                    # risking a silent skip of target layers.
+                    logger.exception(
+                        "Mooncake: drafter-group detection failed; "
+                        "registering all KV groups"
+                    )
+                    self._excluded_layer_names = set()
             self._layer_group_indices: dict[str, int] = {
                 layer: group_index
                 for group_index, group in enumerate(kv_cache_config.kv_cache_groups)

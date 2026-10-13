@@ -152,6 +152,11 @@ class _WorkerSetupMixin:
             for layer_name, cache_or_caches in kv_caches.items():
                 layer_index = extract_layer_index(layer_name)
                 layer_spec = self._layer_specs.get(layer_name)
+                if layer_name in getattr(self, "_excluded_layer_names", ()):
+                    # Speculative-drafter KV: decode-local, never shipped from
+                    # prefill. Registering/copying it reads unwritten staging
+                    # slots and corrupts decode's pooled KV (see worker.py).
+                    continue
                 if layer_spec is None:
                     logger.debug(
                         "Skipping layer %s because no KV cache spec is present.",
