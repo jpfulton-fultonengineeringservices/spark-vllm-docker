@@ -175,6 +175,14 @@ class MooncakeConnectorWorker(
             # the transfer geometry for the completion H2D copy.
             self._staging_window_bases: list[int] = []
             self._staging_window_blocks = 0
+            # Per-region byte offset of each window base relative to the arena
+            # base (bases[i] - arena.base_ptr). The H2D completion copy must add
+            # this to the slot offset: the arena holds one region's block column
+            # after another, so region i's slot space starts at bases[i], not at
+            # the arena base. Omitting it made every region except 0 read region
+            # 0's slot space (garbled decode output, live 2026-10-13).
+            self._staging_window_offsets: list[int] = []
+            self._staging_window_region_offsets: dict[int, int] = {}
             self._staging_window_regions: list[TransferRegion] = []
             self._staging_real_regions: list[TransferRegion] = []
             self._recv_staging_lock: asyncio.Lock | None = None

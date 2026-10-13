@@ -272,6 +272,13 @@ class _StagingMixin:
                         f"({offset} > {self._staging_recv_arena.num_bytes})."
                     )
                 self._staging_window_bases = bases
+                # Region-relative offsets (bases[i] - arena base). The H2D
+                # completion copy indexes the arena by region offset + slot
+                # pitch; without the region offset every region's copy read
+                # region 0's slot space (see worker.py attr comment).
+                self._staging_window_offsets = [
+                    base - self._staging_recv_arena.base_ptr for base in bases
+                ]
                 # Expanded-region views for the completion H2D copy plan. The
                 # window mirrors the real per-layer block layout exactly, so the
                 # same _get_transfer_regions expansion applies to both.
@@ -283,6 +290,26 @@ class _StagingMixin:
                     self.registered_layer_indices,
                     self.registered_group_indices,
                 )
+                # base_addr -> arena-relative offset for the H2D completion
+                # copy. Computed from the UNexpanded bases (offsets list above):
+                # an expanded region's base_addr is either a parent base or a
+                # parent base + kv_block_len (the K/V half), so the nearest
+                # parent at or below it gives the offset, and the remainder is
+                # the half's byte delta.
+                self._staging_window_region_offsets: dict[int, int] = {}
+                for w_region in self._staging_window_regions:
+                    off = 0
+                    for parent_base, parent_offset in zip(
+                        self._staging_window_bases,
+                        self._staging_window_offsets,
+                    ):
+                        if w_region.base_addr >= parent_base:
+                            off = parent_offset + (
+                                w_region.base_addr - parent_base
+                            )
+                    self._staging_window_region_offsets[
+                        w_region.base_addr
+                    ] = off
                 self._staging_real_regions = self._get_transfer_regions(
                     self.kv_caches_base_addr,
                     self.block_len_per_layer,
@@ -393,10 +420,20 @@ class _StagingMixin:
                     if w_region.group_index != group_index:
                         continue
                     nbytes = w_region.kv_block_len
+                    # Arena-relative offset of this region's window base. The
+                    # arena stacks one region's block column after another, so
+                    # the copy source is base_offset + slot*pitch, NOT
+                    # slot*pitch alone (which read region 0's slot space for
+                    # every region -> garbled decode, live 2026-10-13). Resolve
+                    # once per region (the unexpanded window base it descends
+                    # from, plus any expanded-half delta).
+                    region_base_offset = self._staging_window_region_offsets.get(
+                        w_region.base_addr, 0
+                    )
                     for idx, kernel_block_id in enumerate(kernel_ids):
                         slot = kernel_slot_base + idx
                         arena.h2d(
-                            slot * w_region.block_len,
+                            region_base_offset + slot * w_region.block_len,
                             r_region.base_addr + kernel_block_id * r_region.block_len,
                             nbytes,
                         )
