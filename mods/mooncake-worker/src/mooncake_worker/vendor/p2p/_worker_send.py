@@ -567,10 +567,12 @@ class _WorkerSendMixin:
                                 )
                                 lengths.append(transfer_len)
     
-                logger.debug(
-                    "Sending kv_caches for request %s (%d blocks) to %s",
+                logger.info(
+                    "Sending kv_caches for request %s (%d blocks, %d descs, %d bytes) to %s",
                     d_req_id,
                     sum(len(group) for group in local_block_ids_by_group),
+                    len(src_ptrs),
+                    sum(lengths),
                     remote_session,
                 )
     

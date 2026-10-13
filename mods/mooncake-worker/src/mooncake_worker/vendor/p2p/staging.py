@@ -404,7 +404,7 @@ class _StagingMixin:
                         total_bytes += nbytes
             arena.synchronize()
             duration = time.perf_counter() - start
-            logger.debug(
+            logger.info(
                 "host_staging: H2D copy for req %s done (%d copies, %.2f MiB, "
                 "%.1f ms, %.1f GiB/s)",
                 pull_meta.d_req_id,
