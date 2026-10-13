@@ -94,7 +94,7 @@ defaults:
   block_size: 128
   max_num_seqs: 32
   max_num_batched_tokens: 16384
-  num_speculative_tokens: 8
+  num_speculative_tokens: 7
 
 env:
   CUTE_DSL_ARCH: "sm_121a"
