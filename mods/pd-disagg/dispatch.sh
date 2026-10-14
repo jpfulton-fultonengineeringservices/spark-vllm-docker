@@ -171,6 +171,27 @@ if [ -n "$PD_MOE_BACKEND" ]; then
   PD_EXTRA_ARGS+=(--moe-backend "$PD_MOE_BACKEND")
 fi
 
+# Per-role batch/concurrency knobs. A prefill engine wants SMALL batches +
+# high throughput; a decode engine wants decode-only max concurrency. These
+# are NOT part of PD_PARITY_SHA256 (that hashes only the cross-role KV-layout
+# fields: spec tokens, block size, kv dtype + skip-layers, max_model_len), so
+# the two roles may differ freely. Both default to the shared vars, keeping
+# every existing EXL3 recipe byte-identical.
+PD_MAX_NUM_SEQS_PREFILL="${PD_MAX_NUM_SEQS_PREFILL:-$PD_MAX_NUM_SEQS}"
+PD_MAX_NUM_BATCHED_TOKENS_PREFILL="${PD_MAX_NUM_BATCHED_TOKENS_PREFILL:-$PD_MAX_NUM_BATCHED_TOKENS}"
+PD_MAX_NUM_SEQS_DECODE="${PD_MAX_NUM_SEQS_DECODE:-$PD_MAX_NUM_SEQS}"
+PD_MAX_NUM_BATCHED_TOKENS_DECODE="${PD_MAX_NUM_BATCHED_TOKENS_DECODE:-$PD_MAX_NUM_BATCHED_TOKENS}"
+
+# Multimodal per-prompt limits, emitted on BOTH roles only when set. Empty =
+# default (model's own modality config). The NVFP4 recipe sets it to disable
+# the vision/audio encoders + their encoder cache on memory-tight TP=2 shapes
+# (the encoder profile is what wedged the first boot under UMA pressure).
+PD_LIMIT_MM_PER_PROMPT="${PD_LIMIT_MM_PER_PROMPT:-}"
+PD_MM_ARGS=()
+if [ -n "$PD_LIMIT_MM_PER_PROMPT" ]; then
+  PD_MM_ARGS+=(--limit-mm-per-prompt "$PD_LIMIT_MM_PER_PROMPT")
+fi
+
 # Canonical shared config hash: identical bytes -> identical hash on rank 0, 1, 2.
 # Compare across roles' boot logs before trusting a PD session.
 # n3 single-source: the canonical payload string is published by run.sh as
@@ -254,9 +275,12 @@ else
   #
 # Recv arena sizing is bounded by DECODE node UMA headroom protection (keeping
 # sufficient MemAvailable for vLLM process memory and co-tenants on GB10).
-# With chunking enabled, a 4096 MiB receive window (~68 blocks) safely handles
-# transfers without risking host OOM or exceeding UMA limits.
-# Override via PD_STAGING_RECV_MIB.
+# With chunking enabled the WINDOW only bounds how much of ONE request is in
+# flight at a time; long contexts are split into window-sized rounds
+# (staging_chunk), so a smaller window costs round-trips, NOT correctness.
+# Each side sizes its own pinned arena, so lowering it is safe cross-role.
+# Default stays 4096 (EXL3 unchanged); the NVFP4 TP=2 recipe lowers it via
+# PD_STAGING_RECV_MIB for the memory-tight shape.
 pd_staging_recv_mib="${PD_STAGING_RECV_MIB:-4096}"
   pd_staging_send_mib="${PD_STAGING_SEND_MIB:-512}"
 pd_staging_chunk="${PD_STAGING_CHUNK:-1}"
@@ -303,11 +327,12 @@ if [ "$NODE_RANK" -lt 2 ]; then
     --block-size "$PD_BLOCK_SIZE"
     --max-model-len "$PD_MAX_MODEL_LEN"
     --kv-cache-dtype fp8
-    --max-num-seqs "$PD_MAX_NUM_SEQS"
-    --max-num-batched-tokens "$PD_MAX_NUM_BATCHED_TOKENS"
+    --max-num-seqs "$PD_MAX_NUM_SEQS_PREFILL"
+    --max-num-batched-tokens "$PD_MAX_NUM_BATCHED_TOKENS_PREFILL"
     --gpu-memory-utilization "${PD_PREFILL_GMU:-0.65}"
     --enable-chunked-prefill
     --async-scheduling
+    "${PD_MM_ARGS[@]+"${PD_MM_ARGS[@]}"}"
     # FIDELITY (2026-10-13): the model's own generation_config.json ships the
     # tuned sampling + eos set (eos_token_id [151643,151645,151672],
     # do_sample:false, temperature 1.0, top_p 0.95, max_new_tokens 2048).
@@ -391,11 +416,12 @@ if [ "$NODE_RANK" -ge 2 ]; then
     --linear-backend b12x
     --block-size "$PD_BLOCK_SIZE"
     --kv-cache-dtype fp8
-    --max-num-seqs "$PD_MAX_NUM_SEQS"
-    --max-num-batched-tokens "$PD_MAX_NUM_BATCHED_TOKENS"
+    --max-num-seqs "$PD_MAX_NUM_SEQS_DECODE"
+    --max-num-batched-tokens "$PD_MAX_NUM_BATCHED_TOKENS_DECODE"
     --gpu-memory-utilization "${PD_DECODE_GMU:-0.7}"
     --enable-chunked-prefill
     --async-scheduling
+    "${PD_MM_ARGS[@]+"${PD_MM_ARGS[@]}"}"
     --speculative-config "$(shared_spec_cfg)"
     # FIDELITY (2026-10-13): load the model's own generation_config.json (vLLM
     # default --generation-config auto); see the prefill block rationale. No
