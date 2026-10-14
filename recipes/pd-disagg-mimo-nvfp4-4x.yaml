@@ -87,17 +87,18 @@ env:
   # GMU sizing: vLLM's request_memory = ceil(TOTAL * GMU) must be <= the
   # engine's free UMA at start (worker/utils.py raise -- VLLM_SKIP_KV_CACHE_
   # MEMORY_CHECK does NOT cover it), and weights alone are 85.87 GiB/rank.
-  # MEASURED free at engine start (2026-10-14, co-tenants running): prefill
-  # node1/2 ~107/112 GiB; decode node3/4 ~93/90 GiB (bge-m3 embed 7.5 +
-  # headroom 2.1 + lmcache-server 1.9). ceil(120.5*GMU) must be <= free or the
-  # worker raises before loading weights. 0.80 prefill -> 96.4 (fits 107/112);
-  # 0.73 decode -> 88.0 (fits 90 with ~2 GiB margin). This is the wall on a
-  # 120.5 GiB box: 85.87 GiB weights + decode co-tenants leave only ~2-10 GiB
-  # for KV+activations+cudagraph. For real headroom STOP the bge-m3 embed fleet
-  # (~8 GiB/node) so decode GMU can rise, or run TP=4 (~46 GiB/rank). Both
-  # role GMUs are role-specific (not in the parity hash).
-  PD_PREFILL_GMU: "0.80"
-  PD_DECODE_GMU: "0.73"
+  # GMU sizing. vLLM's request_memory = ceil(TOTAL*GMU) must be <= free UMA at
+  # engine start (worker/utils.py raise; VLLM_SKIP_KV_CACHE_MEMORY_CHECK does
+  # NOT cover it), and weights alone are 85.87 GiB/rank at TP=2. The bge-m3
+  # embed fleet is STOPPED (vllm-embed@bge-m3-embed.service on every node),
+  # which freed ~8-10 GiB/node: measured free now prefill node1/2 ~107/112,
+  # decode node3/4 ~101/99 GiB. 0.82 -> 98.8 fits the decode worst node with
+  # margin; prefill 0.82 -> 98.8 fits 107/112. This leaves ~10-13 GiB for
+  # KV+activations+cudagraph on TP=2. Role GMUs are role-specific (not in the
+  # parity hash). Re-enable the embed fleet (systemctl start
+  # vllm-embed@bge-m3-embed.service) with lower GMUs if it must co-tenancy.
+  PD_PREFILL_GMU: "0.82"
+  PD_DECODE_GMU: "0.82"
   CUTE_DSL_ARCH: "sm_121a"
   VLLM_USE_V2_MODEL_RUNNER: "1"
   VLLM_SKIP_KV_CACHE_MEMORY_CHECK: "1"
