@@ -40,7 +40,8 @@ set -euo pipefail
 # The patcher locates every anchor by exact substring, asserts the expected
 # count, and fail-loud exits on a mismatch (image drift). It is idempotent:
 # a second run detects the `# mimo-nvfp4:` marker and skips. The patched file
-# is validated with `ast.parse` before it is written.
+# is validated with `compile()` before it is written (NOT ast.parse — see the
+# acceptance check rationale below).
 
 PREFIX="[mimo-v2.6-flash-rl-nvfp4]"
 PYTHON_ROOT="${VLLM_SITE_PACKAGES:-${PYTHON_ROOT:-/usr/local/lib/python3.12/dist-packages}}"
@@ -87,13 +88,19 @@ EDIT_A_NEW = EDIT_A_OLD + (
 
 # (b) ModelOpt names the block scale `weight_scale`; strip the FP8 `_inv`
 # suffix when the ModelOpt layout is active so the lookup resolves.
+# NOTE indentation: this anchor sits INSIDE the `for name, loaded_weight in
+# weights:` body (12 spaces). The anchor string MUST be 12 spaces too — an
+# 8-space prefix is a substring of the 12-space line, so replace() would keep
+# the line but emit the inserted block at 8 spaces, closing the loop and
+# orphaning the following `continue` (CPython 3.8+ only flags that at compile,
+# not ast.parse — see the acceptance check below).
 EDIT_B_OLD = (
-    "        name = mapped_name if mapped_name is not None else orig_name\n"
+    "            name = mapped_name if mapped_name is not None else orig_name\n"
 )
 EDIT_B_NEW = EDIT_B_OLD + (
-    "        # mimo-nvfp4: ModelOpt block scale is named `weight_scale`.\n"
-    "        if name.endswith(\".weight_scale_inv\") and _mopt_ws:\n"
-    "            name = name[: -len(\"_inv\")]\n"
+    "            # mimo-nvfp4: ModelOpt block scale is named `weight_scale`.\n"
+    "            if name.endswith(\".weight_scale_inv\") and _mopt_ws:\n"
+    "                name = name[: -len(\"_inv\")]\n"
 )
 
 # (c1) Stacked fused-expert loader: reshape the 2-D on-disk block scale to the
@@ -160,8 +167,13 @@ for label, old, new in edits:
         )
     text = text.replace(old, new, 1)
 
-# Fail loud if the patched module no longer parses (anchor hit the wrong place).
-ast.parse(text)
+# Fail loud if the patched module no longer compiles. Use compile(), NOT
+# ast.parse(): since CPython 3.8 the 'continue'/'break' not-properly-in-loop
+# check runs at the codegen (symtable) stage, so ast.parse() happily accepts a
+# patch that dedents the for-loop body and orphans a `continue` -- exactly the
+# corruption this mod produced before the EDIT_B indentation was fixed. Any
+# other future anchor/indent drift is caught the same way.
+compile(text, str(path), "exec")
 
 path.write_text(text)
 print("[mimo-nvfp4] Patched mimo_v2.py (ModelOpt weight_scale bridge).")
