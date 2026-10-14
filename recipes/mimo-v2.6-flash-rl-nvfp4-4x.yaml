@@ -24,6 +24,7 @@ mods:
   - mods/mimo-v2.6-flash-rl-nvfp4
   - mods/mimo-diffkv-fp8-kv
   - mods/b12x-kernel-cache
+  - mods/b12x-reclaim-gate
 
 defaults:
   port: 8000
@@ -40,6 +41,11 @@ env:
   CUTE_DSL_ARCH: "sm_121a"
   VLLM_USE_V2_MODEL_RUNNER: "1"
   TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
+  # b12x _reclaim_programs runs an unguarded O(exponential) retained-owner walk
+  # plus an eager gc.collect() that spins at 100% CPU (GIL held) forever after
+  # graph capture, wedging determine_available_memory. The mod gates both behind
+  # this flag; skipping only leaves WeakValueDictionary-backed cache entries.
+  B12X_SKIP_RECLAIM: "1"
 
 command: |
   b12x-kcache exec vllm serve XiaomiMiMo/MiMo-V2.6-Flash-RL-NVFP4 \
