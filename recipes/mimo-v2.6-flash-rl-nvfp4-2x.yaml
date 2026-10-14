@@ -32,7 +32,10 @@ defaults:
   port: 8000
   host: 0.0.0.0
   tensor_parallel: 2
-  gpu_memory_utilization: 0.7
+  # TP=2 holds the full 256 experts/rank (~86 GiB weights) + DFlash drafter;
+  # GMU 0.70 leaves Available KV = -12.76 GiB (measured). Break-even is
+  # nonKV(98.2 GiB)/UMA(122 GiB) ~= 0.805; 0.82 clears it with headroom.
+  gpu_memory_utilization: 0.82
   max_model_len: 1048576
   block_size: 128
   max_num_seqs: 32
