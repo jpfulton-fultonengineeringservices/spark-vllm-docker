@@ -1,0 +1,76 @@
+# Recipe: MiMo-V2.6-Flash-RL-NVFP4 (two DGX Spark, TP=2)
+#
+# Serves NVFP4 (ModelOpt MIXED_PRECISION) checkpoint across two GB10 nodes TP=2.
+# Requires the ModelOpt load bridge (`mods/mimo-v2.6-flash-rl-nvfp4`); no exl3-mimo.
+#
+# Flags: `--quantization modelopt_mixed --load-format b12x --moe-backend b12x`
+# keep `--attention-backend B12X --linear-backend b12x` and the B12X DFlash spec config.
+
+recipe_version: "1"
+name: MiMo-V2.6-Flash-RL-NVFP4
+description: vLLM MiMo-V2.6-Flash-RL-NVFP4 modelopt_mixed + b12x DFlash DGX (TP=2)
+
+model: XiaomiMiMo/MiMo-V2.6-Flash-RL-NVFP4
+
+container: vllm-node-b12x
+
+build_args:
+  - --exp-b12x
+
+cluster_only:
+
+mods:
+  - mods/fes-weights
+  - mods/mimo-v2.6-flash
+  - mods/mimo-v2.6-flash-rl-nvfp4
+  - mods/mimo-diffkv-fp8-kv
+  - mods/kv-cache-guard-override
+  - mods/b12x-kernel-cache
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 2
+  gpu_memory_utilization: 0.7
+  max_model_len: 1048576
+  block_size: 128
+  max_num_seqs: 32
+  max_num_batched_tokens: 16384
+  num_speculative_tokens: 7
+
+env:
+  CUTE_DSL_ARCH: "sm_121a"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+  VLLM_SKIP_KV_CACHE_MEMORY_CHECK: "1"
+  MIMO_V26_MODEL_ID: "XiaomiMiMo/MiMo-V2.6-Flash-RL-NVFP4"
+  TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
+
+command: |
+  b12x-kcache exec vllm serve XiaomiMiMo/MiMo-V2.6-Flash-RL-NVFP4 \
+  --trust-remote-code \
+  --host {host} \
+  --port {port} \
+  --tensor-parallel-size {tensor_parallel} \
+  --quantization modelopt_mixed \
+  --attention-backend B12X \
+  --linear-backend b12x \
+  --load-format b12x \
+  --moe-backend b12x \
+  --block-size {block_size} \
+  --max-model-len {max_model_len} \
+  --kv-cache-dtype fp8 \
+  --kv-cache-dtype-skip-layers sliding_window \
+  --max-num-seqs {max_num_seqs} \
+  --max-num-batched-tokens {max_num_batched_tokens} \
+  --gpu-memory-utilization {gpu_memory_utilization} \
+  --enable-chunked-prefill \
+  --async-scheduling \
+  --enable-prefix-caching \
+  --speculative-config '{{"method":"dflash","model":"/workspace/MiMo-V2.6-Flash-RL-dflash","num_speculative_tokens":{num_speculative_tokens},"attention_backend":"B12X"}}' \
+  --generation-config \
+  --override-generation-config '{{"top_p":0.95}}' \
+  --reasoning-parser mimo \
+  --tool-call-parser mimo \
+  --enable-auto-tool-choice \
+  --kv-cache-metrics \
+  --enable-mfu-metrics

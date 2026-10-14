@@ -1,0 +1,21 @@
+0a1
+> # primitive-ai: ModelOpt MIXED_PRECISION loading (FP8_PB_WO block scales are named weight_scale, 4-D)
+746a748,750
+>         # primitive-ai: ModelOpt FP8_PB_WO dense layers name the block scale weight_scale
+>         _mopt_ws = not any(k.endswith("weight_scale_inv") and ".experts" not in k for k in params_dict) and any(
+>             k.endswith(".weight_scale") and ".experts" not in k for k in params_dict)
+799a804,805
+>             if name.endswith(".weight_scale_inv") and _mopt_ws:
+>                 name = name[: -len("_inv")]
+819a826,827
+>                 if param.dim() == 4 and loaded_weight.dim() == 2 and name_rewritten.endswith("weight_scale"):
+>                     loaded_weight = loaded_weight.reshape(loaded_weight.shape[0], 1, loaded_weight.shape[1], 1)
+850a859,860
+>                 if param.dim() == 4 and loaded_weight.dim() == 2 and name.endswith("weight_scale"):
+>                     loaded_weight = loaded_weight.reshape(loaded_weight.shape[0], 1, loaded_weight.shape[1], 1)
+914a925,926
+>             if param_name not in params_dict and kind == "weight_scale_inv":
+>                 param_name = f"{prefix}.weight_scale"
+915a928,929
+>             if param.dim() == 4 and tensor.dim() == 2:
+>                 tensor = tensor.reshape(tensor.shape[0], 1, tensor.shape[1], 1)
