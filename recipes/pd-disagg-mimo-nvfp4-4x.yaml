@@ -81,9 +81,7 @@ env:
   # inner quotes; it is passed as a single-quoted command-prefix instead, and
   # that prefix also seeds the env for dispatch.sh.
   PD_STAGING_RECV_MIB: "2048"
-  # Skip the P2P-inert mooncake-client cohort (~8 GiB/node store DRAM that the
-  # engine-to-engine data path never reads) to protect UMA headroom.
-  PD_MOONCAKE_SKIP_CLIENT: "1"
+
   # GMU sizing: vLLM's request_memory = ceil(TOTAL * GMU) must be <= the
   # engine's free UMA at start (worker/utils.py raise -- VLLM_SKIP_KV_CACHE_
   # MEMORY_CHECK does NOT cover it), and weights alone are 85.87 GiB/rank.
