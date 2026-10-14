@@ -42,8 +42,12 @@ PY
 extract_archive() {
   local arch="$1" stage="$2" comp="$3"
   case "$comp" in
-    zstd)  [ -f "$arch" ] && zstd -d -q -c "$arch" 2>/dev/null | tar -xf - -C "$stage" ;;
-    gzip)  tar -xzf "$arch" -C "$stage" 2>/dev/null ;;
+    # --no-same-owner: the store may be a root-squashed NFS export where the
+    # extracting user is `nobody`; without this tar tries to chown every entry
+    # to the archived uid/gid, fails with EPERM, exits non-zero, and the
+    # archive is misreported as corrupt (leaving every boot on the cold path).
+    zstd)  [ -f "$arch" ] && zstd -d -q -c "$arch" 2>/dev/null | tar -xf - --no-same-owner -C "$stage" ;;
+    gzip)  tar -xzf "$arch" --no-same-owner -C "$stage" 2>/dev/null ;;
     *)     return 1 ;;
   esac
 }
