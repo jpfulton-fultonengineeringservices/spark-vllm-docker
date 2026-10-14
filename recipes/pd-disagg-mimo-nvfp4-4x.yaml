@@ -94,6 +94,10 @@ env:
   # Decode is the wall: the decode hosts carry lmcache-server + headroom +
   # comfyui co-tenants. Freeing those (~5 GiB on node3/4) or TP=4 is the way to
   # real decode context. Role GMUs are role-specific (not in the parity hash).
+  # (VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS stays default-on: its delta here
+  # is only ~0.1 GiB -- the log prints 0.7900 equivalent to 0.7891 -- and
+  # disabling it would drop CUDA-graph memory from KV accounting, risking OOM
+  # at capture. Raising GMU is the correct lever, not that flag.)
   PD_PREFILL_GMU: "0.86"
   PD_DECODE_GMU: "0.81"
   CUTE_DSL_ARCH: "sm_121a"
