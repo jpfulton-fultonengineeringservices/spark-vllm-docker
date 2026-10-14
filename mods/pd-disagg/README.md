@@ -78,8 +78,18 @@ Port map: 8000 (vllm-router API), 29000 (vllm-router /metrics), 8100 (prefill AP
 | `VLLM_MOONCAKE_BOOTSTRAP_PORT` | P2P bootstrap server port (prefill rank 0; injected into vllm/envs.py by mods/mooncake-worker) | `8998` | envs shim |
 | `PD_DECODE_MASTER_ADDR` | Decode sub-group master IP (REQUIRED, NNODES=4) | — | serve.sh `-e` |
 | `PD_DECODE_NODE_IPS` | Decode ranks' IPs CSV (rank-2 first) | — | serve.sh `-e` |
-| `PD_ROUTER_PORT` | vllm-router container API port (compose config; recipe default feeds serve.sh) | `8000` | serve.sh |
 | `PD_TP_PREFILL` / `PD_TP_DECODE` | Sub-group TP (MUST be 2) | `2` | dispatch.sh |
+| `PD_QUANTIZATION` | `--quantization` value | `exl3` | recipe env |
+| `PD_MODEL` | Served model id (falls back to `PD_EXL3_MODEL`) | EXL3 id | recipe env |
+| `PD_LOAD_FORMAT` | `--load-format` (emitted only when non-empty) | (empty) | recipe env |
+| `PD_MOE_BACKEND` | `--moe-backend` (emitted only when non-empty) | (empty) | recipe env |
+
+The four `PD_*` knobs above exist so a non-EXL3 quant path can reuse this
+dispatcher. The **NVFP4 twin** (`recipes/pd-disagg-mimo-nvfp4-4x.yaml`) uses the
+same topology/ports/parity as the EXL3 twin but sets
+`PD_QUANTIZATION=modelopt_mixed PD_LOAD_FORMAT=b12x PD_MOE_BACKEND=b12x` and
+applies `mods/mimo-v2.6-flash-rl-nvfp4` (ModelOpt load bridge) instead of
+`mods/exl3-mimo` — no pack build required.
 
 Shared parity vars (`PD_NUM_SPECULATIVE_TOKENS=7`, `PD_BLOCK_SIZE=128`,
 `PD_MAX_MODEL_LEN=1048576`, `PD_MAX_NUM_SEQS=32`,

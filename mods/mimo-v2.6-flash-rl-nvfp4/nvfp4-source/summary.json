@@ -1,0 +1,277 @@
+{
+  "source": "/nas-1/models/mimo/mimo-v2.6-flash-nvfp4",
+  "shard_count": 65,
+  "total_tensors": 145273,
+  "index_metadata": {
+    "total_size": 182403280256,
+    "save_format": "modelopt_mixed"
+  },
+  "shards": {
+    "model_mtp.safetensors": {
+      "tensors": 48,
+      "bytes": 1189405992
+    },
+    "model_pp0_ep0_shard0.safetensors": {
+      "tensors": 3097,
+      "bytes": 13535676488
+    },
+    "model_pp0_ep10_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep11_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep12_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep13_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep14_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep15_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep16_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep17_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep18_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep19_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep1_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661555096
+    },
+    "model_pp0_ep20_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep21_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep22_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep23_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep24_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep25_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep26_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep27_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep28_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep29_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep2_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661556224
+    },
+    "model_pp0_ep30_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep31_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep32_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep33_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep34_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep35_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep36_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep37_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep38_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep39_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep3_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep40_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep41_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep42_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep43_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep44_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep45_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep46_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep47_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep48_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep49_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep4_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep50_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep51_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep52_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep53_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep54_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep55_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep56_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep57_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep58_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep59_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep5_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep60_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep61_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep62_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep63_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661559608
+    },
+    "model_pp0_ep6_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep7_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep8_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    },
+    "model_pp0_ep9_shard0.safetensors": {
+      "tensors": 2256,
+      "bytes": 2661557352
+    }
+  },
+  "dtype_counts": {
+    "BF16": 716,
+    "F8_E4M3": 36159,
+    "F32": 72302,
+    "U8": 36096
+  }
+}

@@ -199,3 +199,10 @@ shell_exec: ./scripts/spark-vllm-docker-serve.sh health --wait 600
   `--gpu-memory-utilization` hack.
 - Restore uses `spark-vllm-docker-serve.sh launch` — do NOT hand-run bare
   `docker stop/run`.
+
+## NVFP4 serving path
+
+The NVFP4 recipes (`pd-disagg-mimo-nvfp4-4x`, `mimo-v2.6-flash-rl-nvfp4-{2x,4x}`)
+require **no pack build**; they use the ModelOpt load bridge
+(`mods/mimo-v2.6-flash-rl-nvfp4`) and `--quantization modelopt_mixed --load-format b12x --moe-backend b12x`.
+`mods/exl3-mimo` is **not** applied.

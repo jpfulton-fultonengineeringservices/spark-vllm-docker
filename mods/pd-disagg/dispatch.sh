@@ -154,6 +154,23 @@ PD_MAX_NUM_BATCHED_TOKENS="${PD_MAX_NUM_BATCHED_TOKENS:-16384}"
 : "${PD_MAX_NUM_SEQS:?op=env reason=PD_MAX_NUM_SEQS required for PD parity}"
 : "${PD_MAX_NUM_BATCHED_TOKENS:?op=env reason=PD_MAX_NUM_BATCHED_TOKENS required for PD parity}"
 
+# Quantization/model knobs. Defaults preserve the EXL3 recipe behavior
+# byte-identically; the NVFP4 twin (recipes/pd-disagg-mimo-nvfp4-4x.yaml)
+# overrides PD_QUANTIZATION/PD_MODEL/PD_LOAD_FORMAT/PD_MOE_BACKEND.
+# PD_MODEL supersedes PD_EXL3_MODEL; the old var stays honored as fallback.
+PD_QUANTIZATION="${PD_QUANTIZATION:-exl3}"
+PD_MODEL="${PD_MODEL:-${PD_EXL3_MODEL:-XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3}}"
+PD_LOAD_FORMAT="${PD_LOAD_FORMAT:-}"
+PD_MOE_BACKEND="${PD_MOE_BACKEND:-}"
+# Emitted into BOTH role commands only when non-empty so EXL3 argv is unchanged.
+PD_EXTRA_ARGS=()
+if [ -n "$PD_LOAD_FORMAT" ]; then
+  PD_EXTRA_ARGS+=(--load-format "$PD_LOAD_FORMAT")
+fi
+if [ -n "$PD_MOE_BACKEND" ]; then
+  PD_EXTRA_ARGS+=(--moe-backend "$PD_MOE_BACKEND")
+fi
+
 # Canonical shared config hash: identical bytes -> identical hash on rank 0, 1, 2.
 # Compare across roles' boot logs before trusting a PD session.
 # n3 single-source: the canonical payload string is published by run.sh as
@@ -271,7 +288,7 @@ if [ "$NODE_RANK" -lt 2 ]; then
 
   echo "$PREFIX role=PREFILL rank=$NODE_RANK tp=$TP_PREFILL kv=mooncake-p2p prefill_master=$PREFILL_MASTER_ADDR:$PREFILL_MASTER_PORT PD_PARITY_SHA256=$PD_PARITY_SHA256"
 
-  PREFILL_CMD=("${VLLM_SERVE[@]}" "${PD_EXL3_MODEL:-XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3}"
+  PREFILL_CMD=("${VLLM_SERVE[@]}" "$PD_MODEL"
     --host 0.0.0.0
     --port "${PD_PREFILL_PORT:-8100}"
     --tensor-parallel-size "$TP_PREFILL"
@@ -279,7 +296,8 @@ if [ "$NODE_RANK" -lt 2 ]; then
     --node-rank "$NODE_RANK"
     --master-addr "$PREFILL_MASTER_ADDR"
     --master-port "$PREFILL_MASTER_PORT"
-    --quantization exl3
+    --quantization "$PD_QUANTIZATION"
+    "${PD_EXTRA_ARGS[@]+"${PD_EXTRA_ARGS[@]}"}"
     --attention-backend B12X
     --linear-backend b12x
     --block-size "$PD_BLOCK_SIZE"
@@ -357,7 +375,7 @@ if [ "$NODE_RANK" -ge 2 ]; then
   echo "$PREFIX role=DECODE rank=$NODE_RANK tp=$TP_DECODE kv=mooncake-p2p decode_master=${PD_DECODE_MASTER_ADDR} PD_PARITY_SHA256=$PD_PARITY_SHA256"
 
   # shellcheck disable=SC2206
-  DECODE_CMD=("${VLLM_SERVE[@]}" "${PD_EXL3_MODEL:-XiaomiMiMo/MiMo-V2.6-Flash-RL-EXL3}"
+  DECODE_CMD=("${VLLM_SERVE[@]}" "$PD_MODEL"
     --host 0.0.0.0
     --port "${PD_DECODE_PORT:-8200}"
     --tensor-parallel-size "$TP_DECODE"
@@ -365,7 +383,8 @@ if [ "$NODE_RANK" -ge 2 ]; then
     --node-rank "$((NODE_RANK-2))"
     --master-addr "$PD_DECODE_MASTER_ADDR"
     --master-port "${PD_DECODE_MASTER_PORT:-29502}"
-    --quantization exl3
+    --quantization "$PD_QUANTIZATION"
+    "${PD_EXTRA_ARGS[@]+"${PD_EXTRA_ARGS[@]}"}"
     --trust-remote-code
     --max-model-len "$PD_MAX_MODEL_LEN"
     --attention-backend B12X
