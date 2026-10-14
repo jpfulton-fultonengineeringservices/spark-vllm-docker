@@ -1,0 +1,22 @@
+# PD-disagg MiMo-V2.6-Flash-RL-NVFP4 - MMMU (multimodal) via the router's
+# /v1/chat/completions path with base64 image content parts.
+
+[run]
+name        = "mimo-nvfp4-cluster-mmmu"
+tasks       = ["mmmu_val"]
+num_fewshot = 0
+batch_size  = 1
+limit       = 0
+output_dir  = "results"
+log_samples = true
+seed        = "0,1234,1234,1234"
+apply_chat_template = true
+
+[model]
+backend           = "local-chat-completions"
+base_url          = "http://10.10.10.165:8000/v1/chat/completions"
+model             = "XiaomiMiMo/MiMo-V2.6-Flash-RL-NVFP4"
+tokenizer_backend = "none"
+num_concurrent    = 1
+max_images        = 3
+auth_token_env    = ""

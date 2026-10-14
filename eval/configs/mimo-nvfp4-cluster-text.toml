@@ -1,0 +1,22 @@
+# PD-disagg MiMo-V2.6-Flash-RL-NVFP4 - direct to the rank-0 vllm-router.
+# Tasks needing loglikelihood (arc_easy) ride the /v1/completions path.
+
+[run]
+name        = "mimo-nvfp4-cluster-text"
+tasks       = ["arc_easy", "humaneval_instruct"]
+num_fewshot = 0
+batch_size  = 1
+limit       = 0
+output_dir  = "results"
+log_samples = true
+seed        = "0,1234,1234,1234"
+apply_chat_template = true
+
+[model]
+backend           = "local-completions"
+base_url          = "http://10.10.10.165:8000/v1/completions"
+model             = "XiaomiMiMo/MiMo-V2.6-Flash-RL-NVFP4"
+tokenizer_backend = "huggingface"
+tokenizer         = "XiaomiMiMo/MiMo-V2.6-Flash-RL"
+num_concurrent    = 1
+auth_token_env    = ""

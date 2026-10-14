@@ -1,0 +1,21 @@
+# Fast sanity check: arc_easy only, limit 10, direct to the cluster router.
+
+[run]
+name        = "smoke"
+tasks       = ["arc_easy"]
+num_fewshot = 0
+batch_size  = 1
+limit       = 10
+output_dir  = "results"
+log_samples = true
+seed        = "0,1234,1234,1234"
+apply_chat_template = true
+
+[model]
+backend           = "local-completions"
+base_url          = "http://10.10.10.165:8000/v1/completions"
+model             = "XiaomiMiMo/MiMo-V2.6-Flash-RL-NVFP4"
+tokenizer_backend = "huggingface"
+tokenizer         = "XiaomiMiMo/MiMo-V2.6-Flash-RL"
+num_concurrent    = 1
+auth_token_env    = ""
