@@ -39,6 +39,11 @@ DEFAULT_MODEL_ARGS_KEYS = (
     "timeout",
 )
 
+# Task-name prefixes whose tasks are `unsafe_code: true` (they execute the
+# model's generated Python). The harness refuses these unless
+# `--confirm_run_unsafe_code` is passed, so the rig adds it automatically.
+UNSAFE_CODE_TASK_PREFIXES = ("humaneval", "mbpp", "cruxeval", "longproc")
+
 # ---------------------------------------------------------------- run
 
 def build_argv(cfg: dict, dry_run: bool) -> list[str]:
@@ -70,7 +75,20 @@ def build_argv(cfg: dict, dry_run: bool) -> list[str]:
         if (v := model.get(key)) is not None:
             margs[key] = v
     if (env_name := model.get("auth_token_env")) and (tok := os.environ.get(env_name)):
-        margs["auth_token"] = tok
+        # local-completions/local-chat-completions build the request header from
+        # `api_key` (TemplateAPI.header -> OPENAI_API_KEY), NOT from the
+        # `auth_token` model arg. Propagate the named env var to OPENAI_API_KEY
+        # so the `Authorization: Bearer <tok>` header is populated. Direct
+        # assignment (not setdefault) so the config's named var wins for this
+        # run. Kept out of `model_args` because the harness prints them and
+        # stores them in results_*.json.
+        os.environ["OPENAI_API_KEY"] = tok
+        # `auth_token` is independently consumed by the remote tokenizer
+        # backend (RemoteTokenizer) when tokenizer_backend="remote"; forward it
+        # only then, so the secret is not written into the printed model_args of
+        # ordinary runs.
+        if model.get("tokenizer_backend") == "remote":
+            margs["auth_token"] = tok
 
     model_args = ",".join(f"{k}={v}" for k, v in margs.items())
 
@@ -91,7 +109,9 @@ def build_argv(cfg: dict, dry_run: bool) -> list[str]:
         argv += ["--seed", str(seed)]
     if run.get("apply_chat_template"):
         argv += ["--apply_chat_template"]
-    if any(t in ("humaneval", "humaneval_instruct") for t in tasks):
+    if (gk := run.get("gen_kwargs")):
+        argv += ["--gen_kwargs", str(gk)]
+    if any(t.startswith(UNSAFE_CODE_TASK_PREFIXES) for t in tasks):
         argv += ["--confirm_run_unsafe_code"]
         # The evaluate `code_eval` metric refuses to run without this opt-in.
         os.environ.setdefault("HF_ALLOW_CODE_EVAL", "1")
