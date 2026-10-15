@@ -53,6 +53,13 @@ max_length = 65536
 num_concurrent = 32
 timeout = 900
 auth_token_env = "LITELLM_API_KEY"
+# Ride a Dell-gateway connectivity outage (e.g. a LiteLLM restart) for up to
+# 10 min before failing the run, instead of the harness's few-second tenacity
+# budget. `max_retries = 0` disables the harness's own retry so the plugin's
+# deadline is the real single source of patience (they would otherwise
+# multiply: budget x (1 + max_retries)).
+outage_retry_seconds = 600
+max_retries = 0
 
 [zeno]
 enabled = false

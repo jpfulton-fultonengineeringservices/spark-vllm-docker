@@ -98,6 +98,34 @@ def canonical_prompt(arg0: Any, fallback: str) -> str:
     return fallback
 
 
+def _last_run_segment(rows: list[dict]) -> list[dict]:
+    """Keep only the final run's rows from a possibly concatenated sidecar.
+
+    ``cmd_run`` renames ``telemetry.jsonl`` to ``telemetry_<timestamp>.jsonl``
+    when a run completes (``cli.py::_stamp_telemetry``). If a run CRASHES before
+    that rename, the file is left in place and the NEXT run appends its rows to
+    it. ``tel_eval/sink.py::next_ordinal()`` is a per-process counter starting
+    at 1, so a row whose numeric ``ordinal`` is strictly lower than the previous
+    row's numeric ``ordinal`` marks the start of a new run. Without dropping the
+    earlier segment, the dead run's rows (same ``prompt_hash`` values, erroring)
+    would win ``_match_telemetry``'s first-unconsumed-row matching over the live
+    run's rows.
+
+    Rows without a numeric ``ordinal`` never trigger a reset and stay in the
+    current segment. Returns the whole list when there is no reset.
+    """
+    start = 0
+    prev: float | None = None
+    for i, row in enumerate(rows):
+        ordinal = row.get("ordinal")
+        if isinstance(ordinal, bool) or not isinstance(ordinal, (int, float)):
+            continue
+        if prev is not None and ordinal < prev:
+            start = i
+        prev = ordinal
+    return rows[start:]
+
+
 def load_telemetry(samples_dir: Path, timestamp: str) -> list[dict]:
     """Read the telemetry rows for one run.
 
@@ -126,6 +154,10 @@ def load_telemetry(samples_dir: Path, timestamp: str) -> list[dict]:
             continue
         if rows:
             break
+    # A crash skips the rename, so the next run appends to the same
+    # ``telemetry.jsonl``; keep only the current (last) run's rows so the dead
+    # run's erroring rows cannot win matching over the live run's rows.
+    rows = _last_run_segment(rows)
     return rows
 
 
@@ -145,6 +177,14 @@ def _match_telemetry(
     def bucketize(tel_key: str) -> dict[str, list[dict]]:
         out: dict[str, list[dict]] = {}
         for row in telemetry:
+            # Outage rows are mid-flight retry markers: they share the
+            # request's prompt_hash but carry no completion, and precede the
+            # request's final ok row in file order. Excluding them here stops a
+            # retried-then-succeeded request from attaching its *outage* row
+            # (empty content) instead of its real result. They fall through to
+            # the orphan lane below, preserving the event.
+            if row.get("status") == "outage":
+                continue
             k = row.get(tel_key) or ""
             if k:
                 out.setdefault(k, []).append(row)
@@ -170,13 +210,16 @@ def _match_telemetry(
     # prompt_hash is per-request exact; prompt_text is the legacy fallback.
     consume("_prompt_hash", "prompt_hash")
     consume("_prompt_text", "prompt_text")
-    unmatched = len(telemetry) - len(mapping)
-    if not mapping and telemetry and samples and allow_ordinal:
-        ordered = sorted(telemetry, key=lambda r: r.get("ordinal") or 0)
+    # Outage rows are excluded from matching (see bucketize); count only the
+    # correlation-eligible rows so `unmatched` is not inflated by them.
+    eligible = [r for r in telemetry if r.get("status") != "outage"]
+    unmatched = len(eligible) - len(mapping)
+    if not mapping and eligible and samples and allow_ordinal:
+        ordered = sorted(eligible, key=lambda r: r.get("ordinal") or 0)
         for i, s in enumerate(samples):
             if i < len(ordered):
                 mapping[i] = ordered[i]
-        unmatched = len(telemetry) - len(mapping)
+        unmatched = len(eligible) - len(mapping)
     return mapping, unmatched
 
 
