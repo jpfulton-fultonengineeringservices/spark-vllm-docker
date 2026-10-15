@@ -305,6 +305,37 @@ for additional launcher options.
 
 ## CHANGELOG
 
+### 2026-10-15
+
+#### Durable Mooncake store L2 KV cache (Qwen3.8-27B-Coder390)
+
+Added `recipes/qwen3.8-27b-coder390-2x-store-l2.yaml`: the two-node TP=2
+NVFP4 coder390 serve plus a durable L2 of the computed KV cache.
+`MooncakeStoreConnector` (`kv_role=kv_both`) fronts the shared Mooncake store
+cohort (per-node DRAM segment + NVMe SSD offload), so prefix KV — attention KV
+and the 48 Gated DeltaNet layers' Mamba state — is persisted and re-served by
+content-hash lookup across an engine restart.
+
+The new `mods/mooncake-store-l2` installs the store connector set
+(`mods/mooncake-worker` with `MOONCAKE_WORKER_P2P=skip`), the
+`mooncake-transfer-engine-cuda13==0.3.12.post1` + `cupy-cuda13x` runtime deps,
+and renders the `standalone-store` `MOONCAKE_CONFIG_PATH` JSON. It is activated
+by the launcher's `-e MOONCAKE_L2_ENABLED=1` (recipe `env:` cannot reach a mod,
+which runs before the exec-script).
+
+**Why not LMCache.** The model is a Qwen3_5 hybrid (`FullAttentionSpec` +
+`MambaSpec`, hybrid KV cache manager required). `LMCacheConnectorV1` lacks
+`SupportsHMA`, so vLLM auto-disables HMA and `_promote_local_kv_cache_specs`
+has no Mamba branch — a boot `ValueError`; `LMCacheMPConnector` hard-requires
+HMA OFF with a single uniform layout. The vendored `MooncakeStoreConnector`
+subclasses `SupportsHMA` and handles the Mamba group in align mode, so the
+Mooncake half is the corridor that works.
+
+```bash
+./run-recipe.sh --discover
+./run-recipe.sh qwen3.8-27b-coder390-2x-store-l2 --setup
+```
+
 ### 2026-10-01
 
 #### MiMo-V2.6-Flash-RL three-node recipe (PP=3)

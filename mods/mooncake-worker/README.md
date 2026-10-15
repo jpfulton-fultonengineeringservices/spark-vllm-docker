@@ -85,6 +85,25 @@ run.sh selftest    # offline integrity (no vLLM needed)
 run.sh manifest    # gate constants
 ```
 
+### Standalone store L2 (non-PD)
+
+The store set is not PD-specific: `MooncakeStoreConnector` subclasses
+`SupportsHMA` and runs standalone with `kv_role=kv_both`, giving a shared
+prefix pool keyed by content hash (mamba hybrids included, align mode). The
+store cohort owns the pool and the SSD tier, so KV survives an engine restart.
+
+For that use, apply the store set only — pin `MOONCAKE_WORKER_P2P=skip` so the
+P2P facade (irrelevant without a PD topology) is not installed:
+
+```
+MOONCAKE_WORKER_P2P=skip run.sh install
+```
+
+The P2P auto-add is idempotent and gate-fails-closed, so omitting the pin is
+safe but installs unused files. `mods/mooncake-store-l2` is the recipe-side
+companion: it installs the transfer-engine + cupy runtime deps and renders the
+`standalone-store` `MOONCAKE_CONFIG_PATH` JSON this connector reads.
+
 ## Tests
 
 ```
