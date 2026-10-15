@@ -190,13 +190,16 @@ def _num_concurrent(ref) -> int:
 
 
 def ingest_run(conn: psycopg.Connection, ref, run) -> bool:
-    """Upsert one run. Returns True when newly inserted, False if it existed."""
+    """Insert (or replace) one run from its results JSON. Returns True on write."""
     source_path = str(ref.results_file.resolve())
     with conn.cursor() as cur:
         cur.execute("SELECT id FROM eval_run WHERE source_path = %s", (source_path,))
-        row = cur.fetchone()
-        if row:
-            return False
+        existing = cur.fetchone()
+        if existing:
+            # Re-ingest replaces the run wholesale. A `--watch` pass may have
+            # ingested this run mid-flight; when it finishes, cmd_run re-ingests
+            # and must overwrite partial aggregates. Children cascade-delete.
+            cur.execute("DELETE FROM eval_run WHERE id = %s", (existing[0],))
         started_at = None
         if ref.date:
             from datetime import datetime, timezone
@@ -392,7 +395,11 @@ def _outcome_counts(task) -> dict[str, int]:
 
 
 def discover_and_ingest(results_dir: Path | str, dsn: str) -> int:
-    """Ingest every run under ``results_dir``. Returns count newly inserted."""
+    """Ingest (insert-or-replace) every run under ``results_dir``.
+
+    Returns the number of runs written. Re-running is safe: each run is replaced
+    by ``source_path``, so this is idempotent in outcome (not in write count).
+    """
     rdir = Path(results_dir)
     if not rdir.is_absolute() and not rdir.exists():
         # CWD-relative first (path already exists); else fall back to eval/ dir.

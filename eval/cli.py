@@ -218,7 +218,11 @@ def cmd_run(cfg_path: str, dry_run: bool, extra: list[str]) -> int:
 
 
 def _stamp_telemetry(out_dir: Path) -> None:
-    """Rename ``telemetry.jsonl`` to ``telemetry_<ts>.jsonl`` (newest run ts)."""
+    """Rename ``telemetry.jsonl`` to ``telemetry_<ts>.jsonl`` (newest run ts).
+
+    Race-safe: a concurrent ``ingest --watch`` may be polling the file, so
+    copy-then-unlink and never raise on failure (best-effort housekeeping).
+    """
     src = out_dir / "telemetry.jsonl"
     if not src.exists():
         return
@@ -226,7 +230,17 @@ def _stamp_telemetry(out_dir: Path) -> None:
     if not results:
         return
     ts = results[-1].stem.removeprefix("results_")
-    src.rename(out_dir / f"telemetry_{ts}.jsonl")
+    dst = out_dir / f"telemetry_{ts}.jsonl"
+    if dst.exists():
+        return
+    try:
+        import shutil
+
+        shutil.copy2(src, dst)
+        src.unlink()
+    except OSError as exc:  # noqa: BLE001 - best-effort housekeeping
+        print(f"[cli] could not stamp telemetry ({exc}); left as telemetry.jsonl",
+              file=sys.stderr)
 
 
 # ---------------------------------------------------------------- ingest
