@@ -34,3 +34,5 @@ tmp/
 # LFS-tracked and unpushable to the public fork). Regenerate from the source.
 mods/exl3-mimo/pro-source/model-metadata/
 mods/exl3-mimo/uncensored-source/model-metadata/
+model-structure/qwen3.8-flash-next/source/model-metadata/
+model-structure/qwen3.8-27b-coder390-ethink-dflash2/source/model-metadata/
