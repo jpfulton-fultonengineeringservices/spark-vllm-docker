@@ -109,6 +109,11 @@ def build_argv(cfg: dict, dry_run: bool) -> list[str]:
     for key in ("max_retries", "timeout"):
         if (v := model.get(key)) is not None:
             margs[key] = v
+    # api_models defaults max_length=2048 and left-truncates beyond it; with
+    # tokenizer_backend=none nothing else sets it. Forward when configured so
+    # long-thinking CoT tasks don't silently truncate.
+    if (ml := model.get("max_length")) is not None:
+        margs["max_length"] = ml
     if (env_name := model.get("auth_token_env")) and (tok := os.environ.get(env_name)):
         # local-completions/local-chat-completions build the request header from
         # `api_key` (TemplateAPI.header -> OPENAI_API_KEY), NOT from the
