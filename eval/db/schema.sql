@@ -97,3 +97,5 @@ CREATE INDEX IF NOT EXISTS eval_task_run_idx ON eval_task (run_id);
 CREATE INDEX IF NOT EXISTS eval_metric_task_idx ON eval_metric (task_id);
 CREATE INDEX IF NOT EXISTS eval_sample_task_idx ON eval_sample (task_id);
 CREATE INDEX IF NOT EXISTS eval_sample_prompt_text_idx ON eval_sample (prompt_text);
+CREATE INDEX IF NOT EXISTS eval_sample_prompt_hash_idx ON eval_sample (prompt_hash);
+CREATE INDEX IF NOT EXISTS eval_sample_telemetry_ordinal_idx ON eval_sample_telemetry (ordinal);
