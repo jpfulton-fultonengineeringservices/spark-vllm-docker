@@ -267,7 +267,7 @@ def ingest_run(conn: psycopg.Connection, ref, run) -> bool:
                 for i, tel in mapping.items():
                     if i >= len(sample_ids):
                         continue
-                    _insert_telemetry(cur, sample_ids[i], tel)
+                    _insert_telemetry(cur, sample_ids[i], tel, ref.run_name)
                 if unmatched:
                     print(
                         f"[ingest] {t.task}: {unmatched} telemetry row(s) uncorrelated",
@@ -277,7 +277,27 @@ def ingest_run(conn: psycopg.Connection, ref, run) -> bool:
     return True
 
 
-def _insert_telemetry(cur: psycopg.Cursor, sample_id, tel: dict) -> None:
+def _normalize_image_paths(images: list, run_name: str) -> list:
+    """Rewrite run-dir-relative image paths to results-root-relative.
+
+    The console serves images from the results root, so a stored path must be
+    ``<run-name>/images/<file>``. Older sidecars wrote ``images/<file>``; the
+    current plugin already writes the run-name-prefixed form, so only prefix
+    when missing.
+    """
+    out = []
+    for img in images:
+        if not isinstance(img, dict):
+            continue
+        path = img.get("path")
+        if isinstance(path, str) and path and not path.startswith(f"{run_name}/"):
+            img = {**img, "path": f"{run_name}/{path.lstrip('/')}"}
+        out.append(img)
+    return out
+
+
+def _insert_telemetry(cur: psycopg.Cursor, sample_id, tel: dict, run_name: str) -> None:
+    images = _normalize_image_paths(tel.get("images") or [], run_name)
     cur.execute(
         """
         INSERT INTO eval_sample_telemetry (sample_id, request_hash, ordinal, wall_ms,
@@ -301,7 +321,7 @@ def _insert_telemetry(cur: psycopg.Cursor, sample_id, tel: dict) -> None:
             tel.get("reasoning_content"),
             tel.get("content"),
             tel.get("status"),
-            json.dumps(tel.get("images") or []),
+            json.dumps(images),
         ),
     )
 
