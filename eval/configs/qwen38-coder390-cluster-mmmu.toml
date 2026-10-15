@@ -16,8 +16,13 @@ backend = "local-chat-completions"
 base_url = "http://10.10.10.165:8000/v1/chat/completions"
 model = "local-inference-lab/Qwen3.8-27B-Coder390-DFlash2"
 tokenizer_backend = "none"
-# 16 in-flight (each carrying up to max_images base64 parts) to exercise
-# batching on the multimodal path too.
-num_concurrent = 16
+# 32 in-flight (each carrying up to max_images base64 parts), matching the
+# server's --max-num-seqs 32. This is the heaviest config per request: the
+# vision path adds ~1.5k image tokens/request, and even the worst case
+# (32 x encoder budget 16384) is ~0.5M of the 3.40M-token KV pool, so it
+# still does not bind. The long timeout matters most here - multimodal
+# prefill plus a 4096-token thinking trace is the slowest path.
+num_concurrent = 32
+timeout = 900
 max_images = 3
 auth_token_env = ""

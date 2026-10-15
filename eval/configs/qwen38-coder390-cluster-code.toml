@@ -39,10 +39,16 @@ backend = "local-chat-completions"
 base_url = "http://10.10.10.165:8000/v1/chat/completions"
 model = "local-inference-lab/Qwen3.8-27B-Coder390-DFlash2"
 tokenizer_backend = "none"
-# 16 in-flight requests: the server sets --max-num-seqs 32, so this exercises
-# vLLM's continuous batching. Single-stream decode is memory-bandwidth-bound
-# (~33 tok/s/stream at batch 1); batching amortizes the weight reads across
-# sequences, so aggregate throughput scales well past the per-stream rate
-# until the LPDDR5X pool saturates. Keep below max_num_seqs.
-num_concurrent = 16
+# 32 in-flight = the server's --max-num-seqs 32, so the client can saturate
+# the scheduler's sequence slots rather than under-subscribing by half.
+# Concurrency is exactly num_concurrent tasks (api_models.py:598-599 set a
+# TCPConnector limit and an asyncio.Semaphore to it; :658 disables the
+# pre-batcher when num_concurrent > 1), each of batch_size=1 request.
+# KV is not the limit: 32 x ~4700 tok (prompt + max_gen_toks) ~= 150k of the
+# 3.40M-token pool measured at 262144 ctx on the NVFP4 serve.
+num_concurrent = 32
+# Harness default is 300s and NOT overridden up; with this model's thinking
+# traces at max_gen_toks=4096 and no stop sequences, a request that queues
+# behind 31 others can exceed 300s, and max_retries would re-send it whole.
+timeout = 900
 auth_token_env = ""
