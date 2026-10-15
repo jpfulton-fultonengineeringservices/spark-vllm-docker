@@ -122,3 +122,29 @@ each task's samples is rendered server-side.
 run's `zeno.json` (written by `run` from the config's `[zeno]` table) — set
 `[zeno].enabled`/endpoint to a self-hosted zeno-hub once one exists; until
 then the local report is the default.
+
+## Telemetry
+
+Runs capture per-request telemetry by default: the rig remaps
+`local-completions` / `local-chat-completions` to the `tel_eval` plugin
+backends (`--plugins tel_eval.lm`) which subclass the harness backends and
+record wall/response latency, API `usage` token counts (prompt/completion/
+total/cache), `reasoning_content`/`content`, and any base64 input images
+(decoded to `results/<run>/images/`). Set `[run] capture_telemetry = false`
+to opt out. The sidecar is `results/<run>/telemetry_<ts>.jsonl`.
+
+## Console (Postgres + Next.js UI)
+
+`agents/lm-eval-console` ingests runs into Postgres and serves a richer UI
+(runs index, per-run metrics + charts, sample explorer with images/reasoning,
+cross-run comparison, live view). It needs the rig only via a read-only
+results mount and the DB.
+
+```bash
+cd ../../agents/lm-eval-console && docker compose up -d db migrate
+./eval/eval.sh ingest --results eval/results      # backfill
+./eval/eval.sh ingest --results eval/results --watch   # LIVE
+./eval/eval.sh run eval/configs/<c>.toml          # auto-ingests when EVAL_DB_DSN is set
+```
+
+DSN defaults to `$EVAL_DB_DSN` or `postgresql://postgres:postgres@localhost:5442/lmeval`.
