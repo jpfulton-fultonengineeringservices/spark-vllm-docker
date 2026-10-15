@@ -20,15 +20,18 @@
 # FP8 tensors (self_attn.o_proj + mlp.{gate,up,down}_proj per layer) stay
 # quantized and every BF16 tensor stays BF16.
 #
-# Staged at $WORKSPACE_DIR/Qwen3.8-27B-Coder390-dflash; the recipe's
-# --speculative-config model= points there.
+# Staged at /workspace/Qwen3.8-27B-Coder390-dflash (the MiMo drafter-staging
+# convention); the recipe's --speculative-config model= points there. Note the
+# image sets WORKSPACE_DIR=/workspace/vllm, which is NOT the serve-visible
+# scratch dir the recipes reference, so this is deliberately a fixed path with
+# the same override name the sibling mod uses.
 
 set -euo pipefail
 
 PREFIX="[qwen3.8-coder390-dflash]"
-WORKSPACE="${WORKSPACE_DIR:-/workspace}"
+LINK_DIR="${CODER390_DFLASH_LINK_DIR:-/workspace}"
 SRC="${CODER390_DFLASH_SRC:-/model/DFlash2-FP8}"
-DEST="$WORKSPACE/Qwen3.8-27B-Coder390-dflash"
+DEST="$LINK_DIR/Qwen3.8-27B-Coder390-dflash"
 
 if [ ! -f "$SRC/config.json" ]; then
     echo "$PREFIX FAIL: no drafter config at $SRC" >&2
