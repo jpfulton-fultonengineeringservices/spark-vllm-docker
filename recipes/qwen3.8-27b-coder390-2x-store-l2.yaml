@@ -63,6 +63,9 @@ mods:
   # /cupy runtime deps and the standalone-store config render.
   - mods/mooncake-worker
   - mods/mooncake-store-l2
+  # Guard the Mamba-align speculative-block relocation against the hashed/
+  # shared blocks a KV connector exposes on an external prefix hit.
+  - mods/mamba-spec-relocate-guard
 
 defaults:
   port: 8000
@@ -115,6 +118,9 @@ env:
   # Stable content-hash keys across restarts (same lineage as the
   # mooncake-store templates).
   PYTHONHASHSEED: "0"
+  # Activate mods/mamba-spec-relocate-guard (mods cannot see recipe env, so
+  # the launcher also injects this as a container -e).
+  MAMBA_SPEC_RELOCATE_GUARD: "1"
 
 # The draft's FP8 quantization is auto-detected from its own config.json's
 # quantization_config.quant_method ("fp8"); no --quantization flag is needed or
