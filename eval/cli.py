@@ -242,9 +242,7 @@ def cmd_ingest(results_dir: str, watch: bool, interval: float, dsn: str | None) 
             file=sys.stderr,
         )
         return 1
-    rdir = Path(results_dir)
-    if not rdir.is_absolute():
-        rdir = SCRIPT_DIR / rdir
+    rdir = resolve_results_dir(results_dir)
     resolved_dsn = dsn or os.environ.get("EVAL_DB_DSN") or ingest.DEFAULT_DSN
     if watch:
         ingest.watch(rdir, resolved_dsn, interval)
@@ -252,6 +250,21 @@ def cmd_ingest(results_dir: str, watch: bool, interval: float, dsn: str | None) 
     n = ingest.discover_and_ingest(rdir, resolved_dsn)
     print(f"[ingest] inserted {n} run(s) into {resolved_dsn.split('@')[-1]}")
     return 0
+
+
+def resolve_results_dir(results_dir: str) -> Path:
+    """Resolve a --results argument against CWD first, then the eval dir.
+
+    Lets both `./eval/eval.sh ingest --results eval/results` (run from the repo
+    root) and `--results results` (run from eval/) resolve correctly, instead of
+    blindly prefixing SCRIPT_DIR and doubling the path.
+    """
+    p = Path(results_dir)
+    if p.is_absolute():
+        return p
+    if p.exists():
+        return p.resolve()
+    return SCRIPT_DIR / p
 
 
 # ---------------------------------------------------------------- viz
