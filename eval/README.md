@@ -30,7 +30,9 @@ LITELLM_API_KEY=... ./eval/eval.sh run eval/configs/mimo-nvfp4-litellm.toml
 ./eval/eval.sh run eval/configs/qwen38-coder390-cluster-mmmu.toml
 LITELLM_API_KEY=... ./eval/eval.sh run eval/configs/qwen38-coder390-litellm.toml
 
-./eval/eval.sh viz results --local --html                 # markdown + report.html
+./eval/eval.sh viz results --local --html                 # newest run (interactive picker if ambiguous)
+./eval/eval.sh viz results --model DFlash2 --run latest   # explicit model / run selection
+./eval/eval.sh viz results --model DFlash2 --run 2026-10-15T07-58-54.379034 --html --out /tmp/r.html
 ZENO_API_KEY=... ./eval/eval.sh viz results --zeno        # upload to Zeno hub
 ```
 
@@ -97,10 +99,26 @@ ZENO_API_KEY=... ./eval/eval.sh viz results --zeno        # upload to Zeno hub
 
 ## Results & visualization
 
-Results land in `eval/results/<run-name>/` (`results_*.json` + per-task
-`samples_*.jsonl`). `viz --local` prints a per-task metric table; `--html`
-writes a self-contained `results/report.html`. `viz --zeno` uploads one Zeno
-project per task (mirroring the harness's own `scripts/zeno_visualize.py`
-column-building logic) to the endpoint in the config's `[zeno]` table — set
+Results land in `eval/results/<run-name>/<sanitized-model>/` as one
+`results_<ts>.json` plus per-task `samples_<task>_<ts>.jsonl`.
+
+`viz` always targets a **single run**. Select it with `--model SUBSTR`
+(matches the model dir or run-name) and optionally `--run TS|latest`; when the
+selection is ambiguous and stdin is a TTY, a two-level picker prompts for the
+model and then the run. Without a TTY an ambiguous selection prints the
+candidate list to stderr and exits 2.
+
+`viz --local` prints a markdown table of the harness **aggregates** (value and
+bootstrap stderr, e.g. `pass@1,create_test`), not a recomputed per-sample mean.
+`viz --html` writes a self-contained report (default `results/report.html`,
+override with `--out`): run metadata, metric cards, inline SVG charts, a
+per-task section with config, score histogram, coverage and mis-selections, and
+a client-side explorer over every sample (search, outcome filter, pagination,
+theme toggle). It needs no network and no JS to be useful — the first page of
+each task's samples is rendered server-side.
+
+`viz --zeno` uploads one Zeno project per task (mirroring the harness's own
+`scripts/zeno_visualize.py` column-building logic) to the endpoint in the
+run's `zeno.json` (written by `run` from the config's `[zeno]` table) — set
 `[zeno].enabled`/endpoint to a self-hosted zeno-hub once one exists; until
 then the local report is the default.
