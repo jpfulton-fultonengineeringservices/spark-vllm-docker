@@ -20,5 +20,5 @@ base_url = "http://10.10.10.165:8000/v1/completions"
 model = "local-inference-lab/Qwen3.8-27B-Coder390-DFlash2"
 tokenizer_backend = "huggingface"
 tokenizer = "Qwen/Qwen3.8-27B"
-num_concurrent = 1
+num_concurrent = 16
 auth_token_env = ""
