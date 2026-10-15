@@ -30,9 +30,11 @@ cmd_exec() {
 
   port=$(argv_value --port)
   [ -n "$port" ] || port=8000
-  # Readiness budget: total seconds to poll /health before giving up on
-  # saving (default 3600 = 60 min covers 30-45 min cold b12x/CuTe autotune;
-  # a warm restore hits 200 in seconds). Poll every 5 s. Never kill serve on
+  # Readiness budget: wall-clock seconds to poll /health before giving up
+  # on saving (default 3600 = 60 min covers 30-45 min cold b12x/CuTe
+  # autotune; a warm restore hits 200 in seconds). Deadline measured with
+  # SECONDS, not an attempt cap: each iteration is curl (--max-time 4) +
+  # sleep 5, so iterations do not map linearly to time. Never kill serve on
   # timeout: skip save and keep supervising.
   local ready_timeout="${B12X_KCACHE_READY_TIMEOUT:-3600}"
   case "$ready_timeout" in
@@ -45,9 +47,9 @@ cmd_exec() {
   log "invalid B12X_KCACHE_READY_TIMEOUT='0'; using 3600s"
   ready_timeout=3600
   fi
-  local attempts=$(( (ready_timeout + 4) / 5 ))
-  local i=0 code exited="0"
-  while [ "$i" -lt "$attempts" ]; do
+  local deadline=$((SECONDS + ready_timeout))
+  local code exited="0"
+  while [ "$SECONDS" -lt "$deadline" ]; do
     if ! kill -0 "$child" 2>/dev/null; then
       exited="1"
       break  # child exited early; skip to wait
@@ -58,7 +60,6 @@ cmd_exec() {
       healthy="1"
       break
     fi
-    i=$((i + 1))
     sleep 5
   done
 
