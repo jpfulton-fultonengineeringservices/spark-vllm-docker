@@ -133,6 +133,15 @@ total/cache), `reasoning_content`/`content`, and any base64 input images
 (decoded to `results/<run>/images/`). Set `[run] capture_telemetry = false`
 to opt out. The sidecar is `results/<run>/telemetry_<ts>.jsonl`.
 
+Correlation: each sidecar row carries the harness's `prompt_hash`
+(`sha256(arguments[0])`), matching `eval_sample.prompt_hash` byte-for-byte, so
+ingest attaches telemetry via that hash first (`prompt_text` as a legacy
+fallback, ordinal only when `num_concurrent == 1` on single-task runs). Rows
+that match no sample persist to the console's `eval_telemetry_orphan` table
+instead of being dropped. Re-running ingest replaces the stored run
+(idempotent in outcome) so a `--watch`-ingested run picks up its final
+aggregates on completion.
+
 ## Console (Postgres + Next.js UI)
 
 `agents/lm-eval-console` ingests runs into Postgres and serves a richer UI
@@ -146,5 +155,9 @@ cd ../../agents/lm-eval-console && docker compose up -d db migrate
 ./eval/eval.sh ingest --results eval/results --watch   # LIVE
 ./eval/eval.sh run eval/configs/<c>.toml          # auto-ingests when EVAL_DB_DSN is set
 ```
+
+`--results` resolves against the working directory first, then the eval dir, so
+both repo-root (`--results eval/results`) and in-dir (`--results results`)
+invocations work.
 
 DSN defaults to `$EVAL_DB_DSN` or `postgresql://postgres:postgres@localhost:5442/lmeval`.
