@@ -193,4 +193,22 @@ IDX_LINES=$(grep -c . "$STORE/INDEX.tsv" || true)
 [ "$IDX_LINES" = "$N" ] || fail "INDEX has $IDX_LINES lines, store has $N"
 unset B12X_KCACHE_PRUNE
 
+# --- 10. exec readiness budget: short timeout -> skip save, serve kept
+T_LOG="$WORK/exec-timeout.log"
+B12X_KCACHE_READY_TIMEOUT=5 bash "$KC" exec sleep 6 --port 59999 \
+  > "$T_LOG" 2>&1; RC=$?
+[ "$RC" = "0" ] || fail "exec with short timeout exited $RC (expected 0)"
+grep -q "readiness not observed within 5s; skipping save" "$T_LOG" \
+  || fail "exec short-timeout log: $(cat "$T_LOG")"
+[ ! -f "$STORE/$(bash "$KC" key 'sleep 6 --port 59999').tar.zst" ] \
+  || fail "exec saved an archive without readiness"
+
+# --- 11. exec readiness budget: invalid value -> warn + fall back, no die
+I_LOG="$WORK/exec-invalid.log"
+B12X_KCACHE_READY_TIMEOUT=abc bash "$KC" exec true \
+  > "$I_LOG" 2>&1; RC=$?
+[ "$RC" = "0" ] || fail "exec with invalid timeout exited $RC (expected 0)"
+grep -q "invalid B12X_KCACHE_READY_TIMEOUT='abc'; using 3600s" "$I_LOG" \
+  || fail "exec invalid-timeout log: $(cat "$I_LOG")"
+
 echo "PASS: b12x-kernel-cache mod"
