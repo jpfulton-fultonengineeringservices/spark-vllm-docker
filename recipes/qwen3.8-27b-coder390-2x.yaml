@@ -57,6 +57,17 @@ env:
   VLLM_ENABLE_ROCE_ALLREDUCE: "1"
   VLLM_ROCE_ALLREDUCE_MAX_SIZE: "2MB"
 
+# "quantization":"fp8" is REQUIRED for the draft: DFlash2-FP8 ships
+# quant_method=fp8 (e4m3, 128x128 blocks) on o_proj/mlp with
+# modules_to_not_convert covering q/k/v_proj + fc + candidate_selector.
+# SpeculativeConfig.quantization defaults to None (draft "not quantized"), so
+# without this the draft's FP8 o_proj/mlp tensors load raw and the DFlash
+# context K/V projection's plain F.linear dies with
+# "expected mat1 and mat2 to have the same dtype ... BFloat16 != Float8_e4m3fn".
+# Setting it routes those layers through Fp8LinearMethod (with scales) while
+# the modules_to_not_convert list keeps q/k/v_proj BF16, which is what the
+# fused context projection path expects.
+#
 # num_speculative_tokens 7: DFlash2Qwen3Model sized its grouped-conv
 # block_size as 1 + num_speculative_tokens, and the drafter's config pins
 # dflash_config.block_size = 8, so 1 + 7 = 8 matches. 8 (the value the
@@ -79,7 +90,7 @@ command: |
     --max-model-len {max_model_len} \
     --max-num-seqs {max_num_seqs} \
     --max-num-batched-tokens {max_num_batched_tokens} \
-    --speculative-config '{{"method":"dflash","model":"/model/DFlash2-FP8","num_speculative_tokens":{num_speculative_tokens},"draft_tensor_parallel_size":{draft_tensor_parallel_size}}}' \
+    --speculative-config '{{"method":"dflash","model":"/model/DFlash2-FP8","quantization":"fp8","num_speculative_tokens":{num_speculative_tokens},"draft_tensor_parallel_size":{draft_tensor_parallel_size}}}' \
     --gdn-decode-kernel b12x \
     --linear-backend b12x \
     --no-enable-flashinfer-autotune \
