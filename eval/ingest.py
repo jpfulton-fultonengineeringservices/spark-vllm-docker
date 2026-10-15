@@ -75,6 +75,28 @@ def _first_text(messages: list) -> str:
     return ""
 
 
+def canonical_prompt(arg0: Any, fallback: str) -> str:
+    """Clean, JSON-parseable prompt for storage.
+
+    The harness stores ``arguments.gen_args_0.arg_0`` as a Python ``str()`` of a
+    list wrapping a JSON chat string (single-quoted, with ``\\'`` escapes for
+    apostrophes) — unreadable and not valid JSON. Recover the chat message list
+    and re-serialize as clean JSON so the UI can render it directly; fall back
+    to the raw string when it isn't a chat prompt (completions).
+    """
+    value = arg0
+    while isinstance(value, list) and len(value) == 1:
+        value = value[0]
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return fallback
+    if isinstance(value, list) and all(isinstance(m, dict) for m in value):
+        return json.dumps(value, ensure_ascii=False)
+    return fallback
+
+
 def load_telemetry(samples_dir: Path, timestamp: str) -> list[dict]:
     """Read the telemetry rows for one run.
 
@@ -239,6 +261,7 @@ def ingest_run(conn: psycopg.Connection, ref, run) -> bool:
             for s, rec in zip(t.samples, records):
                 arg0 = (s.get("arguments") or {}).get("gen_args_0", {}).get("arg_0", "")
                 prompt_text = extract_prompt_text(arg0)
+                prompt_json = canonical_prompt(arg0, rec["prompt"])
                 cur.execute(
                     """
                     INSERT INTO eval_sample (task_id, doc_id, filter, prompt_hash, doc_hash,
@@ -256,7 +279,7 @@ def ingest_run(conn: psycopg.Connection, ref, run) -> bool:
                         s.get("target_hash"),
                         rec["outcome"],
                         json.dumps(rec["scores"]),
-                        rec["prompt"],
+                        prompt_json,
                         rec["output"],
                         rec["reference"],
                         json.dumps(rec["choices"]),
@@ -349,7 +372,8 @@ def _outcome_counts(task) -> dict[str, int]:
 def discover_and_ingest(results_dir: Path | str, dsn: str) -> int:
     """Ingest every run under ``results_dir``. Returns count newly inserted."""
     rdir = Path(results_dir)
-    if not rdir.is_absolute():
+    if not rdir.is_absolute() and not rdir.exists():
+        # CWD-relative first (path already exists); else fall back to eval/ dir.
         rdir = SCRIPT_DIR / rdir
     # If pointed straight at a run dir (results/<run-name>), walk up so run_name
     # derives from the run-name dir, not the model slug subdir below it.
