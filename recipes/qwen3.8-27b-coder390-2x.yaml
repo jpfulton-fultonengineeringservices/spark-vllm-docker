@@ -40,6 +40,10 @@ mods:
   - mods/fes-weights
   - mods/qwen3.8-coder390-dflash
   - mods/b12x-kernel-cache
+  # B12X_SKIP_RECLAIM is only the GATE - the patch that honours it lives in
+  # this mod, so the env var alone does nothing (observed live 2026-10-15:
+  # env set, worker still spun in _reclaim_programs).
+  - mods/b12x-reclaim-gate
 
 defaults:
   port: 8000
