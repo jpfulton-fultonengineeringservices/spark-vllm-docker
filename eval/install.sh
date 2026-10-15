@@ -44,10 +44,10 @@ fi
 echo "[install.sh] creating venv $VENV"
 uv venv --python 3.12 "$VENV"
 
-echo "[install.sh] installing harness extras: api,tasks,zeno (+transformers, pillow)"
+echo "[install.sh] installing harness extras: api,tasks,zeno (+transformers, pillow, psycopg)"
 uv pip install --python "$VENV/bin/python" \
     -e "$HARNESS_DIR[api,tasks,zeno]" \
-    transformers pillow
+    transformers pillow "psycopg[binary]"
 
 if [ "${EVAL_WITH_VLLM:-0}" = "1" ]; then
     echo "[install.sh] EVAL_WITH_VLLM=1: installing [vllm] extra (Linux/NVIDIA only)"

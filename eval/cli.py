@@ -59,6 +59,15 @@ DEFAULT_MODEL_ARGS_KEYS = (
 # `--confirm_run_unsafe_code` is passed, so the rig adds it automatically.
 UNSAFE_CODE_TASK_PREFIXES = ("humaneval", "mbpp", "cruxeval", "longproc")
 
+# Telemetry plugin package (eval/tel_eval/) loaded by the harness via
+# `--plugins`. Registers `local-(chat-)completions-telemetry` backends that
+# record per-request timing / token usage / reasoning / images.
+TELEMETRY_PLUGIN = "tel_eval.lm"
+TELEMETRY_BACKEND_ALIASES = {
+    "local-completions": "local-completions-telemetry",
+    "local-chat-completions": "local-chat-completions-telemetry",
+}
+
 # ---------------------------------------------------------------- run
 
 def build_argv(cfg: dict, dry_run: bool) -> list[str]:
@@ -69,11 +78,21 @@ def build_argv(cfg: dict, dry_run: bool) -> list[str]:
     name = run["name"]
     tasks = run["tasks"]
     backend = model["backend"]
+    orig_backend = backend
     base_url = model["base_url"]
     model_id = model["model"]
 
     out_dir = SCRIPT_DIR / run.get("output_dir", "results") / name
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Telemetry capture (default on): remap to the plugin backends and point
+    # the sidecar writer at this run's output dir. `capture_telemetry = false`
+    # in [run] opts out and leaves the plain backend untouched.
+    capture_telemetry = bool(run.get("capture_telemetry", True))
+    if capture_telemetry:
+        backend = TELEMETRY_BACKEND_ALIASES.get(backend, backend)
+        os.environ["EVAL_TELEMETRY_PATH"] = str(out_dir / "telemetry.jsonl")
+        os.environ["EVAL_TELEMETRY_IMAGES_DIR"] = str(out_dir / "images")
 
     margs: dict[str, str | int] = {
         "model": model_id,
@@ -84,7 +103,7 @@ def build_argv(cfg: dict, dry_run: bool) -> list[str]:
         margs["num_concurrent"] = n
     if (tok_repo := model.get("tokenizer")):
         margs["tokenizer"] = tok_repo
-    if backend == "local-chat-completions" and (mi := model.get("max_images")) is not None:
+    if orig_backend == "local-chat-completions" and (mi := model.get("max_images")) is not None:
         margs["max_images"] = mi
     for key in ("max_retries", "timeout"):
         if (v := model.get(key)) is not None:
@@ -111,6 +130,8 @@ def build_argv(cfg: dict, dry_run: bool) -> list[str]:
     argv += ["--model", backend]
     argv += ["--model_args", model_args]
     argv += ["--tasks", ",".join(tasks)]
+    if capture_telemetry:
+        argv += ["--plugins", TELEMETRY_PLUGIN]
     if (nf := run.get("num_fewshot")) is not None:
         argv += ["--num_fewshot", str(nf)]
     if (bs := run.get("batch_size")) is not None:
@@ -153,7 +174,78 @@ def cmd_run(cfg_path: str, dry_run: bool, extra: list[str]) -> int:
     print("[cli] exec:", " ".join(argv))
     if dry_run:
         return 0
-    os.execv(str(argv[0]), argv)
+
+    # Snapshot the parsed config next to the run output so the console shows
+    # exactly the settings used, even if the TOML later changes.
+    run = cfg["run"]
+    out_dir = SCRIPT_DIR / run.get("output_dir", "results") / run["name"]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "config_snapshot.json").write_text(json.dumps(cfg, indent=2))
+
+    # The plugin is resolved by the harness via importlib, so eval/ must be on
+    # the child interpreter's sys.path.
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(SCRIPT_DIR) + (
+        os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""
+    )
+
+    r = subprocess.run(argv, env=env, check=False)
+
+    # Stamp the telemetry sidecar with the run's timestamp so multiple runs of
+    # the same run-name don't share one file. The harness writes results to
+    # out_dir/<model-slug>/results_<ts>.json; use that ts.
+    _stamp_telemetry(out_dir)
+
+    # Best-effort post-run ingest (never fails the run).
+    dsn = os.environ.get("EVAL_DB_DSN")
+    if dsn:
+        try:
+            import ingest
+
+            n = ingest.discover_and_ingest(out_dir.parent, dsn)
+            print(f"[cli] ingested {n} run(s) into {dsn.split('@')[-1]}")
+        except Exception as exc:  # noqa: BLE001 - ingest is advisory
+            print(f"[cli] post-run ingest skipped: {exc}", file=sys.stderr)
+    else:
+        print("[cli] EVAL_DB_DSN unset - skipping DB ingest", file=sys.stderr)
+    return r.returncode
+
+
+def _stamp_telemetry(out_dir: Path) -> None:
+    """Rename ``telemetry.jsonl`` to ``telemetry_<ts>.jsonl`` (newest run ts)."""
+    src = out_dir / "telemetry.jsonl"
+    if not src.exists():
+        return
+    results = sorted(out_dir.glob("*/results_*.json"))
+    if not results:
+        return
+    ts = results[-1].stem.removeprefix("results_")
+    src.rename(out_dir / f"telemetry_{ts}.jsonl")
+
+
+# ---------------------------------------------------------------- ingest
+
+
+def cmd_ingest(results_dir: str, watch: bool, interval: float, dsn: str | None) -> int:
+    """Ingest run results into the console Postgres DB (auto-watch aware)."""
+    try:
+        import ingest
+    except ModuleNotFoundError as exc:
+        print(
+            f"[ingest] {exc}; run ./eval/eval.sh setup to install psycopg",
+            file=sys.stderr,
+        )
+        return 1
+    rdir = Path(results_dir)
+    if not rdir.is_absolute():
+        rdir = SCRIPT_DIR / rdir
+    resolved_dsn = dsn or os.environ.get("EVAL_DB_DSN") or ingest.DEFAULT_DSN
+    if watch:
+        ingest.watch(rdir, resolved_dsn, interval)
+        return 0
+    n = ingest.discover_and_ingest(rdir, resolved_dsn)
+    print(f"[ingest] inserted {n} run(s) into {resolved_dsn.split('@')[-1]}")
+    return 0
 
 
 # ---------------------------------------------------------------- viz
@@ -424,6 +516,11 @@ def main() -> int:
     vp.add_argument("--html", action="store_true", help="write report.html")
     vp.add_argument("--zeno", action="store_true", help="upload to Zeno hub")
     vp.add_argument("--zeno-project", default=None)
+    ip = sub.add_parser("ingest", help="ingest run results into Postgres (console DB)")
+    ip.add_argument("--results", default="results", help="results dir (default: eval/results)")
+    ip.add_argument("--watch", action="store_true", help="poll and ingest incrementally (LIVE)")
+    ip.add_argument("--interval", type=float, default=5.0, help="watch poll seconds")
+    ip.add_argument("--dsn", default=None, help="Postgres DSN (default: $EVAL_DB_DSN)")
     sub.add_parser("setup", help="force venv install")
     args = p.parse_args()
 
@@ -432,6 +529,8 @@ def main() -> int:
     if args.cmd == "viz":
         return cmd_viz(args.results_dir, args.model, args.run_ts, args.out,
                        args.local, args.html, args.zeno, args.zeno_project)
+    if args.cmd == "ingest":
+        return cmd_ingest(args.results, args.watch, args.interval, args.dsn)
     r = subprocess.run(["bash", str(INSTALL_SH), "--refresh"], check=False)
     return r.returncode
 
