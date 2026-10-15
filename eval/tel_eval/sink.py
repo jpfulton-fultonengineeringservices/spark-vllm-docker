@@ -48,6 +48,12 @@ def images_dir() -> Path | None:
     return Path(raw) if raw else None
 
 
+def results_root() -> Path | None:
+    """The results dir the console mounts, for relativizing image paths."""
+    raw = os.environ.get("EVAL_RESULTS_ROOT")
+    return Path(raw) if raw else None
+
+
 def record(entry: dict[str, Any]) -> None:
     """Append one telemetry record to the sidecar (no-op when unconfigured)."""
     path = telemetry_path()
