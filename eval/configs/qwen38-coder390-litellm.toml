@@ -24,9 +24,12 @@ backend = "local-chat-completions"
 base_url = "https://dell.fulton-home.fultonengineeringservices.com/litellm/v1/chat/completions"
 model = "cluster/qwen3.8-27b-coder390"
 tokenizer_backend = "none"
-# 16 in-flight requests through the Dell gateway, matching the cluster-code
-# config, so the same sweep exercises batching end to end.
-num_concurrent = 16
+# 32 in-flight through the Dell gateway, matching cluster-code and the
+# server's --max-num-seqs 32, so the route is exercised at the same width.
+# Raise the timeout for the same reason as cluster-code: gateway + queueing
+# + 4096-token thinking traces can exceed the 300s harness default.
+num_concurrent = 32
+timeout = 900
 auth_token_env = "LITELLM_API_KEY"
 
 [zeno]
