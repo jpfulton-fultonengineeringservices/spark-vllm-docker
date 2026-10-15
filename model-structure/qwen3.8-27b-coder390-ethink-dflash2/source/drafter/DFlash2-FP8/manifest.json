@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "artifact_role": "DFlash2 speculative draft model",
+  "artifact_format": "Hugging Face safetensors",
+  "precision": "FP8 E4M3 with 128x128 block scales, retained BF16 tensors",
+  "quantization": {
+    "quant_method": "fp8",
+    "fmt": "e4m3",
+    "weight": "float8_e4m3fn, symmetric static, 128x128 block scales stored as weight_scale_inv (float32), same layout as the FP8 body",
+    "activation": "dynamic",
+    "quantized_linear": "self_attn.o_proj, mlp.gate_proj, mlp.up_proj, mlp.down_proj (5 layers, 20 tensors)",
+    "kept_bf16": "q/k/v_proj, fc, candidate_selector, attention_conv/mlp_conv, norms",
+    "tensor_counts": {
+      "float8_e4m3fn": 20,
+      "float32_block_scale": 20,
+      "bfloat16": 61,
+      "total": 101
+    }
+  },
+  "files": {
+    "model.safetensors": {
+      "bytes": 2407379992,
+      "sha256": "a7b48bc293a989494ce2db64ac01a0261c370499641b0f5a668d8005c8cbfb93"
+    },
+    "config.json": {
+      "bytes": 2642,
+      "sha256": "6c41f9b7b068b6c3cfaafe2d8af6e86cf82917a187590a78966ea6249069b2f7"
+    }
+  },
+  "source": {
+    "bf16_sha256": "67fc76d68dc5a9415511a4f394ef744d67510cd20e93b37cc2cc7d28e4bab65c",
+    "bf16_bytes": 3848817896
+  },
+  "runtime_contract": {
+    "engine": "SGLang",
+    "draft_loader": "fp8 (block 128x128), auto-detected from config.json",
+    "algorithm": "DFLASH",
+    "draft_tokens": 8,
+    "target_kv_cache_dtype": "bfloat16"
+  },
+  "validation": {
+    "format_check": "PASS (tensor names/shapes/dtypes, retained tensors byte-identical to BF16 source, dequant rel. error vs BF16 0.0265)",
+    "engine_retest": "pending"
+  },
+  "replaces": {
+    "model.safetensors_sha256": "1f3636a32d866f8ebc7f422d63f9247126ebb6d2566d3e0da327d81dd8fa25d1",
+    "note": "previous per-tensor weight_scale (compressed-tensors) draft"
+  }
+}

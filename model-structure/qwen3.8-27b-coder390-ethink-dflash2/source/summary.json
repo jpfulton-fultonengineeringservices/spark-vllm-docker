@@ -1,0 +1,28 @@
+{
+  "source": "/nas-1/models/qwen3.8/qwen3.8-27b-coder390-ethink-dflash2",
+  "shard_count": 3,
+  "total_tensors": 1199,
+  "index_metadata": {
+    "total_size": 55562855904
+  },
+  "shards": {
+    "model-00001-of-00002.safetensors": {
+      "tensors": 784,
+      "bytes": 49825162976
+    },
+    "model-00002-of-00002.safetensors": {
+      "tensors": 400,
+      "bytes": 4888445168
+    },
+    "mtp-bf16.safetensors": {
+      "tensors": 15,
+      "bytes": 849400424
+    }
+  },
+  "dtype_counts": {
+    "BF16": 1199
+  },
+  "drafter_subdirs": [
+    "DFlash2-FP8"
+  ]
+}
