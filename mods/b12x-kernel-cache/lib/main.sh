@@ -15,8 +15,8 @@ Commands:
   help                this text
 
 Env: B12X_KCACHE_STORE, B12X_KCACHE_PRUNE, B12X_KCACHE_SAVE,
-     B12X_KCACHE_FORCE_AUTOTUNE_OFF, B12X_KCACHE_ROOTS,
-     B12X_KCACHE_ID_* (key-field overrides, tests)
+ B12X_KCACHE_READY_TIMEOUT, B12X_KCACHE_FORCE_AUTOTUNE_OFF,
+ B12X_KCACHE_ROOTS, B12X_KCACHE_ID_* (key-field overrides, tests)
 EOF
 }
 

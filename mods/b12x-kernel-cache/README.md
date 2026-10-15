@@ -83,7 +83,8 @@ key, which would silently restore the wrong kernel set.
 |---|---|---|
 | `B12X_KCACHE_STORE` | unset | Override store path (candidate 1) |
 | `B12X_KCACHE_PRUNE` | `3` | Archives kept per key family after save |
-| `B12X_KCACHE_SAVE` | `1` | `0` disables the post-health save |
+| `B12X_KCACHE_SAVE` | `1` | `0` disables post-health save |
+| `B12X_KCACHE_READY_TIMEOUT` | `3600` | Seconds to poll serve `/health` before skipping the post-health save (covers 30–45 min cold tune); non-integer/zero → 3600 |
 | `B12X_KCACHE_FORCE_AUTOTUNE_OFF` | unset | `true` exports `B12X_AUTOTUNE=0` to the child after a successful restore |
 | `B12X_KCACHE_ROOTS` | `<mod>/roots.txt` | Test hook: alternate roots file (`name<TAB>path`) |
 
