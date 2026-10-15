@@ -64,6 +64,15 @@ env:
   B12X_POLICY_MODE: "auto"
   VLLM_ENABLE_ROCE_ALLREDUCE: "1"
   VLLM_ROCE_ALLREDUCE_MAX_SIZE: "2MB"
+  # b12x _reclaim_programs runs an unguarded O(exponential) retained-owner walk
+  # plus an eager gc.collect() that spins at 100% CPU (GIL held) after graph
+  # capture, wedging determine_available_memory -> the EngineCore collective
+  # never returns and the ranks hang ("No available shared memory broadcast
+  # block found in 60 seconds" repeating). Observed live 2026-10-15 on the
+  # NVFP4 serve: Worker_TP1 parked in b12x/preparation/session.py:610 via
+  # _release_b12x_profile_state. Same flag the NVFP4 MiMo recipe carries.
+  # Skipping only leaves WeakValueDictionary-backed cache entries.
+  B12X_SKIP_RECLAIM: "1"
   # Persist the torch inductor Triton autotuner cache outside /tmp so
   # b12x-kcache archives it (roots.txt entry "torchinductor"); otherwise it
   # is ephemeral and every boot re-compiles the Triton kernels.
