@@ -3,7 +3,7 @@
 
 [run]
 name = "qwen38-coder390-litellm"
-tasks = ["humaneval_instruct", "mbpp_instruct"]
+tasks = ["humaneval_instruct", "mbpp_instruct", "cruxeval_output_cot", "cruxeval_input_cot"]
 num_fewshot = 0
 batch_size = 1
 limit = 0
@@ -19,11 +19,33 @@ apply_chat_template = true
 # comment for the measured evidence.
 gen_kwargs = "max_gen_toks=4096,until=<<<NO_STOP>>>"
 
+# Agentic/terminal/tool-use sweep (2026-10-15): 6 of 7 requested benchmarks
+# have NO lm-eval task in the sibling harness and CANNOT run through this
+# config. They need external harnesses pointed at this LiteLLM route
+# (cluster/qwen3.8-27b-coder390):
+#   - SWE-bench Verified (Agentic Coding)  -> swebench harness, agentic scaffold
+#   - Terminal-Bench 4.0                   -> tbench harness (tbench.ai; supersedes
+#                                            in-file TB2.0, eval-cards tags only)
+#   - DeepPlanning, AssistantBench, GAIA   -> standalone agentic harnesses
+#   - MCP-Universe                         -> MCP tool-server harness
+# cruxeval IS a harness task (lm_eval/tasks/cruxeval); added to tasks above.
+# Per the cluster-code config: code-gen extractors break under
+# local-chat-completions with this reasoning model (0.0 pass@1, think-block
+# truncation by `until` stop markers) -> run cruxeval with the same
+# gen_kwargs sentinel + widened max_gen_toks, not harness defaults.
+
 [model]
 backend = "local-chat-completions"
 base_url = "https://dell.fulton-home.fultonengineeringservices.com/litellm/v1/chat/completions"
 model = "cluster/qwen3.8-27b-coder390"
 tokenizer_backend = "none"
+# api_models defaults max_length=2048 (log: "Using max length 2048 - 1") and
+# left-truncates context beyond it; with tokenizer_backend=none nothing
+# corrects it. cruxeval_*_cot CoT + thinking traces blow past 2048 total
+# tokens and truncate before [ANSWER] -> silent pass@1 collapse on the full
+# run. 262144 is the serve's max_model_len; keep headroom for
+# max_gen_toks=4096 plus prompt.
+max_length = 65536
 # 32 in-flight through the Dell gateway, matching cluster-code and the
 # server's --max-num-seqs 32, so the route is exercised at the same width.
 # Raise the timeout for the same reason as cluster-code: gateway + queueing
