@@ -24,5 +24,7 @@ tokenizer_backend = "none"
 # prefill plus a 4096-token thinking trace is the slowest path.
 num_concurrent = 32
 timeout = 900
+outage_retry_seconds = 600
+max_retries = 0
 max_images = 3
 auth_token_env = ""

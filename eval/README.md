@@ -142,6 +142,31 @@ instead of being dropped. Re-running ingest replaces the stored run
 (idempotent in outcome) so a `--watch`-ingested run picks up its final
 aggregates on completion.
 
+### Outage resilience
+
+The harness wraps each request in a `tenacity` retry whose budget is seconds
+(`max_retries` default 3, backoff 1–10s). A multi-minute endpoint outage (a
+Dell/LiteLLM restart, a router restart) exhausts that budget and the exception
+propagates out of the plugin, killing the whole run mid-sweep. To survive this,
+the `tel_eval` plugin rides *transport-level* failures (connection refused,
+connect/read timeout, disconnected, `OSError`) with full-jitter exponential
+backoff (cap 30s) for up to `outage_retry_seconds`:
+
+- `[model].outage_retry_seconds` — seconds to keep retrying connection
+  failures before giving up (default `600`, i.e. 10 min). Set to `0` to
+  disable (fail fast, the pre-change behavior). Forwarded to the plugin via
+  `model_args`.
+- While stalled, the plugin appends one throttled `status:"outage"` row per
+  ~30s (distinct from the terminal `status:"error"` row), so the console's
+  Live view can show "upstream unreachable — retrying".
+- **HTTP 4xx/5xx are not retried** (they are not connection failures) — they
+  fail fast exactly as before. Only outages are absorbed.
+
+Because the harness's own retry would re-invoke the plugin (multiplying the
+budget by `1 + max_retries`), the shipped configs set `max_retries = 0` so the
+plugin's deadline is the single source of patience. A startup preflight also
+prints a loud (non-fatal) warning if the endpoint is unreachable before a run.
+
 ## Console (Postgres + Next.js UI)
 
 `agents/lm-eval-console` ingests runs into Postgres and serves a richer UI

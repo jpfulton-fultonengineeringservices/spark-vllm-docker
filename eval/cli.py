@@ -106,7 +106,10 @@ def build_argv(cfg: dict, dry_run: bool) -> list[str]:
         margs["tokenizer"] = tok_repo
     if orig_backend == "local-chat-completions" and (mi := model.get("max_images")) is not None:
         margs["max_images"] = mi
-    for key in ("max_retries", "timeout"):
+    # `outage_retry_seconds` is consumed by the tel_eval plugin (pops it in
+    # `_TelemetryMixin.__init__`), not the harness parent, but must travel in
+    # `model_args` so the plugin receives it. See eval/README.md.
+    for key in ("max_retries", "timeout", "outage_retry_seconds"):
         if (v := model.get(key)) is not None:
             margs[key] = v
     # api_models defaults max_length=2048 and left-truncates beyond it; with
@@ -167,6 +170,37 @@ def build_argv(cfg: dict, dry_run: bool) -> list[str]:
     return argv
 
 
+def _warn_if_unreachable(model: dict) -> None:
+    """Advisory preflight: warn (never abort) if the endpoint is down at start.
+
+    A short GET to the base_url origin. On failure we print one loud line and
+    continue: the host may recover, and the tel_eval plugin retries connection
+    outages for `outage_retry_seconds` (default 600s) before failing the run.
+    Uses stdlib urllib so it works in the `--no-project` launcher env (no
+    `requests`).
+    """
+    base_url = model.get("base_url")
+    if not base_url:
+        return
+    import urllib.error
+    import urllib.request
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(base_url)
+    origin = f"{parts.scheme}://{parts.netloc}"
+    budget = model.get("outage_retry_seconds", 600)
+    try:
+        urllib.request.urlopen(origin, timeout=5)  # noqa: S310 - config-controlled URL
+    except urllib.error.HTTPError:
+        return  # reachable (4xx/5xx is still a live host)
+    except Exception as exc:  # noqa: BLE001 - advisory only
+        print(
+            f"[cli] WARNING: {origin} unreachable before start ({exc}); the "
+            f"plugin will retry connection outages for {budget}s.",
+            file=sys.stderr,
+        )
+
+
 def cmd_run(cfg_path: str, dry_run: bool, extra: list[str]) -> int:
     cfg = tomllib.loads(Path(cfg_path).read_text())
 
@@ -181,11 +215,19 @@ def cmd_run(cfg_path: str, dry_run: bool, extra: list[str]) -> int:
     if dry_run:
         return 0
 
+    _warn_if_unreachable(cfg["model"])
+
     # Snapshot the parsed config next to the run output so the console shows
     # exactly the settings used, even if the TOML later changes.
     run = cfg["run"]
     out_dir = SCRIPT_DIR / run.get("output_dir", "results") / run["name"]
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Start from a fresh sidecar: a crash skips `_stamp_telemetry`, so a later
+    # run of the same name would otherwise append to the dead run's
+    # telemetry.jsonl -- corrupting the in-flight view and ingest (prompt_hash
+    # matching would prefer the stale rows). Never reached on --dry-run (the
+    # `if dry_run: return 0` above short-circuits before `out_dir` is bound).
+    (out_dir / "telemetry.jsonl").unlink(missing_ok=True)
     (out_dir / "config_snapshot.json").write_text(json.dumps(cfg, indent=2))
 
     # The plugin is resolved by the harness via importlib, so eval/ must be on

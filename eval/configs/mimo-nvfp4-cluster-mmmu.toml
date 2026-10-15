@@ -19,4 +19,6 @@ model             = "XiaomiMiMo/MiMo-V2.6-Flash-RL-NVFP4"
 tokenizer_backend = "none"
 num_concurrent    = 1
 max_images        = 3
+outage_retry_seconds = 600
+max_retries = 0
 auth_token_env    = ""

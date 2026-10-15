@@ -19,4 +19,6 @@ model             = "XiaomiMiMo/MiMo-V2.6-Flash-RL-NVFP4"
 tokenizer_backend = "huggingface"
 tokenizer         = "XiaomiMiMo/MiMo-V2.6-Flash-RL"
 num_concurrent    = 1
+outage_retry_seconds = 600
+max_retries = 0
 auth_token_env    = ""

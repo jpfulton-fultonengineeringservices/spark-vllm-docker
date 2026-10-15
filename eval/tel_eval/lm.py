@@ -17,14 +17,18 @@ those are inherited from the harness parent classes via normal polymorphism.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import copy
 import hashlib
 import json
+import random
 import time
 from pathlib import Path
 from typing import Any
 
+import aiohttp
+import requests
 from lm_eval.api.registry import register_model
 from lm_eval.models.api_models import (
     LMEVAL_MODEL_NONE_ANSWER_PLACEHOLDER,
@@ -34,6 +38,29 @@ from lm_eval.models.api_models import (
 from lm_eval.models.openai_completions import LocalChatCompletion, LocalCompletionsAPI
 
 from . import sink
+
+# Transport-level failures that mean "the upstream is unreachable right now",
+# not "the request was rejected". Retried by the plugin (see ``amodel_call``)
+# for up to ``outage_retry_seconds`` before re-raising. HTTP 4xx/5xx are NOT
+# included: ``aiohttp.ClientResponseError`` / ``requests.HTTPError`` fall
+# through and fail fast, exactly as before.
+_OUTAGE_EXC = (
+    aiohttp.ClientConnectorError,
+    aiohttp.ClientOSError,
+    aiohttp.ServerDisconnectedError,
+    aiohttp.ServerTimeoutError,
+    asyncio.TimeoutError,
+    ConnectionError,
+)
+_OUTAGE_EXC_SYNC = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+)
+
+# Retry backoff and outage-row cadence.
+_OUTAGE_MAX_BACKOFF_S = 30.0
+_OUTAGE_EMIT_INTERVAL_S = 30.0
 
 _USAGE_CACHE_KEYS = (
     "cache_read_input_tokens",
@@ -187,6 +214,58 @@ def _harness_prompt_hash(messages: Any) -> str:
 class _TelemetryMixin:
     """Shared capture logic layered over the harness API backends."""
 
+    def __init__(self, *args, outage_retry_seconds: float = 600.0, **kwargs):
+        # ``outage_retry_seconds`` is popped here (never forwarded to the
+        # harness parent, which would reject the unknown kwarg). It bounds how
+        # long a single request rides a *connection* outage — see
+        # ``_retry_on_outage`` for why the harness's own tenacity budget is
+        # too short (seconds) to survive a gateway/LiteLLM restart.
+        super().__init__(*args, **kwargs)
+        self._outage_retry_seconds = max(0.0, float(outage_retry_seconds))
+
+    def _emit_outage(self, *, payload: dict[str, Any], messages: Any, exc: BaseException,
+                     remaining_s: float, t_start: float) -> None:
+        """Record a low-rate ``status:"outage"`` row so /live can show the stall.
+
+        Distinct from the terminal ``status:"error"`` row emitted by
+        ``_emit`` on final give-up: this one carries no prompt completion and
+        is throttled (one per ``_OUTAGE_EMIT_INTERVAL_S``) so a long outage
+        does not flood the sidecar.
+        """
+        now = time.perf_counter()
+        sink.record(
+            {
+                "request_hash": _hash_payload(payload),
+                "prompt_hash": _harness_prompt_hash(messages),
+                "ordinal": sink.next_ordinal(),
+                "model": getattr(self, "model", None),
+                "prompt_text": _prompt_text_from_payload(payload),
+                "t_request_start": t_start,
+                "t_end": now,
+                "wall_ms": (now - t_start) * 1000.0,
+                "ttfb_ms": None,
+                "ttft_ms": None,
+                "stream": False,
+                "status": "outage",
+                "error": repr(exc),
+                "remaining_s": round(remaining_s),
+                "reasoning_content": None,
+                "content": None,
+                "images": [],
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "total_tokens": None,
+                "cache_read_tokens": None,
+                "cache_write_tokens": None,
+            }
+        )
+
+    @staticmethod
+    def _backoff(delay: float, remaining: float) -> float:
+        """Full-jitter exponential backoff, capped by the remaining budget."""
+        delay = min(delay * 2.0, _OUTAGE_MAX_BACKOFF_S)
+        return max(0.0, min(random.uniform(0.0, delay), remaining))
+
     def _emit(
         self,
         *,
@@ -235,8 +314,13 @@ class _TelemetryMixin:
         outputs = None
         err = None
         try:
-            outputs = super().model_call(  # type: ignore[misc]
-                messages, generate=generate, gen_kwargs=gen_kwargs, **kwargs
+            outputs = self._model_call_with_outage_retry(
+                payload=payload,
+                messages=messages,
+                generate=generate,
+                gen_kwargs=gen_kwargs,
+                t_start=t_start,
+                **kwargs,
             )
             return outputs
         except BaseException as exc:  # noqa: BLE001 - record then re-raise
@@ -251,6 +335,39 @@ class _TelemetryMixin:
                 t_end=time.perf_counter(),
                 error=err,
             )
+
+    def _model_call_with_outage_retry(
+        self, *, payload, messages, generate, gen_kwargs, t_start, **kwargs
+    ):
+        """Sync ``super().model_call`` wrapped in the bounded outage retry.
+
+        The parent transport is ``requests.post`` (raised as
+        ``requests.exceptions.*``), so a connection outage surfaces as
+        ``_OUTAGE_EXC_SYNC``. Graduated backoff + periodic ``status:"outage"``
+        rows mirror the async path; any non-outage exception (incl. HTTP 4xx/
+        5xx) propagates unchanged.
+        """
+        deadline = time.monotonic() + self._outage_retry_seconds
+        last_emit = -_OUTAGE_EMIT_INTERVAL_S
+        delay = 1.0
+        while True:
+            try:
+                return super().model_call(  # type: ignore[misc]
+                    messages, generate=generate, gen_kwargs=gen_kwargs, **kwargs
+                )
+            except _OUTAGE_EXC_SYNC as exc:
+                now = time.monotonic()
+                remaining = deadline - now
+                if remaining <= 0:
+                    raise
+                if now - last_emit >= _OUTAGE_EMIT_INTERVAL_S:
+                    last_emit = now
+                    self._emit_outage(
+                        payload=payload, messages=messages, exc=exc,
+                        remaining_s=remaining, t_start=t_start,
+                    )
+                time.sleep(self._backoff(delay, remaining))
+                delay = min(delay * 2.0, _OUTAGE_MAX_BACKOFF_S)
 
     async def amodel_call(
         self,
@@ -278,17 +395,9 @@ class _TelemetryMixin:
         t_start = time.perf_counter()
         acquired = await sem.acquire()
         try:
-            async with session.post(
-                self.base_url, json=payload, headers=self.header
-            ) as response:
-                if not response.ok:
-                    error_text = await response.text()
-                    eval_logger.warning(
-                        f"API request failed! Status code: {response.status}, "
-                        f"Response text: {error_text}. Retrying..."
-                    )
-                response.raise_for_status()
-                outputs = await response.json()
+            outputs = await self._amodel_fetch_with_outage_retry(
+                session=session, payload=payload, messages=messages, t_start=t_start
+            )
             tmp_answers = (
                 self.parse_generations(outputs=outputs)
                 if generate
@@ -322,6 +431,47 @@ class _TelemetryMixin:
                 t_end=time.perf_counter(),
                 error=err,
             )
+
+    async def _amodel_fetch_with_outage_retry(self, *, session, payload, messages, t_start):
+        """POST ``payload``, riding a connection outage within the budget.
+
+        HTTP 4xx/5xx raise ``aiohttp.ClientResponseError`` (NOT in
+        ``_OUTAGE_EXC``) and propagate immediately, preserving the previous
+        fail-fast semantics. Only transport-level failures are retried, with
+        full-jitter exponential backoff and one throttled ``status:"outage"``
+        row per ``_OUTAGE_EMIT_INTERVAL_S``. On budget exhaustion the last
+        exception is re-raised so ``_emit`` records exactly one terminal
+        ``status:"error"`` row.
+        """
+        deadline = time.monotonic() + self._outage_retry_seconds
+        last_emit = -_OUTAGE_EMIT_INTERVAL_S
+        delay = 1.0
+        while True:
+            try:
+                async with session.post(
+                    self.base_url, json=payload, headers=self.header
+                ) as response:
+                    if not response.ok:
+                        error_text = await response.text()
+                        eval_logger.warning(
+                            f"API request failed! Status code: {response.status}, "
+                            f"Response text: {error_text}. Retrying..."
+                        )
+                    response.raise_for_status()
+                    return await response.json()
+            except _OUTAGE_EXC as exc:
+                now = time.monotonic()
+                remaining = deadline - now
+                if remaining <= 0:
+                    raise
+                if now - last_emit >= _OUTAGE_EMIT_INTERVAL_S:
+                    last_emit = now
+                    self._emit_outage(
+                        payload=payload, messages=messages, exc=exc,
+                        remaining_s=remaining, t_start=t_start,
+                    )
+                await asyncio.sleep(self._backoff(delay, remaining))
+                delay = min(delay * 2.0, _OUTAGE_MAX_BACKOFF_S)
 
 
 @register_model("local-completions-telemetry")

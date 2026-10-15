@@ -24,4 +24,6 @@ tokenizer = "Qwen/Qwen3.8-27B"
 # cheapest task here (~300 tok/request), so KV pressure is negligible.
 num_concurrent = 32
 timeout = 900
+outage_retry_seconds = 600
+max_retries = 0
 auth_token_env = ""

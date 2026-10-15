@@ -51,4 +51,9 @@ num_concurrent = 32
 # traces at max_gen_toks=4096 and no stop sequences, a request that queues
 # behind 31 others can exceed 300s, and max_retries would re-send it whole.
 timeout = 900
+# Ride a vllm-router connectivity outage for up to 10 min before failing the
+# run; `max_retries = 0` disables the harness's own retry so the plugin's
+# budget is the single source of patience.
+outage_retry_seconds = 600
+max_retries = 0
 auth_token_env = ""
