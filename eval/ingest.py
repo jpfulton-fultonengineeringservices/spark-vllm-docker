@@ -107,13 +107,14 @@ def load_telemetry(samples_dir: Path, timestamp: str) -> list[dict]:
 
 
 def _match_telemetry(
-    samples: list[dict], telemetry: list[dict]
+    samples: list[dict], telemetry: list[dict], *, allow_ordinal: bool
 ) -> tuple[dict[int, dict], int]:
     """Map sample index -> telemetry row. Returns (mapping, unmatched_count).
 
-    Primary key: exact ``prompt_text`` match. Fallback: ordinal order (valid
-    when exactly one request per sample, i.e. ``num_concurrent`` irrelevant but
-    sequential ordering holds).
+    Primary key: exact ``prompt_text`` match. Fallback: ordinal order, ONLY when
+    ``allow_ordinal`` (``num_concurrent == 1``) — with concurrency the harness
+    length-sorts requests before dispatch, so ordinal order is not doc order and
+    pairing would attach the wrong telemetry.
     """
     by_prompt: dict[str, list[dict]] = {}
     for row in telemetry:
@@ -131,13 +132,22 @@ def _match_telemetry(
                     used.add(id(row))
                     break
     unmatched = len(telemetry) - len(mapping)
-    if not mapping and telemetry and samples:
-        # Ordinal fallback: pair telemetry[i] with samples[i].
+    if not mapping and telemetry and samples and allow_ordinal:
         ordered = sorted(telemetry, key=lambda r: r.get("ordinal") or 0)
         for i, row in enumerate(ordered[: len(samples)]):
             mapping[i] = row
         unmatched = len(telemetry) - len(mapping)
     return mapping, unmatched
+
+
+def _num_concurrent(ref) -> int:
+    """Read ``model_args.num_concurrent`` from the run's results JSON (default 1)."""
+    try:
+        data = json.loads(ref.results_file.read_text())
+        margs = (data.get("config") or {}).get("model_args") or {}
+        return int(margs.get("num_concurrent") or 1)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return 1
 
 
 def ingest_run(conn: psycopg.Connection, ref, run) -> bool:
@@ -263,7 +273,9 @@ def ingest_run(conn: psycopg.Connection, ref, run) -> bool:
             telemetry = load_telemetry(samples_dir, ref.timestamp)
             if telemetry and sample_ids:
                 annotated = [{"_prompt_text": pt} for pt in prompt_texts]
-                mapping, unmatched = _match_telemetry(annotated, telemetry)
+                mapping, unmatched = _match_telemetry(
+                    annotated, telemetry, allow_ordinal=_num_concurrent(ref) <= 1
+                )
                 for i, tel in mapping.items():
                     if i >= len(sample_ids):
                         continue
