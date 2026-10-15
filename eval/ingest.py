@@ -329,12 +329,51 @@ def ingest_run(conn: psycopg.Connection, ref, run) -> bool:
             for i, tel in mapping.items():
                 _insert_telemetry(cur, all_samples[i]["_sample_id"], tel, ref.run_name)
             if unmatched:
+                _insert_orphan_telemetry(cur, run_id, telemetry, set(map(id, mapping.values())))
                 print(
                     f"[ingest] {ref.run_name}: {unmatched} telemetry row(s) uncorrelated",
                     file=sys.stderr,
                 )
     conn.commit()
     return True
+
+
+def _insert_orphan_telemetry(
+    cur: psycopg.Cursor, run_id: Any, telemetry: list[dict], used: set[int]
+) -> None:
+    """Persist telemetry rows that matched no sample into the orphan lane."""
+    for tel in telemetry:
+        if id(tel) in used:
+            continue
+        cur.execute(
+            """
+            INSERT INTO eval_telemetry_orphan (run_id, task, request_hash, prompt_hash,
+                ordinal, wall_ms, ttfb_ms, ttft_ms, prompt_tokens, completion_tokens,
+                total_tokens, cache_read_tokens, cache_write_tokens, reasoning_content,
+                content, status, error, images)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """,
+            (
+                run_id,
+                tel.get("task"),
+                tel.get("request_hash"),
+                tel.get("prompt_hash"),
+                tel.get("ordinal"),
+                tel.get("wall_ms"),
+                tel.get("ttfb_ms"),
+                tel.get("ttft_ms"),
+                tel.get("prompt_tokens"),
+                tel.get("completion_tokens"),
+                tel.get("total_tokens"),
+                tel.get("cache_read_tokens"),
+                tel.get("cache_write_tokens"),
+                tel.get("reasoning_content"),
+                tel.get("content"),
+                tel.get("status"),
+                tel.get("error"),
+                json.dumps(tel.get("images") or []),
+            ),
+        )
 
 
 def _normalize_image_paths(images: list, run_name: str) -> list:
