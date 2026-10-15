@@ -25,6 +25,14 @@ case "$1" in
     run|viz|setup)
         exec uv run --python 3.12 --no-project "$SCRIPT_DIR/cli.py" "$@"
         ;;
+    ingest)
+        # Ingest needs the rig venv (psycopg), not the --no-project ephemeral env.
+        [ -x "$SCRIPT_DIR/.venv/bin/python" ] || {
+            echo "[eval.sh] no venv at $SCRIPT_DIR/.venv; run ./eval/eval.sh setup" >&2
+            exec uv run --python 3.12 --no-project "$SCRIPT_DIR/cli.py" setup
+        }
+        exec "$SCRIPT_DIR/.venv/bin/python" "$SCRIPT_DIR/cli.py" "$@"
+        ;;
     *)
         exec uv run --python 3.12 --no-project "$SCRIPT_DIR/cli.py" run "$@"
         ;;
