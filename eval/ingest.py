@@ -133,31 +133,48 @@ def _match_telemetry(
 ) -> tuple[dict[int, dict], int]:
     """Map sample index -> telemetry row. Returns (mapping, unmatched_count).
 
-    Primary key: exact ``prompt_text`` match. Fallback: ordinal order, ONLY when
-    ``allow_ordinal`` (``num_concurrent == 1``) — with concurrency the harness
-    length-sorts requests before dispatch, so ordinal order is not doc order and
-    pairing would attach the wrong telemetry.
+    Matches across the WHOLE run (caller passes all samples of every task with a
+    globally-unique index) so repeated prompts cannot steal rows across tasks.
+    Primary key: the harness ``prompt_hash``; secondary: exact ``prompt_text``
+    (for sidecars written before the plugin emitted ``prompt_hash``). Fallback:
+    ordinal order, ONLY when ``allow_ordinal`` (``num_concurrent == 1``) — with
+    concurrency the harness length-sorts requests before dispatch, so ordinal
+    order is not doc order and pairing would attach the wrong telemetry.
     """
-    by_prompt: dict[str, list[dict]] = {}
-    for row in telemetry:
-        by_prompt.setdefault(row.get("prompt_text") or "", []).append(row)
+    def bucketize(tel_key: str) -> dict[str, list[dict]]:
+        out: dict[str, list[dict]] = {}
+        for row in telemetry:
+            k = row.get(tel_key) or ""
+            if k:
+                out.setdefault(k, []).append(row)
+        return out
 
-    mapping: dict[int, dict] = {}
     used: set[int] = set()
-    for i, s in enumerate(samples):
-        key = s["_prompt_text"]
-        bucket = by_prompt.get(key)
-        if bucket:
-            for j, row in enumerate(bucket):
+    mapping: dict[int, dict] = {}
+
+    def consume(sample_key: str, tel_key: str) -> None:
+        by_key = bucketize(tel_key)
+        for i, s in enumerate(samples):
+            if i in mapping:
+                continue
+            key = s.get(sample_key) or ""
+            if not key:
+                continue
+            for row in by_key.get(key, []):
                 if id(row) not in used:
                     mapping[i] = row
                     used.add(id(row))
                     break
+
+    # prompt_hash is per-request exact; prompt_text is the legacy fallback.
+    consume("_prompt_hash", "prompt_hash")
+    consume("_prompt_text", "prompt_text")
     unmatched = len(telemetry) - len(mapping)
     if not mapping and telemetry and samples and allow_ordinal:
         ordered = sorted(telemetry, key=lambda r: r.get("ordinal") or 0)
-        for i, row in enumerate(ordered[: len(samples)]):
-            mapping[i] = row
+        for i, s in enumerate(samples):
+            if i < len(ordered):
+                mapping[i] = ordered[i]
         unmatched = len(telemetry) - len(mapping)
     return mapping, unmatched
 
@@ -216,6 +233,10 @@ def ingest_run(conn: psycopg.Connection, ref, run) -> bool:
         )
         run_id = cur.fetchone()[0]
 
+        # Collect every inserted sample across ALL tasks, then attach telemetry
+        # once per run (global match) so repeated prompts can't steal rows
+        # across tasks via a fresh per-task `used` set.
+        all_samples: list[dict] = []
         for t in run.tasks:
             cur.execute(
                 """
@@ -256,8 +277,6 @@ def ingest_run(conn: psycopg.Connection, ref, run) -> bool:
                 )
 
             records = [sample_record(s, t.config) for s in t.samples]
-            sample_ids: list[Any] = []
-            prompt_texts: list[str] = []
             for s, rec in zip(t.samples, records):
                 arg0 = (s.get("arguments") or {}).get("gen_args_0", {}).get("arg_0", "")
                 prompt_text = extract_prompt_text(arg0)
@@ -288,26 +307,29 @@ def ingest_run(conn: psycopg.Connection, ref, run) -> bool:
                         prompt_text,
                     ),
                 )
-                sample_ids.append(cur.fetchone()[0])
-                prompt_texts.append(prompt_text)
-
-            # Telemetry attach (uses the run's samples dir sidecar).
-            samples_dir = ref.results_file.parent
-            telemetry = load_telemetry(samples_dir, ref.timestamp)
-            if telemetry and sample_ids:
-                annotated = [{"_prompt_text": pt} for pt in prompt_texts]
-                mapping, unmatched = _match_telemetry(
-                    annotated, telemetry, allow_ordinal=_num_concurrent(ref) <= 1
+                all_samples.append(
+                    {
+                        "_sample_id": cur.fetchone()[0],
+                        "_task": t.task,
+                        "_prompt_text": prompt_text,
+                        "_prompt_hash": str(s.get("prompt_hash") or ""),
+                    }
                 )
-                for i, tel in mapping.items():
-                    if i >= len(sample_ids):
-                        continue
-                    _insert_telemetry(cur, sample_ids[i], tel, ref.run_name)
-                if unmatched:
-                    print(
-                        f"[ingest] {t.task}: {unmatched} telemetry row(s) uncorrelated",
-                        file=sys.stderr,
-                    )
+
+        # Telemetry attach: one global match per run.
+        samples_dir = ref.results_file.parent
+        telemetry = load_telemetry(samples_dir, ref.timestamp)
+        if telemetry and all_samples:
+            mapping, unmatched = _match_telemetry(
+                all_samples, telemetry, allow_ordinal=_num_concurrent(ref) <= 1
+            )
+            for i, tel in mapping.items():
+                _insert_telemetry(cur, all_samples[i]["_sample_id"], tel, ref.run_name)
+            if unmatched:
+                print(
+                    f"[ingest] {ref.run_name}: {unmatched} telemetry row(s) uncorrelated",
+                    file=sys.stderr,
+                )
     conn.commit()
     return True
 
