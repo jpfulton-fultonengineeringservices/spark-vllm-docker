@@ -22,11 +22,13 @@ import copy
 import hashlib
 import json
 import time
+from pathlib import Path
 from typing import Any
 
 from lm_eval.api.registry import register_model
 from lm_eval.models.api_models import (
     LMEVAL_MODEL_NONE_ANSWER_PLACEHOLDER,
+    JsonChatStr,
     eval_logger,
 )
 from lm_eval.models.openai_completions import LocalChatCompletion, LocalCompletionsAPI
@@ -162,6 +164,26 @@ def _hash_payload(payload: dict[str, Any]) -> str:
         return ""
 
 
+def _harness_prompt_hash(messages: Any) -> str:
+    """Reproduce the harness's ``prompt_hash = sha256(arguments[0])``.
+
+    ``arguments[0]`` is the per-request context the harness passes to
+    ``generate_until``/``loglikelihood``: a ``JsonChatStr`` (chat), a plain
+    context string (completions), or a token-id list (tokenized completions,
+    unrecoverable). Mirrors ``lm_eval/utils.hash_string`` resolved through
+    ``JsonChatStr.encode``.
+    """
+    try:
+        first = messages[0] if isinstance(messages, (list, tuple)) and messages else messages
+    except (TypeError, IndexError):
+        return ""
+    if isinstance(first, JsonChatStr):
+        return hashlib.sha256(first.prompt.encode("utf-8")).hexdigest()
+    if isinstance(first, str):
+        return hashlib.sha256(first.encode("utf-8")).hexdigest()
+    return ""
+
+
 class _TelemetryMixin:
     """Shared capture logic layered over the harness API backends."""
 
@@ -169,6 +191,7 @@ class _TelemetryMixin:
         self,
         *,
         payload: dict[str, Any],
+        messages: Any,
         outputs: Any,
         t_start: float,
         t_end: float,
@@ -180,6 +203,7 @@ class _TelemetryMixin:
         sink.record(
             {
                 "request_hash": request_hash,
+                "prompt_hash": _harness_prompt_hash(messages),
                 "ordinal": sink.next_ordinal(),
                 "model": getattr(self, "model", None),
                 "prompt_text": _prompt_text_from_payload(payload),
@@ -221,6 +245,7 @@ class _TelemetryMixin:
         finally:
             self._emit(
                 payload=payload,
+                messages=messages,
                 outputs=outputs,
                 t_start=t_start,
                 t_end=time.perf_counter(),
@@ -291,6 +316,7 @@ class _TelemetryMixin:
                 sem.release()
             self._emit(
                 payload=payload,
+                messages=messages,
                 outputs=outputs,
                 t_start=t_start,
                 t_end=time.perf_counter(),
