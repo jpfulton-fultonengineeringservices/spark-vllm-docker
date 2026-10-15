@@ -1,0 +1,92 @@
+# Recipe: Qwen3.8-27B-Coder390-DFlash2 (two-node TP=2)
+#
+# Serves the local dense BF16 checkpoint
+# /nas-1/models/qwen3.8/qwen3.8-27b-coder390-ethink-dflash2 (staged slug
+# qwen3.8-27b-coder390-ethink-dflash2) with its bundled FP8 DFlash2 drafter.
+# The drafter is a real subdirectory of the checkpoint (DFlash2-FP8/), mounted
+# at /model by mods/fes-weights, so --speculative-config points straight at
+# /model/DFlash2-FP8. No drafter-staging mod is needed (contrast
+# mods/mimo-v2.6-flash).
+#
+# Architecturally this is a Qwen3_5 hybrid (16 full-attention + 48 Gated
+# DeltaNet layers) with a vision tower, so the SSM/hybrid env block and
+# --mamba-cache-mode align mirror recipes/qwen3.8-flash-next-nvfp4-cluster.yaml
+# (same arch family, same b12x image). The DFlash2 spec-decode block mirrors
+# recipes/qwen3.8-27b-nvfp4-dflash2.yaml.
+#
+# The `model:` id is synthetic (the checkpoint is not on the Hub); mods/fes-weights
+# presents /model as an HF hub-cache shim under this exact id, so
+# `vllm serve <id>` resolves offline with HF_HUB_OFFLINE=1.
+
+recipe_version: "1"
+name: Qwen3.8-27B-Coder390-DFlash2 (2x)
+description: vLLM serving the local dense BF16 Qwen3.8-27B-Coder390 checkpoint with its bundled FP8 DFlash2 drafter, TP=2 across two DGX Spark nodes
+
+model: local-inference-lab/Qwen3.8-27B-Coder390-DFlash2
+container: vllm-node-b12x
+
+build_args:
+  - --exp-b12x
+
+# fes-weights must be the first mod: it verifies the staged weights and builds
+# the offline hub-cache shim that `vllm serve <model>` resolves against.
+mods:
+  - mods/fes-weights
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 2
+  gpu_memory_utilization: 0.75
+  max_model_len: 262144
+  max_num_seqs: 32
+  max_num_batched_tokens: 16384
+  num_speculative_tokens: 7
+  draft_tensor_parallel_size: 2
+
+# Qwen3.5 hybrid (Gated DeltaNet + full attention) on the b12x stack.
+# Same block as recipes/qwen3.8-flash-next-nvfp4-cluster.yaml.
+env:
+  CUTE_DSL_ARCH: "sm_121a"
+  SAFETENSORS_FAST_GPU: "1"
+  VLLM_WORKER_MULTIPROC_METHOD: "spawn"
+  VLLM_SSM_CONV_STATE_LAYOUT: "DS"
+  VLLM_USE_AOT_COMPILE: "1"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+  B12X_POLICY_MODE: "auto"
+  VLLM_ENABLE_ROCE_ALLREDUCE: "1"
+  VLLM_ROCE_ALLREDUCE_MAX_SIZE: "2MB"
+
+# num_speculative_tokens 7: DFlash2Qwen3Model sized its grouped-conv
+# block_size as 1 + num_speculative_tokens, and the drafter's config pins
+# dflash_config.block_size = 8, so 1 + 7 = 8 matches. 8 (the value the
+# external-drafter recipe uses) would make block_size 9 and miss the
+# block_size==8 fast path in qwen3_dflash2.py.
+command: |
+  vllm serve local-inference-lab/Qwen3.8-27B-Coder390-DFlash2 \
+    --host {host} \
+    --port {port} \
+    --trust-remote-code \
+    --tensor-parallel-size {tensor_parallel} \
+    --mamba-cache-mode align \
+    --enable-prefix-caching \
+    --enable-chunked-prefill \
+    --async-scheduling \
+    --dtype bfloat16 \
+    --kv-cache-dtype fp8 \
+    --block-size 16 \
+    --load-format b12x \
+    --max-model-len {max_model_len} \
+    --max-num-seqs {max_num_seqs} \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --speculative-config '{{"method":"dflash","model":"/model/DFlash2-FP8","num_speculative_tokens":{num_speculative_tokens},"draft_tensor_parallel_size":{draft_tensor_parallel_size}}}' \
+    --gdn-decode-kernel b12x \
+    --linear-backend b12x \
+    --no-enable-flashinfer-autotune \
+    --mm-encoder-tp-mode data \
+    --reasoning-parser qwen3 \
+    --tool-call-parser qwen3_xml \
+    --enable-auto-tool-choice \
+    --enable-mfu-metrics \
+    --kv-cache-metrics \
+    --gpu-memory-utilization {gpu_memory_utilization}
