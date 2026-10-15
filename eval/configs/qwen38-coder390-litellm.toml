@@ -1,0 +1,34 @@
+# Same checkpoint through Dell LiteLLM. Requires LITELLM_API_KEY.
+# arc_easy is absent - chat-completions does not provide loglikelihood.
+
+[run]
+name = "qwen38-coder390-litellm"
+tasks = ["humaneval_instruct", "mbpp_instruct"]
+num_fewshot = 0
+batch_size = 1
+limit = 0
+output_dir = "results"
+log_samples = true
+seed = "0,1234,1234,1234"
+apply_chat_template = true
+# `until` overridden to a never-matching sentinel for the same reason as the
+# cluster-code config: lm-eval forwards it as the API `stop` list AND applies
+# it client-side, and humaneval_instruct's default short markers match inside
+# this model's  block (-> content=null) or inside the answer itself (-> the
+# function body is truncated before the closing fence). See that config's
+# comment for the measured evidence.
+gen_kwargs = "max_gen_toks=4096,until=<<<NO_STOP>>>"
+
+[model]
+backend = "local-chat-completions"
+base_url = "https://dell.fulton-home.fultonengineeringservices.com/litellm/v1/chat/completions"
+model = "cluster/qwen3.8-27b-coder390"
+tokenizer_backend = "none"
+num_concurrent = 1
+auth_token_env = "LITELLM_API_KEY"
+
+[zeno]
+enabled = false
+endpoint = "http://127.0.0.1:8080"
+project = "qwen38-coder390-2x"
+api_key_env = "ZENO_API_KEY"

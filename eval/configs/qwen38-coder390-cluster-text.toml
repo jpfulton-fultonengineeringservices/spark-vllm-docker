@@ -1,0 +1,24 @@
+# Qwen3.8-27B-Coder390-DFlash2 - arc_easy rides the completions (loglikelihood)
+# path. The served id is synthetic (not on the Hub), so the tokenizer comes
+# from the public upstream base Qwen/Qwen3.8-27B (same Qwen2Tokenizer, vocab
+# 248320) - the same override pattern as the MiMo configs.
+
+[run]
+name = "qwen38-coder390-cluster-text"
+tasks = ["arc_easy"]
+num_fewshot = 0
+batch_size = 1
+limit = 0
+output_dir = "results"
+log_samples = true
+seed = "0,1234,1234,1234"
+apply_chat_template = true
+
+[model]
+backend = "local-completions"
+base_url = "http://10.10.10.165:8000/v1/completions"
+model = "local-inference-lab/Qwen3.8-27B-Coder390-DFlash2"
+tokenizer_backend = "huggingface"
+tokenizer = "Qwen/Qwen3.8-27B"
+num_concurrent = 1
+auth_token_env = ""

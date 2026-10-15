@@ -1,0 +1,43 @@
+# Qwen3.8-27B-Coder390-DFlash2 (TP=2) - code generation, direct to rank-0.
+# Both tasks are generate_until (chat path). --reasoning-parser qwen3 strips
+# the thinking block server-side, so no think_end_token is needed; gen_kwargs
+# widens the budget so the thinking trace does not crowd out the answer.
+
+[run]
+name = "qwen38-coder390-cluster-code"
+tasks = ["humaneval_instruct", "mbpp_instruct"]
+num_fewshot = 0
+batch_size = 1
+limit = 0
+output_dir = "results"
+log_samples = true
+seed = "0,1234,1234,1234"
+apply_chat_template = true
+# gen_kwargs: max_gen_toks widens the budget so the thinking trace does not
+# `until` is OVERRIDDEN to a sentinel that never occurs, effectively disabling
+# stop sequences. Rationale, all measured against the live endpoint:
+#  1. lm-eval forwards `until` as the API `stop` list
+#     (lm_eval/models/openai_completions.py, trimmed by `stop[:4]`) AND applies
+#     it client-side as post-hoc truncation in generate_until.
+#  2. humaneval_instruct's default ["\nclass","\ndef","\n#","\nif","\nprint"]
+#     matches INSIDE this model's  block; when generation is cut there,
+#     vLLM's qwen3 reasoning parser returns content=null and the harness
+#     substitutes LMEVAL_MODEL_NONE_ANSWER_PLACEHOLDER ("API returned null
+#     content" in the harness log).
+#  3. Overriding with "\ndef" fixed the nulls but truncated every answer at its
+#     own `def <fn>(...)` line before the body, so pass@1 stayed 0.
+#  4. This model consistently ends the fenced code block and emits EOS on its
+#     own, so no stop sequence is needed. `until` must still be present: it is
+#     merged via set_config(update=True), so omitting it leaves the task's
+#     markers in force. A sentinel is the only never-matching value expressible
+#     here because lm_eval.utils.handle_arg_string has no list parsing for CLI
+#     gen_kwargs values.
+gen_kwargs = "max_gen_toks=4096,until=<<<NO_STOP>>>"
+
+[model]
+backend = "local-chat-completions"
+base_url = "http://10.10.10.165:8000/v1/chat/completions"
+model = "local-inference-lab/Qwen3.8-27B-Coder390-DFlash2"
+tokenizer_backend = "none"
+num_concurrent = 1
+auth_token_env = ""
