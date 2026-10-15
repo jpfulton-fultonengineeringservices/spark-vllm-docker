@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -381,15 +382,18 @@ def _normalize_image_paths(images: list, run_name: str) -> list:
 
     The console serves images from the results root, so a stored path must be
     ``<run-name>/images/<file>``. Older sidecars wrote ``images/<file>``; the
-    current plugin already writes the run-name-prefixed form, so only prefix
-    when missing.
+    current plugin already writes the run-name-prefixed form, so only prefix a
+    path that doesn't already match the expected shape (validated structurally,
+    not by run-name prefix match — a run literally named ``images`` would
+    otherwise double-prefix).
     """
+    shaped = re.compile(rf"^{re.escape(run_name)}/images/[A-Za-z0-9_.-]+$")
     out = []
     for img in images:
         if not isinstance(img, dict):
             continue
         path = img.get("path")
-        if isinstance(path, str) and path and not path.startswith(f"{run_name}/"):
+        if isinstance(path, str) and path and not shaped.match(path):
             img = {**img, "path": f"{run_name}/{path.lstrip('/')}"}
         out.append(img)
     return out
