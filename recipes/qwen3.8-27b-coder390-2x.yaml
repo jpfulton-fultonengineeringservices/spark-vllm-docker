@@ -1,8 +1,13 @@
 # Recipe: Qwen3.8-27B-Coder390-DFlash2 (two-node TP=2)
 #
-# Serves the local dense BF16 checkpoint
-# /nas-1/models/qwen3.8/qwen3.8-27b-coder390-ethink-dflash2 (staged slug
-# qwen3.8-27b-coder390-ethink-dflash2) with its bundled FP8 DFlash2 drafter.
+# Serves the NVFP4 W4A16 quantization of the local dense coder checkpoint:
+# /nas-1/models/qwen3.8/qwen3.8-27b-coder390-ethink-dflash2-nvfp4-w4a16
+# (staged slug qwen3.8-27b-coder390-ethink-dflash2-nvfp4-w4a16), with its
+# bundled FP8 DFlash2 drafter. cluster.env maps recipe
+# `qwen3.8-27b-coder390-2x` -> that NVFP4 slug, so fes-weights mounts the
+# quantized dir; `--quantization modelopt_mixed` selects the ModelOpt path
+# (MLP+lm_head NVFP4 -> Marlin; attention FP8 -> FlashInfer FP8), KV stays fp8.
+# The BF16 checkpoint remains on the NAS archive if a rollback is needed.
 # The drafter is a real subdirectory of the checkpoint (DFlash2-FP8/), mounted
 # at /model by mods/fes-weights. Its config.json is written for SGLang, so
 # mods/qwen3.8-coder390-dflash stages a vLLM-loadable copy at
@@ -94,6 +99,7 @@ command: |
     --dtype bfloat16 \
     --kv-cache-dtype fp8 \
     --block-size 16 \
+    --quantization modelopt_mixed \
     --load-format b12x \
     --max-model-len {max_model_len} \
     --max-num-seqs {max_num_seqs} \
