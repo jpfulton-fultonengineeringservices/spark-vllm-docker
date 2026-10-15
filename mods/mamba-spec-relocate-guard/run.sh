@@ -84,7 +84,10 @@ replacement = (
     f"            {MARK} a hashed/shared block here is a cached-prefix\n"
     f"            {MARK} block a KV connector exposed mid-flight, not\n"
     f"            {MARK} exclusive scratch. Asserting kills EngineCore;\n"
+    f"            {MARK} release this request's reference to it (the normal\n"
+    f"            {MARK} path MOVES the block, so it never frees one) and\n"
     f"            {MARK} hand the request a fresh scratch block instead.\n"
+    "            self.block_pool.free_blocks([block])\n"
     "            block = self.block_pool.get_new_blocks(1)[0]\n"
 )
 src = src.replace(anchor, replacement)
