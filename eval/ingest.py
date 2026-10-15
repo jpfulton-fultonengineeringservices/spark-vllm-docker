@@ -480,17 +480,35 @@ def discover_and_ingest(results_dir: Path | str, dsn: str) -> int:
 
 def watch(results_dir: Path | str, dsn: str, interval: float = 5.0) -> int:
     """Poll the results dir and ingest new runs until interrupted (LIVE)."""
-    print(f"[ingest] watching {results_dir} every {interval}s (Ctrl-C to stop)")
+    # Resolve once so the startup line proves which absolute dir is watched
+    # (--results resolution is CWD-first, then eval dir).
+    rdir = Path(results_dir)
+    if not rdir.is_absolute() and not rdir.exists():
+        rdir = SCRIPT_DIR / rdir
+    shown = rdir.resolve()
+    print(f"[ingest] watching {shown} every {interval}s (Ctrl-C to stop)", flush=True)
     total = 0
+    passes = 0
     try:
         while True:
+            passes += 1
             try:
-                total += discover_and_ingest(results_dir, dsn)
+                n = discover_and_ingest(results_dir, dsn)
+                total += n
+                if n:
+                    print(f"[ingest] pass {passes}: wrote {n} run(s)", flush=True)
+                elif passes % 12 == 0:
+                    # Heartbeat every ~interval*12s so a quiet log still proves
+                    # the watcher is alive (not wedged).
+                    print(
+                        f"[ingest] pass {passes}: idle ({total} written this session)",
+                        flush=True,
+                    )
             except psycopg.Error as exc:
-                print(f"[ingest] DB error: {exc}", file=sys.stderr)
+                print(f"[ingest] DB error: {exc}", file=sys.stderr, flush=True)
             time.sleep(interval)
     except KeyboardInterrupt:
-        print(f"\n[ingest] stopped; {total} run(s) ingested this session")
+        print(f"\n[ingest] stopped; {total} run(s) ingested this session", flush=True)
     return total
 
 
