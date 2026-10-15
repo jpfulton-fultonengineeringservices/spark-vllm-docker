@@ -191,15 +191,31 @@ def _num_concurrent(ref) -> int:
 
 
 def ingest_run(conn: psycopg.Connection, ref, run) -> bool:
-    """Insert (or replace) one run from its results JSON. Returns True on write."""
+    """Insert (or replace) one run from its results JSON.
+
+    Returns True when written, False when the stored run is already current.
+    The harness writes ``results_*.json`` only at run end, so a ``--watch``
+    pass re-discovers completed runs every poll; skipping unchanged ones keeps
+    the watcher cheap and stops row-id churn (which would reset the Live
+    window and dangle open sample URLs).
+    """
     source_path = str(ref.results_file.resolve())
     with conn.cursor() as cur:
-        cur.execute("SELECT id FROM eval_run WHERE source_path = %s", (source_path,))
+        cur.execute(
+            "SELECT id, started_at FROM eval_run WHERE source_path = %s", (source_path,)
+        )
         existing = cur.fetchone()
         if existing:
-            # Re-ingest replaces the run wholesale. A `--watch` pass may have
-            # ingested this run mid-flight; when it finishes, cmd_run re-ingests
-            # and must overwrite partial aggregates. Children cascade-delete.
+            from datetime import datetime, timezone
+
+            stored = existing[1]
+            incoming = (
+                datetime.fromtimestamp(ref.date, tz=timezone.utc) if ref.date else None
+            )
+            if stored == incoming:
+                return False  # same results file already ingested
+            # Results advanced (re-run extended the file): replace wholesale.
+            # Children cascade-delete.
             cur.execute("DELETE FROM eval_run WHERE id = %s", (existing[0],))
         started_at = None
         if ref.date:
@@ -438,10 +454,11 @@ def _outcome_counts(task) -> dict[str, int]:
 
 
 def discover_and_ingest(results_dir: Path | str, dsn: str) -> int:
-    """Ingest (insert-or-replace) every run under ``results_dir``.
+    """Ingest new/changed runs under ``results_dir``.
 
-    Returns the number of runs written. Re-running is safe: each run is replaced
-    by ``source_path``, so this is idempotent in outcome (not in write count).
+    Returns the number of runs actually written. Runs whose stored
+    ``started_at`` already matches the results file's ``date`` are skipped, so
+    repeated polling (``--watch``) is cheap and doesn't churn row ids.
     """
     rdir = Path(results_dir)
     if not rdir.is_absolute() and not rdir.exists():
