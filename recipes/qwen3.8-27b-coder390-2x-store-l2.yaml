@@ -68,12 +68,14 @@ defaults:
   port: 8000
   host: 0.0.0.0
   tensor_parallel: 2
-  # 0.65 (not the base recipe's 0.75): the Mooncake store cohort co-tenants the
-  # GB10 unified memory, so the client's ~8 GiB DRAM segment + buffer lower
-  # free memory below 0.75 * 120.5 GiB. vLLM's request_memory gate measures
-  # free (81.2 GiB) against total * utilization, so 0.75 aborts boot; 0.65
-  # (78.3 GiB) leaves ~2.9 GiB headroom.
-  gpu_memory_utilization: 0.65
+  # 0.50 (not the base recipe's 0.75): the Mooncake store cohort co-tenants the
+  # GB10 unified pool. The store connector ALSO pins 2x2048 MiB host-staging
+  # slots (~8 GiB) AFTER vLLM sizes KV against total*utilization, so the KV
+  # budget must leave that plus the mooncake-client's ~8 GiB DRAM segment and
+  # the ~13.5 GiB of weights/activations. At 0.65 the 56 GiB KV cache drove the
+  # node to 0 free; 0.50 caps KV at ~38 GiB (2.78M -> ~1.9M tokens, still ~7x
+  # concurrency at 262144) and leaves real headroom.
+  gpu_memory_utilization: 0.50
   max_model_len: 262144
   max_num_seqs: 32
   max_num_batched_tokens: 16384
