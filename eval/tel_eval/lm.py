@@ -87,6 +87,7 @@ def _decode_images(payload: dict[str, Any], request_hash: str) -> list[dict[str,
     img_dir = sink.images_dir()
     if img_dir is None:
         return []
+    root = sink.results_root()
     messages = payload.get("messages")
     if not isinstance(messages, list):
         return []
@@ -113,8 +114,17 @@ def _decode_images(payload: dict[str, Any], request_hash: str) -> list[dict[str,
             img_dir.mkdir(parents=True, exist_ok=True)
             name = f"{request_hash}_{index}.{ext}"
             (img_dir / name).write_bytes(raw)
+            # Store the path relative to the results root so the console's
+            # image route (rooted at the results dir) can resolve it.
+            if root is not None:
+                try:
+                    rel_path = (img_dir / name).resolve().relative_to(root.resolve())
+                except ValueError:
+                    rel_path = Path("images") / name
+            else:
+                rel_path = Path("images") / name
             found.append(
-                {"path": f"images/{name}", "index": index, "mime": mime, "bytes": len(raw)}
+                {"path": str(rel_path), "index": index, "mime": mime, "bytes": len(raw)}
             )
             index += 1
     return found

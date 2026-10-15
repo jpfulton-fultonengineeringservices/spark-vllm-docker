@@ -93,6 +93,7 @@ def build_argv(cfg: dict, dry_run: bool) -> list[str]:
         backend = TELEMETRY_BACKEND_ALIASES.get(backend, backend)
         os.environ["EVAL_TELEMETRY_PATH"] = str(out_dir / "telemetry.jsonl")
         os.environ["EVAL_TELEMETRY_IMAGES_DIR"] = str(out_dir / "images")
+        os.environ["EVAL_RESULTS_ROOT"] = str(out_dir.parent)
 
     margs: dict[str, str | int] = {
         "model": model_id,

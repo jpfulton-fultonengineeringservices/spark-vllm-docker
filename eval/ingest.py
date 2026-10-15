@@ -319,6 +319,10 @@ def discover_and_ingest(results_dir: Path | str, dsn: str) -> int:
     rdir = Path(results_dir)
     if not rdir.is_absolute():
         rdir = SCRIPT_DIR / rdir
+    # If pointed straight at a run dir (results/<run-name>), walk up so run_name
+    # derives from the run-name dir, not the model slug subdir below it.
+    if (rdir / "config_snapshot.json").exists() or (rdir / "telemetry.jsonl").exists():
+        rdir = rdir.parent
     refs = discover_runs(rdir)
     inserted = 0
     with psycopg.connect(dsn, autocommit=False) as conn:
