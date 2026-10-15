@@ -99,3 +99,30 @@ CREATE INDEX IF NOT EXISTS eval_sample_task_idx ON eval_sample (task_id);
 CREATE INDEX IF NOT EXISTS eval_sample_prompt_text_idx ON eval_sample (prompt_text);
 CREATE INDEX IF NOT EXISTS eval_sample_prompt_hash_idx ON eval_sample (prompt_hash);
 CREATE INDEX IF NOT EXISTS eval_sample_telemetry_ordinal_idx ON eval_sample_telemetry (ordinal);
+
+-- Orphan telemetry lane: rows that could not be correlated to a sample are
+-- stored here (not dropped), so the UI can surface uncorrelated counts.
+CREATE TABLE IF NOT EXISTS eval_telemetry_orphan (
+    id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id             uuid NOT NULL REFERENCES eval_run(id) ON DELETE CASCADE,
+    task               text,
+    request_hash       text,
+    prompt_hash        text,
+    ordinal            integer,
+    wall_ms            double precision,
+    ttfb_ms            double precision,
+    ttft_ms            double precision,
+    prompt_tokens      integer,
+    completion_tokens  integer,
+    total_tokens       integer,
+    cache_read_tokens  integer,
+    cache_write_tokens integer,
+    reasoning_content  text,
+    content            text,
+    status             text,
+    error              text,
+    images             jsonb,
+    created_at         timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS eval_telemetry_orphan_run_idx ON eval_telemetry_orphan (run_id);
