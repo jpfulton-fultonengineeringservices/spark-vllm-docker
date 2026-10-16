@@ -30,6 +30,13 @@ LITELLM_API_KEY=... ./eval/eval.sh run eval/configs/mimo-nvfp4-litellm.toml
 ./eval/eval.sh run eval/configs/qwen38-coder390-cluster-mmmu.toml
 LITELLM_API_KEY=... ./eval/eval.sh run eval/configs/qwen38-coder390-litellm.toml
 
+# Short run: keep every task, cap lm-eval `--limit` at 80 samples PER TASK
+# (the full litellm suite is ~16.5k requests, dominated by cruxeval repeats:10;
+# 80/task -> ~1.8k requests ~ 1.5 h at the measured rate).
+# `--limit N` overrides; no flag = full suite.
+LITELLM_API_KEY=... ./eval/eval.sh run eval/configs/qwen38-coder390-litellm.toml --short
+LITELLM_API_KEY=... ./eval/eval.sh run eval/configs/qwen38-coder390-litellm.toml --limit 100
+
 ./eval/eval.sh viz results --local --html                 # newest run (interactive picker if ambiguous)
 ./eval/eval.sh viz results --model DFlash2 --run latest   # explicit model / run selection
 ./eval/eval.sh viz results --model DFlash2 --run 2026-10-15T07-58-54.379034 --html --out /tmp/r.html
@@ -159,8 +166,10 @@ backoff (cap 30s) for up to `outage_retry_seconds`:
 - While stalled, the plugin appends one throttled `status:"outage"` row per
   ~30s (distinct from the terminal `status:"error"` row), so the console's
   Live view can show "upstream unreachable — retrying".
-- **HTTP 4xx/5xx are not retried** (they are not connection failures) — they
-  fail fast exactly as before. Only outages are absorbed.
+- **Transient HTTP statuses are also retried**: 408, 425, 429, 500, 502, 503,
+  504 (e.g. an nginx `503 Service Temporarily Unavailable` from the gateway)
+  ride the same `outage_retry_seconds` budget as connection failures.
+  **Permanent client errors (400/401/403/404/422) still fail fast.**
 
 Because the harness's own retry would re-invoke the plugin (multiplying the
 budget by `1 + max_retries`), the shipped configs set `max_retries = 0` so the
