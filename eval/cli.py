@@ -68,9 +68,16 @@ TELEMETRY_BACKEND_ALIASES = {
     "local-chat-completions": "local-chat-completions-telemetry",
 }
 
+# Short-run default: lm-eval `--limit` samples PER TASK. The full litellm
+# suite is ~16.5k requests (cruxeval repeats:10 over ~800 docs dominates).
+# 80/task keeps every task while holding the whole suite to ~1.5 h at the
+# measured ~0.34 req/s. At limit 80: humaneval 80 + mbpp 80 +
+# cruxeval_output 800 + cruxeval_input 800 = 1,760 requests (~45 min at 0.58 req/s).
+SHORT_RUN_SAMPLES = 80
+
 # ---------------------------------------------------------------- run
 
-def build_argv(cfg: dict, dry_run: bool) -> list[str]:
+def build_argv(cfg: dict, dry_run: bool, limit_override: int | None = None) -> list[str]:
     run = cfg["run"]
     model = cfg["model"]
     zeno = cfg.get("zeno", {})
@@ -145,7 +152,10 @@ def build_argv(cfg: dict, dry_run: bool) -> list[str]:
         argv += ["--num_fewshot", str(nf)]
     if (bs := run.get("batch_size")) is not None:
         argv += ["--batch_size", str(bs)]
-    if (lim := run.get("limit", 0)):
+    # `limit_override` (from --limit/--short) wins; otherwise the config's
+    # [run].limit is used as before. 0 means "no limit" (full suite).
+    lim = limit_override if limit_override is not None else run.get("limit", 0)
+    if lim:
         argv += ["--limit", str(lim)]
     argv += ["--output_path", str(out_dir)]
     if run.get("log_samples", True):
@@ -201,7 +211,8 @@ def _warn_if_unreachable(model: dict) -> None:
         )
 
 
-def cmd_run(cfg_path: str, dry_run: bool, extra: list[str]) -> int:
+def cmd_run(cfg_path: str, dry_run: bool, extra: list[str],
+            limit_override: int | None = None) -> int:
     cfg = tomllib.loads(Path(cfg_path).read_text())
 
     if not LMEVAL.exists():
@@ -210,7 +221,7 @@ def cmd_run(cfg_path: str, dry_run: bool, extra: list[str]) -> int:
         if r.returncode != 0:
             return r.returncode
 
-    argv = build_argv(cfg, dry_run) + list(extra)
+    argv = build_argv(cfg, dry_run, limit_override) + list(extra)
     print("[cli] exec:", " ".join(argv))
     if dry_run:
         return 0
@@ -580,6 +591,11 @@ def main() -> int:
     rp = sub.add_parser("run", help="run an eval from a TOML config")
     rp.add_argument("config")
     rp.add_argument("--dry-run", action="store_true", help="print argv, do not exec")
+    rp.add_argument("--limit", type=int, default=None,
+                    help="override [run].limit: lm-eval samples PER TASK")
+    rp.add_argument("--short", action="store_true",
+                    help=f"short run: keep all tasks, --limit {SHORT_RUN_SAMPLES} "
+                         f"unless --limit is given")
     rp.add_argument("extra", nargs="*", help="extra lm-eval args")
     vp = sub.add_parser("viz", help="render report / upload to Zeno")
     vp.add_argument("results_dir")
@@ -600,7 +616,11 @@ def main() -> int:
     args = p.parse_args()
 
     if args.cmd == "run":
-        return cmd_run(args.config, args.dry_run, args.extra)
+        limit_override = (
+            args.limit if args.limit is not None
+            else (SHORT_RUN_SAMPLES if args.short else None)
+        )
+        return cmd_run(args.config, args.dry_run, args.extra, limit_override)
     if args.cmd == "viz":
         return cmd_viz(args.results_dir, args.model, args.run_ts, args.out,
                        args.local, args.html, args.zeno, args.zeno_project)

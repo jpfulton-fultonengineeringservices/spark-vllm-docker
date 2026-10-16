@@ -62,6 +62,11 @@ _OUTAGE_EXC_SYNC = (
 _OUTAGE_MAX_BACKOFF_S = 30.0
 _OUTAGE_EMIT_INTERVAL_S = 30.0
 
+# Transient HTTP statuses from the gateway/proxy: retried like transport
+# failures (the endpoint is up but momentarily cannot serve). Permanent client
+# errors (400/401/403/404/422) are NOT here and still fail fast.
+_RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+
 _USAGE_CACHE_KEYS = (
     "cache_read_input_tokens",
     "cache_creation_input_tokens",
@@ -355,6 +360,23 @@ class _TelemetryMixin:
                 return super().model_call(  # type: ignore[misc]
                     messages, generate=generate, gen_kwargs=gen_kwargs, **kwargs
                 )
+            except requests.exceptions.HTTPError as exc:
+                # Transient gateway status only; permanent 4xx fail fast.
+                status = getattr(exc.response, "status_code", None)
+                if status not in _RETRYABLE_STATUS:
+                    raise
+                now = time.monotonic()
+                remaining = deadline - now
+                if remaining <= 0:
+                    raise
+                if now - last_emit >= _OUTAGE_EMIT_INTERVAL_S:
+                    last_emit = now
+                    self._emit_outage(
+                        payload=payload, messages=messages, exc=exc,
+                        remaining_s=remaining, t_start=t_start,
+                    )
+                time.sleep(self._backoff(delay, remaining))
+                delay = min(delay * 2.0, _OUTAGE_MAX_BACKOFF_S)
             except _OUTAGE_EXC_SYNC as exc:
                 now = time.monotonic()
                 remaining = deadline - now
@@ -459,6 +481,24 @@ class _TelemetryMixin:
                         )
                     response.raise_for_status()
                     return await response.json()
+            except aiohttp.ClientResponseError as exc:
+                # Transient gateway status (503/502/504/429/…): ride it on the
+                # same budget as a transport outage. Permanent client errors
+                # (4xx not in _RETRYABLE_STATUS) still propagate immediately.
+                if exc.status not in _RETRYABLE_STATUS:
+                    raise
+                now = time.monotonic()
+                remaining = deadline - now
+                if remaining <= 0:
+                    raise
+                if now - last_emit >= _OUTAGE_EMIT_INTERVAL_S:
+                    last_emit = now
+                    self._emit_outage(
+                        payload=payload, messages=messages, exc=exc,
+                        remaining_s=remaining, t_start=t_start,
+                    )
+                await asyncio.sleep(self._backoff(delay, remaining))
+                delay = min(delay * 2.0, _OUTAGE_MAX_BACKOFF_S)
             except _OUTAGE_EXC as exc:
                 now = time.monotonic()
                 remaining = deadline - now
