@@ -3,7 +3,7 @@
 
 [run]
 name = "qwen38-coder390-litellm"
-tasks = ["humaneval_instruct", "mbpp_instruct", "cruxeval_output_cot", "cruxeval_input_cot"]
+tasks = ["humaneval_instruct", "mbpp_instruct", "cruxeval_output_cot", "cruxeval_input_cot", "mmmu_val"]
 num_fewshot = 0
 batch_size = 1
 limit = 0
