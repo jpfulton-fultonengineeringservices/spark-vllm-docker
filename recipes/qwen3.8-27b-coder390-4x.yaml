@@ -20,7 +20,7 @@
 # 4, draft_tensor_parallel_size 4) so the same NVFP4 weights spread across all
 # four DGX Spark nodes.
 #
-# Architecturally this is a Qwen3_5 hybrid (16 full-attention + 48 Gated
+# Architecturally this is a Qwen3.5 hybrid (16 full-attention + 48 Gated
 # DeltaNet layers) with a vision tower, so the SSM/hybrid env block and
 # --mamba-cache-mode align mirror recipes/qwen3.8-flash-next-nvfp4-cluster.yaml
 # (same arch family, same b12x image). The DFlash2 spec-decode block mirrors
@@ -63,6 +63,7 @@ defaults:
   max_model_len: 262144
   max_num_seqs: 32
   max_num_batched_tokens: 16384
+  max_cudagraph_capture_size: 256
   num_speculative_tokens: 7
   draft_tensor_parallel_size: 4
 
@@ -75,7 +76,6 @@ env:
   VLLM_SSM_CONV_STATE_LAYOUT: "DS"
   VLLM_USE_AOT_COMPILE: "1"
   VLLM_USE_V2_MODEL_RUNNER: "1"
-  B12X_POLICY_MODE: "auto"
   VLLM_ENABLE_ROCE_ALLREDUCE: "1"
   VLLM_ROCE_ALLREDUCE_MAX_SIZE: "2MB"
   # b12x _reclaim_programs runs an unguarded O(exponential) retained-owner walk
@@ -127,10 +127,11 @@ command: |
     --max-model-len {max_model_len} \
     --max-num-seqs {max_num_seqs} \
     --max-num-batched-tokens {max_num_batched_tokens} \
+    --max-cudagraph-capture-size {max_cudagraph_capture_size} \
     --speculative-config '{{"method":"dflash","model":"/workspace/Qwen3.8-27B-Coder390-dflash","num_speculative_tokens":{num_speculative_tokens},"draft_tensor_parallel_size":{draft_tensor_parallel_size}}}' \
     --gdn-decode-kernel b12x \
+    --gdn-prefill-backend b12x \
     --linear-backend b12x \
-    --no-enable-flashinfer-autotune \
     --mm-encoder-tp-mode data \
     --reasoning-parser qwen3 \
     --tool-call-parser qwen3_xml \
