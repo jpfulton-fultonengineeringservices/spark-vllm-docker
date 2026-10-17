@@ -22,13 +22,20 @@ restore/save problem degrades to a log line and the cold path continues.
 
 ## Cache layout
 
-`roots.txt` lists `compile` → `/root/.cache/b12x/compile` plus a sibling
-`preparation` → `/root/.cache/b12x/preparation`. On current images b12x
-writes the tuning-selection `preparation/` INSIDE `compile/` (not a sibling
-as upstream `_cute_compile_cache_dir()` suggests), so the sibling entry is a
-benign no-op: save's directory check skips it and the `compile/` archive
-already carries `preparation/`. The entry is kept for a future upstream
-layout change.
+`roots.txt` lists `compile` → `/root/.cache/b12x/compile`. b12x writes
+tuning-selection `preparation/` INSIDE `compile/` (not sibling as the
+name of upstream `_cute_compile_cache_dir() / "preparation"` suggests),
+so the `compile/` archive already carries `preparation/`. A former
+sibling entry `preparation` → `/root/.cache/b12x/preparation` pointed
+at a path that never exists (confirmed live 2026-10-15/16 on both
+GX10 nodes) and was removed 2026-10-17: save's directory check skipped
+it, so it never contributed archive content, but it still fed the
+sorted cache-root list in the key hash (below). Removing it changes
+every archive key: the first serve after this change re-tunes cold once
+and saves under the new key; old-key archives stay on disk until pruned
+(`prune` / `B12X_KCACHE_PRUNE`). If a future upstream layout moves
+`preparation/` out of `compile/`, re-add a corrected `preparation` →
+`/root/.cache/b12x/<new-parent>/preparation` entry.
 A third entry `torchinductor` → `/root/.cache/torchinductor` archives torch
 inductor's Triton autotuner cubin files. Without this, torch inductor writes
 to `/tmp/torchinductor_root` (ephemeral, lost on container restart) and every
@@ -57,8 +64,30 @@ and use the first existing archive, so peers restore the head's archive from
 the shared store. Every resolution logs `[b12x-kcache] store=<path>
 shared=yes|no`.
 
-Archive: `<store>/<key>.tar.zst` plus `INDEX.tsv`
-(`key<TAB>created_iso<TAB>node<TAB>bytes<TAB>sha256`). zstd is used when
+## Log noise
+
+The mod also installs `/usr/local/lib/python3.12/dist-packages/b12x_prep_quiet.pth`
+containing the hook line
+`import sys; sys.path.append('/usr/local/lib/b12x-kcache'); import b12x_prep_quiet`
+(module at `/usr/local/lib/b12x-kcache/b12x_prep_quiet.py` — not on
+`sys.path` by default, so the hook line appends it before importing),
+which adds a message-matched `logging.Filter` on the `b12x.preparation`
+logger dropping only the benign per-shape
+`"<component>: <query> (...) was not prepared before its first use; ..."`
+first-use WARNING (`_warn_unprepared_declaration` in
+`b12x/preparation/session.py`). It is message-matched, not a level raise,
+because the same logger emits a genuine WARNING for tuning-candidate
+rejections (session.py:1460) that must stay visible; the logger emits no
+ERROR/CRITICAL diagnostics. The `.pth` runs at every Python interpreter
+startup, covering the serve process and its spawned workers. Revert by
+deleting the `.pth` (and optionally the module). The mod is idempotent:
+re-applying it overwrites both files; if the site-packages dir is absent
+at apply time (`B12X_SITE_PACKAGES` override) it skips installation.
+
+## Archive format
+
+`<store>/<key>.tar.zst` plus `INDEX.tsv`
+(`key<TAB>created_iso<TAB>node<TAB>bytes<TAB>sha256`). zstd used when
 available; gzip is the fallback otherwise (the sniffer accepts either).
 
 ## Key inputs

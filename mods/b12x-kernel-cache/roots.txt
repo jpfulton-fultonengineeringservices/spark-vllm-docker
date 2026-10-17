@@ -1,3 +1,2 @@
 compile	/root/.cache/b12x/compile
-preparation	/root/.cache/b12x/preparation
 torchinductor	/root/.cache/torchinductor
