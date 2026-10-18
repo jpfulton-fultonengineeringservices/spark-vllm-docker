@@ -121,7 +121,8 @@ command: |
     --async-scheduling \
     --dtype bfloat16 \
     --kv-cache-dtype fp8 \
-    --block-size 16 \
+    --block-size 64 \
+    --attention-backend B12X \
     --quantization modelopt_mixed \
     --load-format b12x \
     --max-model-len {max_model_len} \
