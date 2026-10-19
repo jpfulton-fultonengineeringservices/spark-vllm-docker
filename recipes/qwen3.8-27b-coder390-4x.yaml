@@ -73,7 +73,7 @@ description: vLLM serving the NVFP4 W4A16 (ModelOpt mixed-precision) Qwen3.8-27B
 
 model: local-inference-lab/Qwen3.8-27B-Coder390-DFlash2
 container: vllm-node-b12x
-image_id: sha256:a1fc4f18d3cb1671986feb92b05243ecd31a21957dd64e28da5c9e6125733aa0
+image_id: sha256:f2aed1c24f65f44c8638801e3a0ba46b61c1753f7a02f24bb8f22dcbaacad842
 
 build_args:
   - --exp-b12x
