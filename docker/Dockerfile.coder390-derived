@@ -1,0 +1,56 @@
+# Reproducible coder390 serving image: patched overlay on a pinned eugr release.
+#
+# WHY THIS EXISTS
+# ---------------
+# The coder390 recipes used to pin `image_id: sha256:a1fc4f18d3cb...`, a build
+# whose vLLM commit (1ac942555) is fetchable from neither vllm-project/vllm nor
+# the fork, so it could not be rebuilt. It also predated the installed-stage
+# patches this repo carries.
+#
+# That release artifact is nevertheless public: `eugr/spark-vllm:nightly-20261016`
+# resolves to config sha256:a1fc4f18d3cb1671986feb92b05243ecd31a21957dd64e28da5c9e6125733aa0
+# -- the exact previously-pinned content, at vLLM 0.32.0rc1.dev301+g1ac942555.
+# Deriving from that dated tag gives a rebuildable, content-addressed base while
+# holding the vLLM version fixed (no loader/GDN re-validation risk).
+#
+# DO NOT derive from eugr/spark-vllm-b12x:*: that line tracks
+# local-inference-lab/vllm@dev/karmic-kraken, whose tip requires
+# InstantTensor._determine_buffer_size, which no published instanttensor
+# exposes -- the engine dies at load_model. Verified live on :latest (a7f76ae9),
+# which references the capability twice while the installed package lacks it.
+#
+# Build (on a node with the registry and certs, e.g. gx10-node1):
+#   bash docker/build-coder390-derived-image.sh
+# It is reproducible: the base tag is immutable, every patch is applied in
+# --installed mode, and the resulting config digest is pinned in the recipes.
+FROM eugr/spark-vllm:nightly-20261016
+
+# B12X must accept the hybrid-aligned KV storage block (Qwen3.8-Coder390 TP=2 ->
+# 1648/1664) and let vLLM's existing splitter reduce it to supported kernel
+# pages. Inert when the installed vLLM has no B12X backend -- and inert for the
+# stock coder390 recipes, which run FlashInfer (`--block-size 16`); it matters
+# only for the B12X paged-attention arm (docs/b12x-coder390-attention-gap.md).
+COPY docker/patch_vllm_b12x_storage_block_split.py /tmp/vllm-patches/
+RUN python3 /tmp/vllm-patches/patch_vllm_b12x_storage_block_split.py --installed
+
+# Validate cached CuTe objects and recover from interrupted writes.
+COPY docker/patch_b12x_cache_integrity.py /tmp/b12x-patches/
+RUN python3 /tmp/b12x-patches/patch_b12x_cache_integrity.py --installed
+
+# Accept wheels that predate the CUDA-on-WSL reporting fix.
+COPY docker/patch_vllm_wsl_cuda_uma.py /tmp/vllm-patches/
+RUN python3 /tmp/vllm-patches/patch_vllm_wsl_cuda_uma.py --installed
+
+# Enumerate Torch schema arguments once per fill_defaults call.
+COPY docker/patch_torch_schema_enumeration.py /tmp/torch-patches/
+RUN python3 /tmp/torch-patches/patch_torch_schema_enumeration.py --installed
+
+# NOT applied: docker/patch_instanttensor_vllm_memory.py. This base already
+# carries the patched form upstream (verified: the PATCHED text
+# `MemorySnapshot(device=self.device).free_memory` and the native
+# `_host_available_bytes()` marker are both present, count=1 each, so the
+# script's exact-text check raises rather than no-oping cleanly).
+#
+# NOT set: B12X_SKIP_RECLAIM. The recipe's env block owns that knob and
+# mods/b12x-reclaim-gate honours it; baking it here would silently override
+# recipe-controlled configuration.
