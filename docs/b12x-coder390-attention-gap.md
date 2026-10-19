@@ -468,12 +468,35 @@ the fork too. The exact validated image is therefore not reproducible from
 source as of 2026-10-19 — rebuilding means accepting a different vLLM and
 re-validating the recipe end to end.
 
-The only ways to get the *exact* validated vLLM are (a) a surviving local clone
-or image layer containing `1ac942555`, or (b) the registry copy of image
-`a1fc4f18d3cb`. There is no source path. **Any freshly built image is a
-different vLLM and must be re-validated from scratch before it is pinned into a
-recipe** — a clean build is not evidence that it can serve; both traps above
-built cleanly and could not.
+**The derived-image route supersedes the source rebuild (2026-10-19).** The
+release artifact was public all along: `eugr/spark-vllm:nightly-20261016`
+resolves to config `sha256:a1fc4f18d3cb...` — byte-identical to the previously
+pinned content, at vLLM `0.32.0rc1.dev301+g1ac942555`. Do **not** redo the
+source-rebuild route; layer the installed-stage patches onto that dated tag:
+
+```bash
+bash docker/build-coder390-derived-image.sh   # docker/Dockerfile.coder390-derived
+```
+
+The script asserts the base still resolves to `a1fc4f18`, gates the result
+(`import torch`, storage-split marker present, InstantTensor gate absent),
+publishes to the node1 registry and verifies the published config digest. It
+produces `sha256:e9f6e32941ec...`, which the coder390 recipes pin; the old
+`a1fc4f18` content stays under the `b12x-dev-karmic-kraken` registry tag for
+rollback.
+
+Do **not** derive from the `eugr/spark-vllm-b12x` tag line: it tracks
+`local-inference-lab/vllm@dev/karmic-kraken`, whose tip needs
+`InstantTensor._determine_buffer_size`, exposed by no published instanttensor.
+`spark-vllm-b12x:latest` (config `a7f76ae9`) is that tip and dies at
+`load_model`.
+
+The fallback, if the public base is ever unavailable, is (a) a surviving local
+clone or image layer containing `1ac942555`, or (b) the registry copy of image
+`a1fc4f18d3cb`. There is no other source path. **Any other freshly built image
+is a different vLLM and must be re-validated from scratch before it is pinned
+into a recipe** — a clean build is not evidence that it can serve; both traps
+above built cleanly and could not.
 
 **Only if you accept a different vLLM**, use `50cbc118b` — the direct parent of
 `de475def9`, verified to contain **zero** references to
