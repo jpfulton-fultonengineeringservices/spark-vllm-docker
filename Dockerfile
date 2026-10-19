@@ -111,12 +111,18 @@ ENV TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
 # Setup Workspace
 WORKDIR $VLLM_BASE_DIR
 
-# Build NCCL with mesh support (TODO: only do it if arch is 12.1) - artifacts will be in /workspace/nccl/build/pkg/deb
-# RUN git clone -b dgxspark-3node-ring https://github.com/zyang-dev/nccl.git && \
-#     cd nccl && make -j ${BUILD_JOBS} src.build NVCC_GENCODE="${NCCL_NVCC_GENCODE}" && \
-#     make pkg.debian.build && apt install -y --no-install-recommends --allow-downgrades ./build/pkg/deb/*.deb
-
-RUN git clone https://github.com/NVIDIA/nccl.git && \
+# Build NCCL (TODO: only do it if arch is 12.1) - artifacts will be in /workspace/nccl/build/pkg/deb
+#
+# PINNED, do not build upstream master. torch 2.13 links against
+# ncclCommResume, which upstream deprecated and then REMOVED: building
+# master produced NCCL 2.28.3 without that symbol and every vLLM start
+# died at import with
+#   undefined symbol: ncclCommResume
+# even though the image built cleanly. v2.32.3-1 is the version this
+# stack was validated on (image a1fc4f18d3cb). Bump deliberately and
+# re-verify `python3 -c "import torch"` inside the built image.
+ARG NCCL_GIT_REF=v2.32.3-1
+RUN git clone --branch "${NCCL_GIT_REF}" --depth 1 https://github.com/NVIDIA/nccl.git && \
     cd nccl && make -j ${BUILD_JOBS} src.build NVCC_GENCODE="${NCCL_NVCC_GENCODE}" && \
     make pkg.debian.build && apt install -y --no-install-recommends --allow-downgrades --allow-change-held-packages ./build/pkg/deb/*.deb
 
@@ -769,13 +775,21 @@ ENV UV_LINK_MODE=copy
 
 # Mount additional packages from base builder image
 # Install runtime dependencies
+# The built NCCL deb (stage 1, mesh-capable for sm_121) MUST be installed here:
+# the mount only exposes it. The CUDA base image ships libnccl 2.28.3 held, which
+# lacks ncclCommResume and makes every `import torch` fail with
+#   undefined symbol: ncclCommResume
+# so installing our own build is what keeps torch 2.13 importable.
 RUN --mount=type=bind,from=base,source=/workspace/vllm/nccl/build/pkg/deb,target=/workspace/nccl-pkg \
     apt update && \
-    apt install -y --no-install-recommends \
+    apt install -y --no-install-recommends --allow-downgrades \
+        --allow-change-held-packages \
+    /workspace/nccl-pkg/*.deb \
     python3 python3-pip python3-dev vim curl git wget \
     libcudnn9-cuda-13 \
     libibverbs1 libibverbs-dev rdma-core \
     libxcb1 earlyoom liburing-dev pkg-config zstd \
+    && apt-mark hold libnccl2 libnccl-dev \
     && rm -rf /var/lib/apt/lists/* \
     && pip install uv
 
