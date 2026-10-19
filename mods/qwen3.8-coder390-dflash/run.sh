@@ -137,6 +137,39 @@ print(f"[qwen3.8-coder390-dflash] layer offset: {OFFSET}")
 quant["modules_to_not_convert"] = rebuilt
 cfg["quantization_config"] = quant
 
+# Long-context YaRN: the drafter must scale positions identically to the
+# target. Its rotary embedding is built from THIS config.json
+# (qwen3_dflash.py passes config.rope_parameters / config.max_position_embeddings),
+# so leaving rope_type "default" sizes the cos/sin cache to exactly
+# max_position_embeddings (262144) and the first request beyond that window
+# trips the Triton device_assert in the cache lookup:
+#   Assertion `index out of bounds: 0 <= ... < 262144` failed
+# --hf-overrides cannot fix this: dict (non-callable) overrides stay
+# target-only in SpeculativeConfig, so the draft ModelConfig never sees them.
+#
+# YaRN's cache length is original_max_position_embeddings * factor
+# (YaRNScalingRotaryEmbedding._compute_cos_sin_cache), so max_position_embeddings
+# stays at the checkpoint's native 262144 and the cache still spans 1048576.
+# Values MUST match the recipe's --hf-overrides or the two models disagree on
+# position phase. mscale/beta defaults are identical on both sides because
+# neither config passes them.
+drafter_rope = cfg.get("rope_parameters") or {}
+if drafter_rope.get("rope_type", "default") == "default":
+    drafter_rope.update(
+        {
+            "rope_type": "yarn",
+            "factor": 4.0,
+            "original_max_position_embeddings": 262144,
+        }
+    )
+    cfg["rope_parameters"] = drafter_rope
+    print(
+        f"[qwen3.8-coder390-dflash] drafter rope -> yarn "
+        f"factor={drafter_rope['factor']} "
+        f"orig={drafter_rope['original_max_position_embeddings']} "
+        f"(cache {drafter_rope['original_max_position_embeddings'] * drafter_rope['factor']:.0f})"
+    )
+
 with open(dst, "w") as fh:
     json.dump(cfg, fh, indent=2)
     fh.write("\n")
