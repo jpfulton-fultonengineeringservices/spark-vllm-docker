@@ -53,6 +53,13 @@
 # presents /model as an HF hub-cache shim under this exact id, so
 # `vllm serve <id>` resolves offline with HF_HUB_OFFLINE=1.
 
+# Long-context YaRN: --hf-overrides scales the target's text_config rope to 4x
+# (rope_type yarn, factor 4.0, 262144 -> 1048576). The spec-decode drafter keeps
+# its native rope: dict hf_overrides stay target-only in this vLLM build, so the
+# DFlash2-FP8 drafter's own config.json (rope_type "default", 262144) is untouched.
+# V1 divergence: qwen3.8-27b-coder390-4x.yaml is deliberately NOT modified, so its
+# command block is no longer byte-identical to this recipe.
+
 recipe_version: "1"
 name: Qwen3.8-27B-Coder390-DFlash2 (2x)
 description: vLLM serving the NVFP4 W4A16 (ModelOpt mixed-precision) Qwen3.8-27B-Coder390 checkpoint with its bundled FP8 DFlash2 drafter, TP=2 across two DGX Spark nodes
@@ -80,7 +87,7 @@ defaults:
   host: 0.0.0.0
   tensor_parallel: 2
   gpu_memory_utilization: 0.75
-  max_model_len: 262144
+  max_model_len: 1048576
   max_num_seqs: 32
   max_num_batched_tokens: 16384
   max_cudagraph_capture_size: 256
@@ -111,6 +118,8 @@ env:
   # b12x-kcache archives it (roots.txt entry "torchinductor"); otherwise it
   # is ephemeral and every boot re-compiles the Triton kernels.
   TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
+  # Long-context YaRN: permit --max-model-len above the 262144 native cap.
+  VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
 
 # The draft's FP8 quantization is auto-detected from its own config.json's
 # quantization_config.quant_method ("fp8"); no --quantization flag is needed or
@@ -145,6 +154,7 @@ command: |
     --block-size 16 \
     --quantization modelopt_mixed \
     --load-format instanttensor \
+    --hf-overrides '{{"text_config":{{"rope_parameters":{{"mrope_interleaved":true,"mrope_section":[11,11,10],"partial_rotary_factor":0.25,"rope_theta":10000000,"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":262144}}}}}}' \
     --max-model-len {max_model_len} \
     --max-num-seqs {max_num_seqs} \
     --max-num-batched-tokens {max_num_batched_tokens} \
