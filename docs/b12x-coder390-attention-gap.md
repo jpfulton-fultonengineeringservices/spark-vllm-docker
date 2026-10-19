@@ -380,6 +380,40 @@ Not yet measured: decode throughput against `caaba0f`'s 32.2 vs 26.4 tok/s.
 The image itself was not rebuilt for this run — the patcher was injected
 in-container — so the Dockerfile wiring is still unexercised by a real build.
 
+### The same verification on the production nodes (GMU caveat)
+
+A second run, on gx10-cb11/gx10-f1d8 (Rail B `.3` and `.4`) at the recipe's
+GMU 0.75, reproduced the same acceptance evidence with a healthy KV pool:
+
+```
+Available KV cache memory: 70.51 GiB
+GPU KV cache size: 3,190,974 tokens, Maximum concurrency for 262,144 tokens per request: 12.17x
+Capturing CUDA graphs (FULL): 100%
+CUDA errors (device-side / AcceleratorError / IllegalInstruction): 0
+endpoint: HTTP 200 chat completion
+```
+
+An earlier attempt on the same shape at **GMU 0.25** failed *after* the B12X
+gates passed — worth recording so it is not mistaken for a patch defect:
+
+```
+Setting attention block size to 1664 tokens          <- gate 1 + gate 2 passed
+Available KV cache memory: -28.74 GiB
+ValueError: No available memory for the cache blocks.
+  (kv_cache_planning.py:56 _check_enough_kv_cache_memory)
+```
+
+Two lessons:
+
+- `gpu_memory_utilization` is a fraction of **total** UMA (~120.5 GiB), not of
+  free memory, and it must cover weights + activations + CUDA-graph profiling
+  *plus* KV blocks. 0.25 leaves ~30 GiB total, which the model alone consumes,
+  so the KV pool goes negative. Use the recipe's 0.75 on an idle node, or read
+  the `Available KV cache memory` line before picking anything lower.
+- Defect 5's acceptance evidence (1664 accepted, planner `(64, 128)`, graph
+  capture 100%, zero CUDA errors) is independent of the KV-pool outcome — it
+  appeared *before* the cache-sizing failure on the starved boot.
+
 ### Cost
 
 Commit `caaba0f` measured this arm on gx10-node1 TP=2 (C1/60k probe, 8
