@@ -55,6 +55,14 @@
 # caught the flag/loader/block-size drift documented above. After deliberately
 # re-validating on a new image, update both `container:` and `image_id:`.
 #
+# Pin state (2026-10-19): this remains the last validated build. The B12X
+# storage-block patch and an NCCL install fix are committed in this repo but are
+# NOT in any image yet -- two rebuild attempts produced images that could not
+# serve. See docs/b12x-coder390-attention-gap.md, "Rebuilding this image: two
+# traps", for the two failure modes and the hard stop on reproducing this
+# vLLM commit from source. Do not repin until a rebuilt image has booted and
+# passed the acceptance table.
+#
 # The `model:` id is synthetic (the checkpoint is not on the Hub); mods/fes-weights
 # presents /model as an HF hub-cache shim under this exact id, so
 # `vllm serve <id>` resolves offline with HF_HUB_OFFLINE=1.
