@@ -120,11 +120,40 @@ the remapped kernel block table, and CUDA-graph replay together.
 
 ### 4a. Stage the verification mod
 
-> **Confirm before launching.** §4 occupies nodes 1–2 and the launch tears down
-> whatever is already there, including a running production serve. Check
-> `docker ps | grep vllm_node` and `curl -s localhost:8000/v1/models` first; if
-> the production 1M-context serve is up, get explicit approval to stop it, or
-> schedule the test for a maintenance window. §6 restores it afterwards.
+**Target nodes 3–4 by default, not 1–2.** Nodes 1–2 run the production
+1M-context serve; a launch there tears it down. Nodes 3–4 have no `vllm_node`
+and leave production untouched — use them unless you specifically need the
+1–2 topology.
+
+Three prerequisites, all verified on 2026-10-19:
+
+| Prerequisite | Status |
+|---|---|
+| fork checkout at `/cluster-shared/projects/spark-vllm-docker` | reachable from node3 |
+| staged weights `qwen3.8-27b-coder390-ethink-dflash2-nvfp4-w4a16` (23 G) | present on **both** nodes (node-local, not fanned — verify with `ls -d /opt/llm/models/<slug>`) |
+| image `vllm-node-b12x:latest` at the recipe's `image_id` | present on **both** nodes (`docker image inspect --format '{{.Id}}'`) |
+
+**Run the launch from the rank-0 host.** `launch-cluster.sh` sets
+`HEAD_IP="$LOCAL_IP"` and starts the head container *locally*, then requires
+`HEAD_IP` to appear in `-n`. So for rank 0 on node3 you must run from
+**node3** with `LOCAL_IP=10.100.171.2`. The shared `.env`'s `LOCAL_IP` is only a
+fallback and is node-specific, so always pass `LOCAL_IP` explicitly.
+
+**Memory is the binding constraint on 3–4.** They host co-tenants (ComfyUI on
+both, ~12 GB on node3), so `MemAvailable` is ~36 GiB on node3 and ~83 GiB on
+node4. `request_memory` gates on `TOTAL_UMA * gpu_memory_utilization` (120.5
+GiB), so GMU 0.75 (= 90 GiB) fails both. Since both ranks must pass, node3 binds
+the ceiling:
+
+```
+node3: 36.5 GiB available -> max GMU 0.303
+node4: 83.0 GiB available -> max GMU 0.689
+=> use --gpu-memory-utilization 0.25 (or free ComfyUI on node3 first)
+```
+
+If you do use nodes 1–2 instead, get explicit approval first — check
+`docker ps | grep vllm_node` and `curl -s localhost:8000/v1/models`, and note
+§6 restores the serve afterwards.
 
 Applies the patcher inside the container at boot, so no image rebuild is needed.
 
@@ -152,7 +181,12 @@ chmod +x /tmp/b12x-split-mod/run.sh
 
 Derive from the real 2x recipe so the mamba-page geometry is genuine (TP=2, fp8
 KV, prefix caching — *not* `max_model_len` — is what produces 1664). Shrink
-context/seqs only to make the boot fast.
+context/seqs only to make the boot fast, and **lower `gpu_memory_utilization`**:
+nodes 3–4 carry co-tenants, so node3 has ~36 GiB available and `request_memory`
+gates on `TOTAL_UMA * GMU` (120.5 GiB). GMU 0.75 needs 90 GiB and fails; 0.25
+needs 30 GiB and passes. Raise it only after freeing node3.
+
+Run this on the **rank-0 host** (node3) — it writes `/tmp`, which is node-local.
 
 ```bash
 cd /tmp && python3 - <<'PY'
@@ -164,37 +198,53 @@ s = s.replace('  max_model_len: 1048576', '  max_model_len: 262144')
 s = s.replace('  max_num_seqs: 32', '  max_num_seqs: 8')
 s = s.replace('  max_num_batched_tokens: 16384', '  max_num_batched_tokens: 4096')
 s = s.replace('  max_cudagraph_capture_size: 256', '  max_cudagraph_capture_size: 32')
+s = s.replace('  gpu_memory_utilization: 0.75', '  gpu_memory_utilization: 0.25')
 s = s.replace('  - mods/b12x-reclaim-gate', '  - mods/b12x-reclaim-gate\n  - /tmp/b12x-split-mod')
 pathlib.Path('/tmp/b12x-verify-2x.yaml').write_text(s)
-print('ok')
+assert 'gpu_memory_utilization: 0.25' in s
+print('ok — verify: mods include /tmp/b12x-split-mod, GMU 0.25, B12X block 64')
 PY
 ```
 
 ### 4c. Render the launch script
 
 `launch-cluster.sh --launch-script` needs a **file that already exists**; it
-does not generate one. Produce it from the recipe:
+does not generate one. Produce it from the recipe — render for the *target*
+nodes, so the `-n` list matches what you pass at launch:
 
 ```bash
 cd /cluster-shared/projects/spark-vllm-docker
-python3 run-recipe.py /tmp/b12x-verify-2x.yaml --dry-run -n 10.100.171.3,10.100.171.4 2>&1 \
+python3 run-recipe.py /tmp/b12x-verify-2x.yaml --dry-run -n 10.100.171.2,10.100.171.1 2>&1 \
   | awk '/^=== Generated Launch Script ===/{f=1;next} f&&/^=== /{exit} f' \
   > examples/b12x-verify.sh
 grep -c 'attention-backend B12X' examples/b12x-verify.sh   # expect 1
 ```
 
+`examples/` lives on NFS under the fork checkout, so the rendered script and the
+recipe are visible from every node. Only `/tmp` paths are node-local.
+
 ### 4d. Launch (detached — the MCP transport caps at 240 s)
+
+**Run this on the rank-0 host** (node3 here). The staged mod is referenced by an
+absolute `/tmp` path, so it must exist on *this* node — stage it here, not on
+node1. Also render the recipe here (§4b writes `/tmp`).
+
+```bash
+# on gx10-node3 — node-local /tmp paths below must exist HERE
+ls -d /tmp/b12x-split-mod /tmp/b12x-verify-2x.yaml \
+  || echo 'stage §4a and §4b on THIS host first'
+```
 
 ```bash
 cd /cluster-shared/projects/spark-vllm-docker
 rm -f /tmp/b12x-verify.log
-setsid nohup bash -c 'LOCAL_IP=10.100.171.3 bash launch-cluster.sh \
+setsid nohup bash -c 'LOCAL_IP=10.100.171.2 bash launch-cluster.sh \
   -t vllm-node-b12x \
   --image-id sha256:a1fc4f18d3cb1671986feb92b05243ecd31a21957dd64e28da5c9e6125733aa0 \
   --apply-mod mods/fes-weights --apply-mod mods/qwen3.8-coder390-dflash \
   --apply-mod mods/b12x-kernel-cache --apply-mod mods/b12x-reclaim-gate \
   --apply-mod /tmp/b12x-split-mod \
-  -n 10.100.171.3,10.100.171.4 \
+  -n 10.100.171.2,10.100.171.1 --master-port 29580 \
   -e FES_WEIGHTS_ENABLED=1 -e FES_WEIGHTS_DIR=/model \
   -e FES_HUB_MODEL=local-inference-lab/Qwen3.8-27B-Coder390-DFlash2 \
   -e HF_HUB_OFFLINE=1 -e VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 \
@@ -203,6 +253,13 @@ setsid nohup bash -c 'LOCAL_IP=10.100.171.3 bash launch-cluster.sh \
   --launch-script examples/b12x-verify.sh' \
   </dev/null > /tmp/b12x-verify.log 2>&1 & disown
 ```
+
+Notes:
+- `LOCAL_IP` must be this host's Rail-B address **and** appear in `-n`;
+  `launch-cluster.sh` sets `HEAD_IP="$LOCAL_IP"`, starts the head container
+  locally, and aborts with `Local IP ... is not in the list of nodes` otherwise.
+- `--master-port 29580` keeps this test off production's 29579.
+- Node IPs (Rail B): node1 `.3`, node2 `.4`, node3 `.2`, node4 `.1`.
 
 Expect both ranks to log `Accepted splittable hybrid storage blocks in B12X`
 during mod application.
