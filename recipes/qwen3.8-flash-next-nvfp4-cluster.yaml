@@ -1,5 +1,8 @@
 # Recipe: Qwen3.8-Flash-Next-NVFP4 (dual-node cluster)
 # Two-node configuration using the B12X-optimized serving stack.
+# This vLLM build (0.32) has no --gdn-decode-kernel flag, so none is passed;
+# decode runs the default fused CUDA GDN kernel (VLLM_GDN_DECODE_KERNEL
+# defaults to "cuda").
 
 recipe_version: "1"
 name: Qwen3.8-Flash-Next-NVFP4 (Cluster)
@@ -58,7 +61,6 @@ command: |
     --max-num-seqs {max_num_seqs} \
     --max-num-batched-tokens {max_num_batched_tokens} \
     --speculative-config '{{"method":"mtp","num_speculative_tokens":{num_speculative_tokens}}}' \
-    --gdn-decode-kernel b12x \
     --linear-backend b12x \
     --moe-backend b12x \
     --no-enable-flashinfer-autotune \

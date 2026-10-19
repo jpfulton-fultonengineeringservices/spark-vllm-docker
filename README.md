@@ -186,7 +186,6 @@ Launch the server:
     --max-num-seqs 8 \
     --max-num-batched-tokens 4096 \
     --speculative-config '{"method":"mtp","num_speculative_tokens":4}' \
-    --gdn-decode-kernel b12x \
     --linear-backend b12x \
     --moe-backend b12x \
     --no-enable-flashinfer-autotune \
