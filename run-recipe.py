@@ -255,6 +255,20 @@ def load_recipe(recipe_path: Path) -> dict[str, Any]:
     recipe.setdefault("cluster_only", False)
     recipe.setdefault("solo_only", False)
 
+    # `image_id` pins the recipe to exact image content (see the schema docs).
+    # Validate the shape here: a typo'd or truncated digest would otherwise be
+    # discovered at launch time on the node, which is a far worse place to find
+    # out. Optional, so absent means unpinned.
+    image_id = recipe.get("image_id")
+    if image_id is not None:
+        image_id = str(image_id)
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+            print(
+                f"Error: Recipe 'image_id' must be 'sha256:<64 lowercase hex>', "
+                f"got: {image_id}"
+            )
+            sys.exit(1)
+
     # Validate recipe version compatibility
     # EXTENSIBILITY: When adding new schema versions, update SUPPORTED_VERSIONS
     # and add migration/compatibility logic below
