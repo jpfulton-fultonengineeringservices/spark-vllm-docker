@@ -553,6 +553,17 @@ RUN python3 /tmp/vllm-patches/patch_vllm_mrv2_speculator_cudagraph_pool.py .
 RUN VLLM_PATCH_B12X_C128A_ALIGNMENT="${VLLM_PATCH_B12X_C128A_ALIGNMENT}" \
     python3 /tmp/vllm-patches/patch_vllm_b12x_c128a_topk_alignment.py .
 
+# B12X cannot boot a hybrid model whose mamba page forces an aligned KV storage
+# block above its kernel page sizes (Qwen3.8-Coder390 TP=2 lands on 1664 =
+# 13x128). vLLM already splits such a block into supported kernel pages
+# (select_common_block_size -> prepare_kernel_block_sizes), but two validators
+# compare the STORAGE size against the KERNEL PAGE set and reject it first:
+# supports_block_size (via _check_aligned_block_size) and the paged-attention
+# impl's --block-size guard. Accept a storage size a supported kernel page
+# divides, leaving get_supported_kernel_block_sizes at the exact [64, 128] so
+# the split still happens. Skips refs without the B12X backend (idempotent).
+RUN python3 /tmp/vllm-patches/patch_vllm_b12x_storage_block_split.py .
+
 RUN python3 /tmp/vllm-patches/patch_vllm_flashinfer_b12x_swigluoai.py .
 
 # TEMPORARY PATCH: vLLM PR #49408 / commit d6dbdb9 misplaced the XPU-only
@@ -895,6 +906,13 @@ RUN python3 /tmp/b12x-patches/patch_b12x_cache_integrity.py --installed
 # This also accepts wheels that already contain the source-stage patch.
 COPY docker/patch_vllm_wsl_cuda_uma.py /tmp/vllm-patches/patch_vllm_wsl_cuda_uma.py
 RUN python3 /tmp/vllm-patches/patch_vllm_wsl_cuda_uma.py --installed
+
+# B12X must accept the hybrid-aligned KV storage block (Qwen3.8-Coder390 TP=2 ->
+# 1664 = 13x128) and let vLLM's existing splitter reduce it to supported kernel
+# pages. Same fix as the source stage; applies to B12X and wheel runners and is
+# inert when the installed vLLM has no B12X backend.
+COPY docker/patch_vllm_b12x_storage_block_split.py /tmp/vllm-patches/patch_vllm_b12x_storage_block_split.py
+RUN python3 /tmp/vllm-patches/patch_vllm_b12x_storage_block_split.py --installed
 
 # InstantTensor must share vLLM's available-memory accounting on native UMA
 # and WSL. Apply after all package installs for regular, B12X, and wheel runners.
