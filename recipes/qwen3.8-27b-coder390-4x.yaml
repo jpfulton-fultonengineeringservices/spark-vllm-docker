@@ -47,6 +47,14 @@
 # _check_aligned_block_size raises "Aligned KV cache block size 1664 is not
 # supported". See docs/b12x-coder390-attention-gap.md for the resolution paths.
 #
+# Image pin: image_id is the content ID of the build this recipe was validated
+# against (vllm 0.32.0rc1.dev301+g1ac942555, flashinfer 0.7.2, built
+# 2026-10-16). The `container:` tag alone cannot pin anything: tags are mutable
+# and an unrecognised tag falls back to an upstream pull ref. The launcher
+# refuses to start when the tag resolves to different content, which is what
+# caught the flag/loader/block-size drift documented above. After deliberately
+# re-validating on a new image, update both `container:` and `image_id:`.
+#
 # The `model:` id is synthetic (the checkpoint is not on the Hub); mods/fes-weights
 # presents /model as an HF hub-cache shim under this exact id, so
 # `vllm serve <id>` resolves offline with HF_HUB_OFFLINE=1.
@@ -57,6 +65,7 @@ description: vLLM serving the NVFP4 W4A16 (ModelOpt mixed-precision) Qwen3.8-27B
 
 model: local-inference-lab/Qwen3.8-27B-Coder390-DFlash2
 container: vllm-node-b12x
+image_id: sha256:a1fc4f18d3cb1671986feb92b05243ecd31a21957dd64e28da5c9e6125733aa0
 
 build_args:
   - --exp-b12x
