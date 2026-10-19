@@ -77,6 +77,8 @@ in `recipes/3x-spark-cluster`, `recipes/4x-spark-cluster`, etc.
 Inspect the selected YAML before running it. Confirm at least:
 
 - `model` and `container`
+- `image_id`, if present: the recipe is pinned to that image content and will
+  refuse to launch against anything else
 - `cluster_only` or `solo_only`
 - required node count implied by the path, description, and parallelism flags
 - `mods`, `build_args`, environment settings, port, and memory defaults
@@ -85,6 +87,29 @@ Inspect the selected YAML before running it. Confirm at least:
 Do not choose a large model or topology on the user's behalf when the requested
 target is ambiguous; recipe choice materially affects downloads, storage, and
 cluster use.
+
+### Image pins (`image_id:`)
+
+Some recipes set `image_id:` next to `container:`. That is a content ID — the
+`docker image inspect -f '{{.Id}}'` value, which is the image's config digest —
+and `launch-cluster.sh` refuses to start when the selected tag resolves to other
+content.
+
+Why a tag is not enough: tags are mutable and an unrecognised tag falls back to
+an upstream pull ref. `vllm-node-b12x` was rebuilt from vLLM 0.32 and the same
+tag started rejecting flags and load formats the recipes used, so a recipe that
+worked one day failed the next with no change of its own. The pin turns that
+silent swap into an explicit, actionable failure.
+
+Working with a pinned recipe:
+
+- `-t/--container` bypasses the pin — an override means "run a different image".
+- To move a pinned recipe to a new build: validate on it first, then update
+  `container:` and `image_id:` together in the same commit.
+- A pin failure prints both IDs and remedies. Docker's image ID is the config
+  digest, so a registry tag holding other content fails the check on every rank
+  after the pull; republish the pinned content under that tag (the cluster
+  serve wrapper's `image --force` does this) instead of re-tagging the pull.
 
 ## 3. Configure the Target
 
