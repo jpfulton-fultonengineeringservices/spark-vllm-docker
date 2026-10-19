@@ -26,14 +26,37 @@ class B12xCachePatchTests(unittest.TestCase):
             'raise RuntimeError("Build-time patching must not import B12X")\n'
         )
 
-    def run_patcher(self, installed=False):
+    def run_patcher(self, installed=False, extra_path=()):
         env = os.environ.copy()
-        env["PYTHONPATH"] = str(self.root)
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(self.root)] + [str(path) for path in extra_path]
+        )
         return subprocess.run(
             [sys.executable, str(PATCHER)] +
             (["--installed"] if installed else [str(self.root)]),
             capture_output=True, text=True, env=env,
         )
+
+    def add_vendored(self, base=None, integrity=True, init_body=""):
+        """Build flashinfer's vendored b12x tree; the shim stays import-only."""
+        base = self.root if base is None else base
+        package = base / "flashinfer/experimental/b12x"
+        (package / "_lib").mkdir(parents=True)
+        for init in (base / "flashinfer/__init__.py",
+                     base / "flashinfer/experimental/__init__.py"):
+            init.write_text(init_body)
+        (package / "__init__.py").write_text("")
+        (package / "_lib/compiler.py").write_text(
+            "from .cache_integrity import atomic_write_bytes\n"
+        )
+        if integrity:
+            (package / "_lib/cache_integrity.py").write_text(
+                "def atomic_write_bytes(*args):\n    pass\n"
+            )
+        return package
+
+    def make_shim_only(self):
+        (self.root / "b12x/_lib").rename(self.root / "standalone")
 
     def snapshot(self):
         return {str(p.relative_to(self.root)): p.read_bytes()
@@ -87,6 +110,60 @@ class B12xCachePatchTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Ran 11 tests", result.stderr)
+
+    def test_shim_only_layout_skips_when_flashinfer_bundles_fix(self):
+        self.make_shim_only()
+        self.add_vendored()
+        before = self.snapshot()
+        for _ in range(2):
+            result = self.run_patcher(installed=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("nothing to patch", result.stdout)
+        self.assertEqual(before, self.snapshot())
+
+    def test_vendored_fix_is_found_through_flashinfer_spec(self):
+        self.make_shim_only()
+        vendor = self.root / "vendor"
+        self.add_vendored(base=vendor)
+        result = self.run_patcher(installed=True, extra_path=[vendor])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("nothing to patch", result.stdout)
+
+    def test_layout_discovery_never_imports_flashinfer(self):
+        self.make_shim_only()
+        self.add_vendored(
+            init_body='raise RuntimeError("Discovery must not import flashinfer")\n',
+        )
+        result = self.run_patcher(installed=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("nothing to patch", result.stdout)
+        self.assertNotIn("Discovery must not import", result.stdout + result.stderr)
+
+    def test_vendored_tree_is_used_when_shim_is_absent(self):
+        shutil.rmtree(self.root / "b12x")
+        self.add_vendored()
+        result = self.run_patcher(installed=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("nothing to patch", result.stdout)
+
+    def test_vendored_tree_without_fix_fails_closed(self):
+        self.make_shim_only()
+        package = self.add_vendored(integrity=False)
+        before = self.snapshot()
+        result = self.run_patcher(installed=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(str(package), result.stderr)
+        self.assertIn("lacks _lib/cache_integrity.py", result.stderr)
+        self.assertEqual(before, self.snapshot())
+
+    def test_absent_packages_skip_without_importing_anything(self):
+        shutil.rmtree(self.root / "b12x")
+        self.add_vendored(init_body='raise RuntimeError("must stay unimported")\n')
+        (self.root / "flashinfer/experimental/b12x/_lib/compiler.py").unlink()
+        result = self.run_patcher(installed=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("not applicable", result.stdout)
+        self.assertNotIn("must stay unimported", result.stdout + result.stderr)
 
     def test_runner_patches_after_both_b12x_install_paths(self):
         runner = (ROOT / "Dockerfile").read_text().split("FROM ${CUDA_IMAGE} AS runner\n", 1)[1]

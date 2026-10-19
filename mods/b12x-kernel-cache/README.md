@@ -93,18 +93,40 @@ available; gzip is the fallback otherwise (the sniffer accepts either).
 ## Key inputs
 
 `b12x-kcache key` hashes a canonical tuple joined with the unit separator:
-schema literal `b12x-kcache/v1`, b12x revision (`/workspace/b12x-source-commit`
-or b12x dist version), `nvidia-cutlass-dsl` version, torch version, vllm
-version, sorted sha256s of vllm `_C*.so`, `$CUTE_DSL_ARCH`, and the serve
-argv's `--tensor-parallel-size` (default 1), `--quantization`,
-`--attention-backend`, `--linear-backend`, `--kv-cache-dtype`, `--block-size`,
-`--max-model-len`, model id, plus the sorted cache-root list. Key form:
+schema literal `b12x-kcache/v2`, b12x revision, `nvidia-cutlass-dsl` version,
+torch version, vllm version, sorted sha256s of vllm `_C*.so`,
+`$CUTE_DSL_ARCH`, and the serve argv's `--tensor-parallel-size` (default 1),
+`--quantization`, `--attention-backend`, `--linear-backend`,
+`--kv-cache-dtype`, `--block-size`, `--max-model-len`, model id, plus the
+sorted cache-root list. Key form:
 `b12x-kernels__<model-short>__tp<T>__<hash16>`.
+
+B12x revision resolution order:
+
+1. `B12X_KCACHE_ID_B12X_REV` (operator/test override)
+2. `/workspace/b12x-source-commit` (source stamp baked into the image)
+3. `flashinfer-python` dist version
+
+b12x 0.7.x ships **vendored inside flashinfer**: the real package is
+`flashinfer/experimental/b12x/` and site-packages `b12x/` is only a
+`sys.meta_path` alias shim with no dist metadata, so
+`importlib.metadata.version("b12x")` raises `PackageNotFoundError`.
+`importlib.util.find_spec("b12x.preparation.session").origin` resolves into
+the flashinfer tree. The flashinfer version is therefore the usable on-disk
+b12x identity; the flashinfer-python version participates in the hash, so
+upgrading flashinfer keys a fresh archive instead of restoring kernels built
+by an incompatible b12x.
+
+The `v2` namespace is intentional: the previous `v1` keys silently hashed a
+failure string when b12x could not be resolved, so `v1` archives are never
+matched or restored by this version. They remain on disk until `prune`.
 
 Unresolvable hard-fail fields (`b12x_rev`, `cutlass_dsl`, `torch`, `vllm`,
 `arch`, `model`, `roots`) abort with
 `[b12x-kcache] key: cannot resolve <field>` and exit 3 — never a placeholder
-key, which would silently restore the wrong kernel set.
+key, which would silently restore the wrong kernel set. Each field is
+validated in the main shell before assignment, so a failed lookup cannot be
+swallowed by command substitution.
 
 ## Env knobs
 

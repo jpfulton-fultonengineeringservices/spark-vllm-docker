@@ -55,11 +55,34 @@ python3 tests/_lib/test_compile_cache_integrity.py
 ```
 
 The Docker patcher applies only the `b12x/` hunks to site-packages; it does not
-install the upstream test file. It locates B12X without importing GPU packages,
-checks all hunks before editing, accepts an identical repeated application, and
-fails the build on unknown source layouts instead of silently skipping the fix.
-If B12X is not installed, there is nothing to patch. Remove this temporary patch
-once the supported source/PyPI versions contain the upstream fix.
+install the upstream test file. It locates B12X without importing B12X or
+initializing CUDA, checks all hunks before editing, accepts an identical
+repeated application, and fails the build on unknown source layouts instead of
+silently skipping the fix. Remove this temporary patch once the supported
+source/PyPI versions contain the upstream fix.
+
+## Install layouts
+
+There are two installed layouts. A standalone `b12x` distribution puts the code
+in `site-packages/b12x/`; the patcher applies the diff there, omitting the
+`compile_plan.py` hunk when the release predates the preparation planner.
+
+Recent `flashinfer-python` wheels vendor the package as
+`site-packages/flashinfer/experimental/b12x/` and leave only a shim at
+`site-packages/b12x/__init__.py` that aliases `flashinfer.experimental.b12x.*`
+through `sys.meta_path`. The shim has no `_lib/` and no `b12x` distribution
+metadata, so package-root discovery cannot treat it as the source tree. The
+patcher scans the shim's site directory, flashinfer's search locations from
+`importlib.machinery.PathFinder`, and the import path for the vendored package,
+using that package directory itself as the root. Every probe is a filesystem
+check, so a spec lookup never imports Torch.
+
+When the vendored tree already contains `_lib/cache_integrity.py` alongside
+`_lib/compiler.py`, the fix is upstream and the patcher prints that there is
+nothing to patch instead of attempting `git apply` (all patch paths are relative
+to `b12x/` and do not apply to the vendored root). A vendored tree with the
+compiler but no cache-integrity module is an unrecognized layout and fails the
+build. If neither package is installed, there is nothing to patch.
 
 ## Local validation
 

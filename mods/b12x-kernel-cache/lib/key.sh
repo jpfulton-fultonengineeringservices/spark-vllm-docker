@@ -25,24 +25,48 @@ field_or_override() { # <ENV-SUFFIX> <resolved-value>
   fi
 }
 
+# b12x revision, in precedence order:
+#   1. $B12X_KCACHE_ID_B12X_REV override
+#   2. /workspace/b12x-source-commit baked into the image
+#   3. flashinfer-python dist version
+# b12x ships VENDORED inside flashinfer (flashinfer/experimental/b12x/): the
+# site-packages b12x/ is only a sys.meta_path alias shim with no dist
+# metadata, so `importlib.metadata.version("b12x")` always raises
+# PackageNotFoundError. flashinfer's version is the on-disk b12x identity.
+resolve_b12x_rev() {
+  local v="${B12X_KCACHE_ID_B12X_REV:-}"
+  if [ -z "$v" ]; then
+    v=$(cat /workspace/b12x-source-commit 2>/dev/null || true)
+  fi
+  if [ -z "$v" ]; then
+    v=$(pyver flashinfer-python)
+  fi
+  printf '%s' "$v"
+}
+
+# Every identity field is validated in the CURRENT shell before assignment:
+# a `F_X=$(guard ...)` form would run die() in a subshell, which only exits
+# that subshell, so the captured text (the log line) would become the field
+# and the key would silently hash a bogus identity.
 # resolve_id: sets F_B12X_REV F_CUTLASS_DSL F_TORCH F_VLLM F_VLLM_OBJS F_ARCH
 resolve_id() {
   local v
 
-  v=$(field_or_override B12X_REV "$(cat /workspace/b12x-source-commit 2>/dev/null || true)")
-  if [ -z "$v" ]; then
-    v=$(field_or_override B12X_REV "$(pyver b12x)")
-  fi
-  F_B12X_REV=$(_require b12x_rev "$v")
+  v=$(resolve_b12x_rev)
+  [ -n "$v" ] || die b12x_rev
+  F_B12X_REV=$v
 
   v=$(field_or_override CUTLASS_DSL "$(pyver nvidia-cutlass-dsl)")
-  F_CUTLASS_DSL=$(_require cutlass_dsl "$v")
+  [ -n "$v" ] || die cutlass_dsl
+  F_CUTLASS_DSL=$v
 
   v=$(field_or_override TORCH "$(python3 -c 'import torch; print(torch.__version__)' 2>/dev/null)")
-  F_TORCH=$(_require torch "$v")
+  [ -n "$v" ] || die torch
+  F_TORCH=$v
 
   v=$(field_or_override VLLM "$(pyver vllm)")
-  F_VLLM=$(_require vllm "$v")
+  [ -n "$v" ] || die vllm
+  F_VLLM=$v
 
   # Newline+sha256 of each vllm _C*.so (sorted); empty list is legitimate.
   if [ -n "${B12X_KCACHE_ID_VLLM_OBJS:-}" ]; then
@@ -97,13 +121,13 @@ key() {
       { for (i = 1; i <= NF; i++) if ($i !~ /^-/) { print $i; exit } }
     ')
   fi
-  _require model "$model" >/dev/null
+  [ -n "$model" ] || die model
 
   roots_pairs=$(roots | awk -F'\t' 'NF==2 {print $1 ":" $2}' | LC_ALL=C sort)
-  _require roots "$roots_pairs" >/dev/null
+  [ -n "$roots_pairs" ] || die roots
 
   hash=$(printf '%s\n' \
-    "b12x-kcache/v1" "$F_B12X_REV" "$F_CUTLASS_DSL" "$F_TORCH" "$F_VLLM" \
+    "b12x-kcache/v2" "$F_B12X_REV" "$F_CUTLASS_DSL" "$F_TORCH" "$F_VLLM" \
     "$F_VLLM_OBJS" "$F_ARCH" "$tp" "$quant" "$attn" "$lin" "$kv_dtype" \
     "$block" "$maxlen" "$model" "$roots_pairs" \
     | sed '$ { G; s/\n$//; }' \
