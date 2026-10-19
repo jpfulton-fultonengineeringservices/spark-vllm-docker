@@ -39,6 +39,14 @@
 # is passed; decode runs the default fused CUDA GDN kernel
 # (VLLM_GDN_DECODE_KERNEL defaults to "cuda").
 #
+# Weight loader: --load-format instanttensor, not b12x. The b12x loader in
+# this vLLM build is the opt-in Flash Next (Qwen4Exp) loader and rejects every
+# other architecture outright (b12x_loader.py:119-126); this checkpoint is
+# Qwen3_5ForConditionalGeneration, so b12x could never load it. instanttensor
+# runs through the default safetensors iterator with a CUDA-resident read
+# path and no architecture allow-list, matching the sibling
+# recipes/qwen3.8-27b-nvfp4-dflash2.yaml for the same model family.
+#
 # The `model:` id is synthetic (the checkpoint is not on the Hub); mods/fes-weights
 # presents /model as an HF hub-cache shim under this exact id, so
 # `vllm serve <id>` resolves offline with HF_HUB_OFFLINE=1.
@@ -162,7 +170,7 @@ command: |
     --kv-cache-dtype fp8 \
     --block-size 16 \
     --quantization modelopt_mixed \
-    --load-format b12x \
+    --load-format instanttensor \
     --max-model-len {max_model_len} \
     --max-num-seqs {max_num_seqs} \
     --max-num-batched-tokens {max_num_batched_tokens} \
