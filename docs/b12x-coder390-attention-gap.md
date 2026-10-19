@@ -416,6 +416,56 @@ Two lessons:
   capture 100%, zero CUDA errors) is independent of the KV-pool outcome — it
   appeared *before* the cache-sizing failure on the starved boot.
 
+### Rebuilding this image: two traps that wasted a day
+
+The 5a patch is committed and proven, but shipping it in an image failed twice.
+Both failures are orthogonal to the patch; record them so the next rebuild does
+not repeat them.
+
+**Trap 1 — the NCCL deb was mounted but never installed.** The final stage had
+`--mount=type=bind,from=base,source=/workspace/vllm/nccl/build/pkg/deb`, but the
+`apt install` line never referenced it, so the CUDA base image's *held*
+libnccl 2.28.3 survived. NCCL 2.28.3 predates `ncclCommResume`, which torch 2.13
+links against, so every start died at import:
+
+```
+ImportError: libtorch_cuda.so: undefined symbol: ncclCommResume
+```
+
+Fixed by installing `/workspace/nccl-pkg/*.deb` in the same RUN that mounts it
+(`--allow-downgrades --allow-change-held-packages`, then `apt-mark hold`) and
+pinioning the source build to `v2.32.3-1` instead of unpinned `master`. Verify
+with `dpkg -l | grep libnccl2` (expect 2.32.3) and `python3 -c "import torch"`.
+
+**Trap 2 — `dev/karmic-kraken` HEAD needs an unreleased InstantTensor.**
+Building the `--exp-b12x` profile clones `local-inference-lab/vllm` at that
+branch, whose tip is now `8244d1c44` (vLLM `0.1.dev21830+g8244d1c44`). Its weight
+loader gates on an InstantTensor capability introduced by `de475def9`
+("Bound InstantTensor staging…", 2026-09-22):
+
+```
+RuntimeError: Installed InstantTensor does not expose the metadata layout
+needed for index-aware loading (missing: _determine_buffer_size)
+  (weight_utils.py:1679, required_attrs list)
+```
+
+No published instanttensor exposes `_determine_buffer_size` — 0.2.2 is the
+newest on PyPI. So the branch head is unbuildable with any released dependency.
+
+**Recommended rebuild ref: `50cbc118b`** — the direct parent of `de475def9`,
+verified to contain **zero** references to `_determine_buffer_size` (the gate
+commit has 2). Use:
+
+```bash
+./build-and-copy.sh --exp-b12x --rebuild-vllm --b12x-vllm-ref 50cbc118b \
+  -t vllm-node-b12x --copy-to 10.100.171.4
+```
+
+Note `--exp-b12x` rejects `--use-wheels` and `--vllm-ref` (use
+`--b12x-vllm-ref`); a cached-wheel run skips the recompile that bakes the patch
+in. Pin `--b12x-vllm-ref` to a commit, never to the moving branch, or the build
+silently changes vLLM underneath the recipe.
+
 ### Cost
 
 Commit `caaba0f` measured this arm on gx10-node1 TP=2 (C1/60k probe, 8
