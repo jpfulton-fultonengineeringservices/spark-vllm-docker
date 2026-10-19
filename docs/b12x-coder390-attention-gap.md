@@ -221,6 +221,31 @@ Two call sites validate the **storage** size against the **kernel page** set:
 Both treat `_B12X_SUPPORTED_PAGE_SIZES` as if it described storage blocks. It
 describes kernel pages. The fix is therefore plumbing, not widening.
 
+Gate 2 was confirmed **reachable and live**, not just read. Constructing
+`B12xPagedAttentionImpl` with a config whose `cache_config.block_size` is 1664
+(exactly what the aligner leaves after the gate-1 fix) raises:
+
+```
+cache_config.block_size = 1664
+IMPL RAISED ValueError: b12x requires --block-size in (64, 128), got 1664.
+```
+
+Ordering matters: gate 1 runs inside
+`Platform.update_block_size_for_backend` (`multiproc_executor.py:701`), which is
+called *before* any layer is constructed, so gate 1 fires first on an unpatched
+build and hides gate 2. Both must be fixed together.
+
+With the corrected predicate applied to both, verified in-image:
+
+```
+storage= 1664 gate1=True  kernel=128   gate3=ok
+storage=   64 gate1=True  kernel= 64   gate3=ok
+storage=  128 gate1=True  kernel=128   gate3=ok
+storage=  256 gate1=True  kernel=128   gate3=ok
+storage= 2688 gate1=True  kernel=128   gate3=ok
+storage= 1648 gate1=False kernel=None  gate3=RAISE   <- still fails closed
+```
+
 ### Why the aligned size is not stable at 1664
 
 `_align_hybrid_block_size` rounds the result to the backend's alignment quantum
