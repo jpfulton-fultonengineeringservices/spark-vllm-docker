@@ -339,6 +339,42 @@ recipes; they now use the image defaults (FlashInfer + `--block-size 16`), which
 is exactly the pre-`caaba0f` configuration and matches both sibling recipes.
 This restores a bootable serve at the cost of the perf arm.
 
+### Live boot with the 5a patch (defect 5 verified end to end)
+
+The 5a patch was exercised on a real 2-node TP=2 launch rather than only in
+unit tests: the patcher was applied inside the running container by a
+verification mod, and the recipe was driven with
+`--attention-backend B12X --block-size 64`. Engine log, node1 rank 0:
+
+```
+[b12x-storage-block-split] supports_block_size(1664)= True
+[b12x.py:735] Using b12x with q_heads=12 kv_heads=2 head_dim_qk=256
+              head_dim_vo=256 window_left=-1 planned_page_sizes=(64, 128)
+[interface.py:1105] Setting attention block size to 1664 tokens to ensure
+                    that attention page size is >= mamba page size.
+[kv_cache_utils.py:887] kv lcm block sizes 1664
+[kv_cache_utils.py:1205] GPU KV cache size: 3,056,670 tokens,
+                         Maximum concurrency for 262,144 tokens per request: 11.66x
+```
+
+This is the path unit tests could not reach: `_find_non_ssm_backends` resolved
+B12X from real model layers, the planner built page sizes `(64, 128)`, the
+aligned storage block stayed 1664, and the KV manager split it. Confirmed
+further:
+
+- CUDA-graph capture completed (`Capturing CUDA graphs (FULL): 100%`) with
+  **zero** `device-side` / `AcceleratorError` / `IllegalInstruction` hits, so
+  the remapped kernel block table replays cleanly.
+- The endpoint served a real chat completion (HTTP 200), so the arm is not just
+  bootable but functional.
+
+Both ranks applied the patch at boot (`Accepted splittable hybrid storage
+blocks in B12X` on 10.100.171.3 and .4).
+
+Not yet measured: decode throughput against `caaba0f`'s 32.2 vs 26.4 tok/s.
+The image itself was not rebuilt for this run — the patcher was injected
+in-container — so the Dockerfile wiring is still unexercised by a real build.
+
 ### Cost
 
 Commit `caaba0f` measured this arm on gx10-node1 TP=2 (C1/60k probe, 8
