@@ -187,6 +187,11 @@ def load_recipe(recipe_path: Path) -> dict[str, Any]:
             Used by run-recipe.py to determine which features are available.
             Current version: '1'. Bump when adding new recipe fields.
         container (str, required): Docker image tag to use (e.g., 'vllm-node-mxfp4')
+        image_id (str, optional): Content ID (docker image inspect .Id, i.e. the
+            config digest) of the build this recipe was validated against. The
+            launcher refuses to start when `container` resolves to other content.
+            A tag alone cannot pin: tags are mutable and an unrecognised tag falls
+            back to an upstream pull ref. Bypassed by an explicit -t/--container.
         command (str, required): vLLM serve command template with {placeholders}
         description (str, optional): Brief description shown in --list
         model (str, optional): HuggingFace model ID for --setup downloads

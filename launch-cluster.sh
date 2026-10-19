@@ -1467,8 +1467,14 @@ verify_pinned_image_id() {
         echo "       actual: $actual_image_id" >&2
         echo "       The recipe was validated against the pinned content; running a" >&2
         echo "       different build can reintroduce incompatibilities (CLI flags," >&2
-        echo "       loader allow-lists, kernel page sizes). Re-tag/rebuild that exact" >&2
-        echo "       content, or update the recipe's image_id after re-validating." >&2
+        echo "       loader allow-lists, kernel page sizes)." >&2
+        echo "       Docker's image ID is the config digest, so a registry tag holding" >&2
+        echo "       other content will fail this check on every rank after a pull." >&2
+        echo "       Either publish the pinned content under this tag:" >&2
+        echo "         docker tag <image-at-$EXPECTED_IMAGE_ID> $IMAGE_NAME" >&2
+        echo "         spark-vllm-docker-serve.sh image --force   # republishes the tag" >&2
+        echo "       or re-validate on the current build and update the recipe's" >&2
+        echo "       image_id to $actual_image_id." >&2
         return 1
     fi
 
