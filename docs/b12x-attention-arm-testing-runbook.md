@@ -120,6 +120,12 @@ the remapped kernel block table, and CUDA-graph replay together.
 
 ### 4a. Stage the verification mod
 
+> **Confirm before launching.** §4 occupies nodes 1–2 and the launch tears down
+> whatever is already there, including a running production serve. Check
+> `docker ps | grep vllm_node` and `curl -s localhost:8000/v1/models` first; if
+> the production 1M-context serve is up, get explicit approval to stop it, or
+> schedule the test for a maintenance window. §6 restores it afterwards.
+
 Applies the patcher inside the container at boot, so no image rebuild is needed.
 
 ```bash
@@ -283,9 +289,30 @@ of the arm on the pinned one.
 
 ## 6. Teardown and restore production
 
+**Never run a bare `launch-cluster.sh stop`.** It resolves its peer list from
+`-n`, else `DOTENV_CLUSTER_NODES` in the fork `.env`. That happens to be
+`10.100.171.3,10.100.171.4` today, but the file is autodiscovery-written and
+machine-specific — if it ever lists all four nodes, an unranked stop reaches
+every rank and kills co-tenants on nodes 3–4 (which run unrelated
+`vllm_node` instances and other services). Always pass the node list explicitly.
+
 ```bash
 cd /cluster-shared/projects/spark-vllm-docker
-timeout 200 bash launch-cluster.sh stop
+
+# confirm what the .env fallback would do, but do not rely on it
+grep -E '^CLUSTER_NODES' .env
+
+# scope the stop to exactly the two ranks this runbook launched
+timeout 200 bash launch-cluster.sh -n 10.100.171.3,10.100.171.4 stop
+
+# confirm both ranks are gone before moving on
+docker ps --format '{{.Names}}' | grep -q vllm_node && echo 'node1 STILL UP' || echo 'node1 clean'
+```
+
+Then clean the scratch script and restore production:
+
+```bash
+cd /cluster-shared/projects/spark-vllm-docker
 rm -f examples/b12x-verify.sh          # scratch, do not commit
 
 # restore the 1M-context YaRN serve
@@ -298,6 +325,15 @@ setsid nohup bash -c 'bash scripts/spark-vllm-docker-serve.sh launch \
 
 Verify with `curl -s localhost:8000/v1/models` →
 `max_model_len: 1048576`.
+
+Also confirm nodes 3–4 were untouched — they host separate instances and
+co-tenants:
+
+```bash
+# on gx10-node3 and gx10-node4: your containers should still show the same
+# StartedAt they had before the test run (restarts=0).
+docker inspect -f '{{.State.StartedAt}} {{.RestartCount}}' vllm_node
+```
 
 ---
 
