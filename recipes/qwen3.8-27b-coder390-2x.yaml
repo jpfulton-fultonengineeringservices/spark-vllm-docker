@@ -48,11 +48,12 @@
 # flag/loader/block-size drift documented above. After deliberately
 # re-validating on a new image, update both `container:` and `image_id:`.
 #
-# 2026-10-19 rebuild: bakes docker/patch_vllm_b12x_storage_block_split.py into
-# both build stages, which is what lets the B12X arm boot this hybrid model
-# (see docs/b12x-coder390-attention-gap.md). Verified with
-# `grep -c "accept splittable storage block" .../v1/attention/backends/b12x.py`
-# == 2 on both ranks.
+# 2026-10-19 rebuild (95c731d4): bakes docker/patch_vllm_b12x_storage_block_split.py
+# into both build stages, which lets the B12X arm boot this hybrid model (see
+# docs/b12x-coder390-attention-gap.md). Also fixes NCCL: the final stage now
+# installs its own 2.32.3 deb instead of inheriting the base image's 2.28.3,
+# which lacked ncclCommResume and broke `import torch`. Verified: torch imports,
+# `grep -c "accept splittable storage block" .../b12x.py` == 2, on both ranks.
 #
 # The `model:` id is synthetic (the checkpoint is not on the Hub); mods/fes-weights
 # presents /model as an HF hub-cache shim under this exact id, so
@@ -81,7 +82,7 @@ description: vLLM serving the NVFP4 W4A16 (ModelOpt mixed-precision) Qwen3.8-27B
 
 model: local-inference-lab/Qwen3.8-27B-Coder390-DFlash2
 container: vllm-node-b12x
-image_id: sha256:997f2d8a4dfca1fa05143116fd475b80631edf923bad88bd67fbfae1efd69e08
+image_id: sha256:95c731d4a5c27c256f4ff0d29c83078a19894d317c8633c848667da7f27f8c58
 
 build_args:
   - --exp-b12x
