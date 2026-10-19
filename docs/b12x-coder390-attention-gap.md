@@ -452,6 +452,9 @@ needed for index-aware loading (missing: _determine_buffer_size)
 No published instanttensor exposes `_determine_buffer_size` — 0.2.2 is the
 newest on PyPI. So the branch head is unbuildable with any released dependency.
 
+> **HARD STOP — you cannot reproduce the validated image from source.**
+> Read this whole subsection before running any build.
+
 **The validated image did NOT come from this fork.** Its
 `/workspace/build-metadata.yaml` records `vllm_repo: vllm-project/vllm.git`,
 `vllm_ref: main`, `vllm_commit: 1ac942555` (vLLM `0.32.0rc1.dev301`), while
@@ -465,7 +468,14 @@ the fork too. The exact validated image is therefore not reproducible from
 source as of 2026-10-19 — rebuilding means accepting a different vLLM and
 re-validating the recipe end to end.
 
-**If you accept a different vLLM, use `50cbc118b`** — the direct parent of
+The only ways to get the *exact* validated vLLM are (a) a surviving local clone
+or image layer containing `1ac942555`, or (b) the registry copy of image
+`a1fc4f18d3cb`. There is no source path. **Any freshly built image is a
+different vLLM and must be re-validated from scratch before it is pinned into a
+recipe** — a clean build is not evidence that it can serve; both traps above
+built cleanly and could not.
+
+**Only if you accept a different vLLM**, use `50cbc118b` — the direct parent of
 `de475def9`, verified to contain **zero** references to
 `_determine_buffer_size` (the gate commit has 2), so it builds against the
 released instanttensor 0.2.2:
@@ -480,9 +490,11 @@ Note `--exp-b12x` rejects `--use-wheels` and `--vllm-ref` (use
 in. Pin `--b12x-vllm-ref` to a commit, never to the moving branch, or the build
 silently changes vLLM underneath the recipe.
 
-Before pinning any rebuilt image into a recipe, boot it once and check the
-acceptance evidence in §4/§5 — the traps above show a clean build can still be
-unable to serve.
+**Do not pin any rebuilt image into a recipe until it has booted once and passed
+the §4/§5 acceptance table** (1664 alignment, planner `(64,128)`, CUDA-graph
+100%, zero CUDA errors, HTTP 200). Leave the existing `a1fc4f18d3cb` pins — in
+`qwen3.8-27b-coder390-2x.yaml`, `-4x.yaml`, and `-2x-store-l2.yaml` — unchanged
+until then; they match the image that is actually deployed.
 
 ### Cost
 
