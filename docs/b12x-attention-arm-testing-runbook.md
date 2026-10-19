@@ -175,15 +175,18 @@ ValueError: No available memory for the cache blocks.
   (kv_cache_planning.py:56 _check_enough_kv_cache_memory)
 ```
 
-Read the `Available KV cache memory` line: if it is negative or near zero,
-raise GMU or free the co-tenants. **Simplest reliable path: run on nodes 1–2**,
-which are idle and let you keep the recipe's 0.75 (measured: +70.51 GiB KV,
-3,190,974-token pool). Reserve 3–4 for when 1–2 are otherwise occupied and you
-are willing to size the pool against their co-tenant load.
+Read the `Available KV cache memory` line and decide from it:
 
-If you do use nodes 1–2 instead, get explicit approval first — check
-`docker ps | grep vllm_node` and `curl -s localhost:8000/v1/models`, and note
-§6 restores the serve afterwards.
+- **If it is comfortably positive** on 3–4, proceed there. Production on 1–2
+  stays up and untouched — this is the default.
+- **If it is negative or near zero**, do *not* start tuning GMU on 3–4. Stop
+  and either free the co-tenants, or ask for approval to take nodes 1–2, which
+  are idle and let you keep the recipe's 0.75 (measured: +70.51 GiB KV,
+  3,190,974-token pool).
+
+Taking nodes 1–2 is the reliable fallback, **not** the default: it requires
+explicit approval (§4a gate) because it tears down the production 1M-context
+serve, which §6 restores.
 
 Applies the patcher inside the container at boot, so no image rebuild is needed.
 
