@@ -23,13 +23,6 @@ die() { # die <field>
   exit 3
 }
 
-_require() { # _require <field> <value-or-empty>
-  if [ -z "${2:-}" ]; then
-    die "$1"
-  fi
-  printf '%s' "$2"
-}
-
 pyver() { # pyver <dist-name>
   python3 - "$1" <<'PY' 2>/dev/null
 import importlib.metadata as m

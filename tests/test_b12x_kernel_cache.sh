@@ -73,6 +73,63 @@ OUT=$(env -u B12X_KCACHE_ID_CUDA bash "$KC" key "vllm serve FES/MiMo" 2>&1) || R
 printf '%s' "$OUT" | grep -q "cannot resolve arch" \
   || fail "hard-fail stderr does not name field: $OUT"
 
+# --- 3b. unresolvable b12x_rev is FATAL (no silent log-line-as-value):
+# no override, no /workspace stamp, no flashinfer-python dist metadata.
+[ ! -e /workspace/b12x-source-commit ] \
+  || fail "precondition: /workspace/b12x-source-commit exists; b12x_rev fallback test is non-deterministic"
+SHIM_NONE="$WORK/shim-none"; mkdir -p "$SHIM_NONE"
+cat > "$SHIM_NONE/python3" <<'EOF'
+#!/bin/bash
+exit 1
+EOF
+chmod +x "$SHIM_NONE/python3"
+RC=0
+OUT=$(env -u B12X_KCACHE_ID_B12X_REV PATH="$SHIM_NONE:$PATH" \
+  bash "$KC" key "vllm serve FES/MiMo" 2>&1) || RC=$?
+[ "$RC" = "3" ] || fail "unresolvable b12x_rev: expected exit 3, got $RC: $OUT"
+printf '%s' "$OUT" | grep -q "cannot resolve b12x_rev" \
+  || fail "b12x_rev hard-fail does not name field: $OUT"
+case "$OUT" in
+  *b12x-kernels__*) fail "b12x_rev hard-fail still emitted a key: $OUT" ;;
+esac
+
+# --- 3c. flashinfer-python version resolves b12x_rev and feeds the hash:
+# b12x is vendored inside flashinfer (no b12x dist metadata), so the
+# flashinfer-python version must be the fallback identity, and two different
+# flashinfer versions must key differently.
+SHIM_072="$WORK/shim-flashinfer-072"; mkdir -p "$SHIM_072"
+cat > "$SHIM_072/python3" <<'EOF'
+#!/bin/bash
+if [ "${1:-}" = "-" ] && [ "${2:-}" = "flashinfer-python" ]; then
+  printf '%s\n' 0.7.2
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$SHIM_072/python3"
+SHIM_073="$WORK/shim-flashinfer-073"; mkdir -p "$SHIM_073"
+cat > "$SHIM_073/python3" <<'EOF'
+#!/bin/bash
+if [ "${1:-}" = "-" ] && [ "${2:-}" = "flashinfer-python" ]; then
+  printf '%s\n' 0.7.3
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$SHIM_073/python3"
+KF1=$(env -u B12X_KCACHE_ID_B12X_REV PATH="$SHIM_072:$PATH" \
+  bash "$KC" key "vllm serve FES/MiMo --tensor-parallel-size 2") \
+  || fail "key computation failed (flashinfer 0.7.2 fallback)"
+KF2=$(env -u B12X_KCACHE_ID_B12X_REV PATH="$SHIM_073:$PATH" \
+  bash "$KC" key "vllm serve FES/MiMo --tensor-parallel-size 2") \
+  || fail "key computation failed (flashinfer 0.7.3 fallback)"
+[ "$KF1" != "$KF2" ] || fail "flashinfer-python version did not change the key"
+KREF=$(B12X_KCACHE_ID_B12X_REV=0.7.2 \
+  bash "$KC" key "vllm serve FES/MiMo --tensor-parallel-size 2") \
+  || fail "key computation failed (b12x_rev override reference)"
+[ "$KF1" = "$KREF" ] \
+  || fail "resolved flashinfer-python version is not what was hashed: '$KF1' vs '$KREF'"
+
 # --- 4. roundtrip: save -> wipe -> restore -> byte-identical
 KS=$(bash "$KC" key "vllm serve FES/MiMo --tensor-parallel-size 2") \
   || fail "key computation failed (roundtrip)"
