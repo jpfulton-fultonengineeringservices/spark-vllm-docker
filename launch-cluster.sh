@@ -25,6 +25,11 @@ MASTER_PORT="29501"
 
 # Initialize variables
 NODES_ARG=""
+# Optional content-addressable image pin: when set (by run-recipe.py from a
+# recipe's `image_id:`), refuse to launch any other image content. A tag alone
+# cannot pin: the same tag can be republished, and an unknown tag falls back to
+# an upstream pull ref.
+EXPECTED_IMAGE_ID=""
 CONTAINER_NAME="$DEFAULT_CONTAINER_NAME"
 COMMAND_TO_RUN=""
 DAEMON_MODE="false"
@@ -177,6 +182,7 @@ while [[ "$#" -gt 0 ]]; do
     case $1 in
         -n|--nodes) NODES_ARG="$2"; shift ;;
         -t) IMAGE_NAME="$2"; shift ;;
+        --image-id) EXPECTED_IMAGE_ID="$2"; shift ;;
         --name) CONTAINER_NAME="$2"; shift ;;
         --eth-if) ETH_IF="$2"; ETH_IF_OVERRIDE="$2"; shift ;;
         --ib-if) IB_IF="$2"; shift ;;
@@ -1440,6 +1446,35 @@ EARLYOOM_SETUP
     fi
 }
 
+# Refuse to launch when a recipe pins an image by content ID and the selected
+# tag resolves to different content. Tags are mutable and an unknown tag falls
+# back to an upstream pull ref, so only the image ID can pin what actually runs.
+verify_pinned_image_id() {
+    [[ -n "$EXPECTED_IMAGE_ID" ]] || return 0
+
+    local actual_image_id
+    if ! actual_image_id=$(docker image inspect --format '{{.Id}}' "$IMAGE_NAME" 2>/dev/null) \
+        || [[ -z "$actual_image_id" ]]; then
+        echo "Error: image '$IMAGE_NAME' is not present on the head node, so its" >&2
+        echo "       content cannot be checked against the pinned image_id." >&2
+        echo "       Build it (./build-and-copy.sh -t $IMAGE_NAME) or drop the pin." >&2
+        return 1
+    fi
+
+    if [[ "$actual_image_id" != "$EXPECTED_IMAGE_ID" ]]; then
+        echo "Error: image '$IMAGE_NAME' content does not match the recipe's pinned image_id." >&2
+        echo "       pinned: $EXPECTED_IMAGE_ID" >&2
+        echo "       actual: $actual_image_id" >&2
+        echo "       The recipe was validated against the pinned content; running a" >&2
+        echo "       different build can reintroduce incompatibilities (CLI flags," >&2
+        echo "       loader allow-lists, kernel page sizes). Re-tag/rebuild that exact" >&2
+        echo "       content, or update the recipe's image_id after re-validating." >&2
+        return 1
+    fi
+
+    echo "Verified pinned image_id: $EXPECTED_IMAGE_ID"
+}
+
 # Verify that the selected image resolves to the same content-addressable image
 # ID on the head and every worker before starting any containers.
 verify_cluster_image_consistency() {
@@ -1500,6 +1535,7 @@ start_cluster() {
         return
     fi
 
+    verify_pinned_image_id || return 1
     verify_cluster_image_consistency || return 1
     prepare_vllm_pr_mods || return 1
 

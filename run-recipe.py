@@ -1082,6 +1082,13 @@ Examples:
 
     # Determine container image
     container = args.container_override or recipe["container"]
+    # Optional content-addressable pin. A recipe tag alone cannot pin image
+    # content: the same tag can be republished under the nodes, and an unknown
+    # tag falls back to an upstream pull ref. `image_id:` names the exact image
+    # the recipe was validated against so the launcher can refuse anything else.
+    # An explicit -t/--container override means "run a different image", so it
+    # deliberately bypasses the pin.
+    image_id = None if args.container_override else recipe.get("image_id")
     model = recipe.get("model")
     build_args = recipe.get("build_args", [])
 
@@ -1374,6 +1381,8 @@ Examples:
         print()
         print("2. launch-cluster.sh is called with:")
         cmd_parts = ["   ./launch-cluster.sh", "-t", container]
+        if image_id:
+            cmd_parts.extend(["--image-id", image_id])
         for mod in recipe.get("mods", []):
             cmd_parts.extend(["--apply-mod", mod])
         for layer_type, value in cli_launch_layers:
@@ -1447,6 +1456,8 @@ Examples:
 
         # Build launch-cluster.sh command
         cmd = [str(LAUNCH_SCRIPT), "-t", container]
+        if image_id:
+            cmd.extend(["--image-id", image_id])
 
         # Add mods
         for mod in recipe.get("mods", []):
