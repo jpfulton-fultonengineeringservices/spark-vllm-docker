@@ -206,6 +206,10 @@ during mod application.
 Do **not** use `docker logs vllm_node` — PID 1 is `sleep infinity` for this
 launch path and the container log driver captures nothing. Read the host log.
 
+Always bound the read: the log spans two ranks and keeps growing, so an
+unbounded grep or `tail -f` can flood the terminal (and, through an agent tool,
+the context window). Every command below is filtered *and* capped.
+
 ```bash
 # wait for readiness
 for i in $(seq 1 16); do
@@ -213,10 +217,21 @@ for i in $(seq 1 16); do
   [ "$c" = "200" ] && break; sleep 15
 done; echo "http=$c"
 
-grep -iE 'supports_block_size|planned_page_sizes|Setting attention block size|kv lcm block sizes|GPU KV cache size' /tmp/b12x-verify.log
+# log size first — a runaway file means something looped
+ls -l /tmp/b12x-verify.log
+
+# each read is pattern-filtered AND capped
+grep -iE 'supports_block_size|planned_page_sizes|Setting attention block size|kv lcm block sizes|GPU KV cache size' \
+  /tmp/b12x-verify.log | head -10
 grep -icE 'device-side|AcceleratorError|IllegalInstruction' /tmp/b12x-verify.log
 grep -oE 'Capturing CUDA graphs \([A-Z]+\): *[0-9]+%' /tmp/b12x-verify.log | tail -2
+
+# worst case, bound a raw tail by time as well as lines
+timeout 10 tail -n 40 /tmp/b12x-verify.log
 ```
+
+Never `tail -f` (or `docker logs -f`) against this serve: the EOF never comes
+and the read runs until a timeout kills it.
 
 ### Acceptance criteria
 
@@ -298,6 +313,7 @@ Verify with `curl -s localhost:8000/v1/models` →
 | Probe says `1648` instead of `1664` | the alignment quantum follows the chosen backend (16 for FlashInfer, 64 for B12X). Test the backend you mean to ship. |
 | `stop` without `--rank-order` | defaults to all four nodes. Scope it to `gx10-cb11:0,gx10-f1d8:1` so co-tenants on nodes 3–4 are untouched. |
 | Files vanish from `/tmp` | session churn. Keep artifacts on a durable path (`~/...`) or re-stage. |
+| Log read floods terminal/context | `/tmp/b12x-verify.log` spans two ranks and grows. Always `grep ... \| head -N`, or `timeout 10 tail -n 40`. Never `tail -f` / `docker logs -f`. |
 
 ---
 
