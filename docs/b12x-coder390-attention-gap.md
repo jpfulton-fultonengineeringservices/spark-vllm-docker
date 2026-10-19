@@ -191,6 +191,52 @@ deprecated and will be removed in v0.33.0. It has no effect: Mamba prefix
 caching follows `--enable-prefix-caching`."* With prefix caching on (required
 for this workload) the alignment runs regardless.
 
+### Root cause: the storage size is validated where a kernel page size belongs
+
+The conflict is **not** a kernel constraint. vLLM already implements virtual
+block splitting: `prepare_kernel_block_sizes` (`v1/worker/utils.py:630`) asks
+`select_common_block_size` for a kernel page that divides the manager block, and
+the resulting `kernel_block_size` is threaded into the metadata builder with
+block-table remapping (`AttentionGroup.create_metadata_builders`,
+`map_to_kernel_block_table`). Measured directly against the image:
+
+```
+select_common_block_size(1664, [B12xPagedAttentionBackend]) -> 128   # 13 kernel pages
+```
+
+So storage-1664 was always meant to be consumed as 128-token kernel pages, and
+every `page_size not in (64, 128)` gate in the flashinfer kernel layer sees 128,
+never 1664. That is why the 13 enumerated gates are *not* the blocker.
+
+Two call sites validate the **storage** size against the **kernel page** set:
+
+1. `Platform._check_aligned_block_size` (`platforms/interface.py:797`) calls
+   `B12xPagedAttentionBackend.supports_block_size(1664)` → `False` → the
+   `Aligned KV cache block size 1664 is not supported by attention backend(s)`
+   error.
+2. `B12xPagedAttentionImpl.__init__` (`v1/attention/backends/b12x.py:399`) does
+   `default_block_size = int(cache_config.block_size)` and raises if it is not in
+   `(64, 128)` — again comparing a storage size to the kernel page set.
+
+Both treat `_B12X_SUPPORTED_PAGE_SIZES` as if it described storage blocks. It
+describes kernel pages. The fix is therefore plumbing, not widening.
+
+### Why the aligned size is not stable at 1664
+
+`_align_hybrid_block_size` rounds the result to the backend's alignment quantum
+(`kernel_block_alignment_size`, `platforms/interface.py:127`), which is 16 for
+FlashInfer and 64 for B12X. The live FlashInfer boot logs:
+
+```
+[interface.py:1105] Setting attention block size to 1648 tokens
+[kv_cache_utils.py:887] kv lcm block sizes 1648
+```
+
+1648 = 16 × 103, and 103 is prime, so 1648 is **not** divisible by 64 or 128.
+The aligned size is a function of the chosen backend, not a fixed property of the
+model. This matters for any fix: only the B12X quantum (64) yields a
+128-splittable storage size.
+
 Verification that the conflict is real and not a misconfiguration: driving
 `EngineArgs.create_engine_config()` + `update_block_size_for_backend()` inside
 the image with `--nnodes 2 --node-rank 0 --tensor-parallel-size 2` and the
@@ -233,20 +279,46 @@ configuration on the pinned image can boot this arm yet (defect 5).
 Ranked by preference. Each needs an image rebuild or a new mod, so none is a
 recipe-only change.
 
-### 5a. Widen B12X's accepted page sizes (preferred)
+### 5a. Let the two storage-facing validators accept a splittable block (preferred)
 
-`_B12X_SUPPORTED_PAGE_SIZES = (64, 128)` is a Python-level allow-list, not
-obviously a kernel constraint. If the paged kernels genuinely handle any
-sufficiently large page (they already gate internally on
-`key_page_size in _B12X_SUPPORTED_PAGE_SIZES` at `b12x.py:92`), then admitting
-`MultipleOf(64)` — as most backends do via
-`get_supported_kernel_block_sizes() -> [MultipleOf(1)]` — removes the conflict
-outright.
+Not a widening of the kernel page set. Two sites compare a *storage* block size
+against the *kernel page* set; both should instead accept storage sizes that a
+supported kernel page divides:
 
-Risk: the `b12x.py:92` runtime check would also have to accept the new sizes,
-and if the CuTe kernels carry a real 64/128 constraint this fails at kernel
-launch instead of at validation. Needs a source read of the paged-attention
-kernel's page-size handling before committing.
+- `B12xPagedAttentionBackend.supports_block_size` — used by
+  `_check_aligned_block_size`.
+- `B12xPagedAttentionImpl.__init__` (`b12x.py:399`) — validates
+  `cache_config.block_size` instead of the kernel block size.
+
+Leave `get_supported_kernel_block_sizes()` returning the exact `[64, 128]`. This
+matters: declaring `MultipleOf(64)` is actively wrong, because
+`_block_size_is_supported` then reports the *storage* size as supported,
+`select_common_block_size` short-circuits and returns 1664, splitting is
+disabled, and the kernels then get a 1664-token page. Measured in the image:
+
+```
+current exact [64,128]: select_common_block_size(1664) -> 128   (split, correct)
+MultipleOf(64)        : select_common_block_size(1664) -> 1664  (no split, breaks)
+```
+
+With the corrected predicate (`bs in (64,128) or any(bs % p == 0 for p in
+(64,128))`) the behaviour is:
+
+```
+storage=1664 supported=True kernel=128 split=True
+storage=  64 supported=True kernel= 64 split=False
+storage= 128 supported=True kernel=128 split=False
+storage= 256 supported=True kernel=128 split=True
+storage=2688 supported=True kernel=128 split=True
+storage=1648 supported=False  -> still fails closed (not divisible by 64/128)
+```
+
+Note 1648 (the FlashInfer-aligned size) still fails, which is correct — it
+genuinely cannot be split. The fix only unblocks B12X's own quantum-64 result.
+
+Cost: the backend precompiles decode/verify/extend plans per page size, so this
+adds no new page sizes and no extra warmup. All `== 64` / `== 128` fast paths
+keep matching, because the kernel page stays 128.
 
 ### 5b. Make the hybrid aligner respect backend page-size limits
 
