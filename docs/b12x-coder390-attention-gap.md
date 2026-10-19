@@ -216,7 +216,17 @@ sequential prompts, temp 0, `ignore_eos`):
 - cold-60k TTFT 66.6 vs 67.5 s (−1.3%)
 - KV pool 3,346,412 tokens (−1.1%, within the 10% gate)
 
-All of that is currently unrealized.
+That measurement predates the image these recipes now pin, so it is not a
+baseline this configuration ever ran at. `caaba0f` landed 2026-10-17 and its
+recipe still passed `--gdn-prefill-backend b12x`, which does not exist in the
+pinned image (built 2026-10-16); the numbers came from an earlier image whose
+`b12x` loader still accepted `Qwen3_5ForConditionalGeneration`. Defects 3 and 4
+are exactly that drift, surfaced by re-running against the current image. So the
+figures are a real measurement of the B12X arm on a *previous* image, not of a
+configuration that ever booted on the pinned one — which is why section 7 ranks
+restoring the arm as future work rather than treating its loss as a regression
+from a working baseline. All of it is currently unrealized either way: no
+configuration on the pinned image can boot this arm yet (defect 5).
 
 ## 7. Resolution paths for defect 5
 
