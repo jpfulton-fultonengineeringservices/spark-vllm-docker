@@ -54,9 +54,19 @@
 # `vllm serve <id>` resolves offline with HF_HUB_OFFLINE=1.
 
 # Long-context YaRN: --hf-overrides scales the target's text_config rope to 4x
-# (rope_type yarn, factor 4.0, 262144 -> 1048576). The spec-decode drafter keeps
-# its native rope: dict hf_overrides stay target-only in this vLLM build, so the
-# DFlash2-FP8 drafter's own config.json (rope_type "default", 262144) is untouched.
+# (rope_type yarn, factor 4.0, 262144 -> 1048576).
+#
+# The drafter needs the SAME scaling, and --hf-overrides cannot deliver it: dict
+# (non-callable) overrides stay target-only in SpeculativeConfig, so the draft
+# ModelConfig is built purely from its own config.json. mods/qwen3.8-coder390-dflash
+# therefore rewrites the staged drafter config to rope_type yarn / factor 4.0 —
+# this recipe is only usable past 262144 WITH that mod change (coupled, both must
+# ship together). Without it the drafter's cos/sin cache stays 262144 rows and the
+# first request beyond the native window dies:
+#   Assertion `index out of bounds: 0 <= ... < 262144` failed (device-side assert)
+# YaRN sizes its cache as original_max_position_embeddings * factor, so the
+# drafter's max_position_embeddings stays at the checkpoint's native 262144.
+#
 # V1 divergence: qwen3.8-27b-coder390-4x.yaml is deliberately NOT modified, so its
 # command block is no longer byte-identical to this recipe.
 
