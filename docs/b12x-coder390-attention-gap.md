@@ -246,6 +246,49 @@ storage= 2688 gate1=True  kernel=128   gate3=ok
 storage= 1648 gate1=False kernel=None  gate3=RAISE   <- still fails closed
 ```
 
+### Completeness checks for the 5a patch
+
+Three things could have made the two-site fix insufficient; each was checked
+against the shipped image.
+
+**No other consumer of the storage size.** `grep 'cache_config.block_size'` in
+`b12x.py` returns exactly two hits (lines 398 and 403, both inside the patched
+guard). The flashinfer kernel layer never reads it — its only `block_size` hits
+are `query_block_size` in `reference.py`, an unrelated knob. So nothing
+downstream re-applies the kernel-page set to the storage size.
+
+**Splitting is not silently disabled by packing.** `prepare_kernel_block_sizes`
+has a bypass: if any tensor in the group is block-outermost packed
+(`block_stride > layer_stride`) it keeps the manager block and never splits.
+Splitting also hard-requires dense, unpadded pages
+(`compute_layer_kv_cache_shape_bytes`) and names `LBNHC` as the layout that
+satisfies it. The live boot reports `Using LBNHC KV cache layout`, i.e. the
+layer-compact path, so the bypass is not taken for this model.
+
+**`--installed` is reachable.** `importlib.util.find_spec("vllm")` resolves to
+`/usr/local/lib/python3.12/dist-packages/vllm`, and
+`v1/attention/backends/b12x.py` exists there, so the wheel-stage patcher does
+not fall through to its "absent; skipping" branch.
+
+**The split really reaches the kernel's page geometry.** The gap between
+"`select_common_block_size` returns 128" and the kernel layer's own
+`_kv_page_size` check (`b12x.py:92`, `key_page_size in (64, 128)`) is closed by
+`compute_layer_kv_cache_shape_bytes`, which uses `spec.block_size // kernel_block_size`
+pages per manager block. Measured in-image with the patched backend:
+
+```
+backend: vllm.v1.attention.backends.b12x.B12xPagedAttentionBackend
+selected kernel block: 128
+block_stride_alignment: MultipleOf(128)
+page dim with storage block: 1664
+page dim with kernel block : 128
+kernel accepts page dim: True
+```
+
+So the KV tensors the kernels index are 128-token pages, not 1664, and the 13
+`page_size not in (64, 128)` gates in the flashinfer layer are satisfied without
+edits.
+
 ### Why the aligned size is not stable at 1664
 
 `_align_hybrid_block_size` rounds the result to the backend's alignment quantum
