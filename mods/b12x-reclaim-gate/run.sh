@@ -160,7 +160,7 @@ SITE1 = '''    def _reclaim_programs(self):
 
 SITE2_RE = re.compile(
     r"(?P<head>        from b12x\._lib\.program_cache import evict_unretained\n"
-    r"\n"
+    r"\n?"
     r"        keep = frozenset\(\n"
     r".*?\n"
     r"        \)\n)"
