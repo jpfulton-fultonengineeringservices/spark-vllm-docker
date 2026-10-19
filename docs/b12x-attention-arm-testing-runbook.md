@@ -139,6 +139,20 @@ Three prerequisites, all verified on 2026-10-19:
 **node3** with `LOCAL_IP=10.100.171.2`. The shared `.env`'s `LOCAL_IP` is only a
 fallback and is node-specific, so always pass `LOCAL_IP` explicitly.
 
+Rail B IPs (from `cluster.env` `NODE_RAILB_IPS`, verified live 2026-10-19 —
+note the last octets are **not** in node order):
+
+| node | hostname | Rail B IP |
+|---|---|---|
+| node1 | gx10-cb11 | **10.100.171.3** |
+| node2 | gx10-f1d8 | **10.100.171.4** |
+| node3 | gx10-becc | **10.100.171.2** |
+| node4 | gx10-9273 | **10.100.171.1** |
+
+So the production pair 1–2 is `.3,.4` and the spare pair 3–4 is `.2,.1`.
+Confirm on the host before launching: `hostname` and
+`ip -4 addr show enP2p1s0f1np1 | grep -oE '10\.100\.171\.[0-9]+'`.
+
 **Memory is the binding constraint on 3–4.** They host co-tenants (ComfyUI on
 both, ~12 GB on node3), so `MemAvailable` is ~36 GiB on node3 and ~83 GiB on
 node4. `request_memory` gates on `TOTAL_UMA * gpu_memory_utilization` (120.5
@@ -148,8 +162,24 @@ the ceiling:
 ```
 node3: 36.5 GiB available -> max GMU 0.303
 node4: 83.0 GiB available -> max GMU 0.689
-=> use --gpu-memory-utilization 0.25 (or free ComfyUI on node3 first)
 ```
+
+**Do not just pick the largest GMU that clears `request_memory`.** GMU must
+cover weights + activations + CUDA-graph profiling *and* the KV blocks. A run at
+GMU 0.25 passed both B12X gates and then failed at cache planning:
+
+```
+Setting attention block size to 1664 tokens        <- gates passed
+Available KV cache memory: -28.74 GiB
+ValueError: No available memory for the cache blocks.
+  (kv_cache_planning.py:56 _check_enough_kv_cache_memory)
+```
+
+Read the `Available KV cache memory` line: if it is negative or near zero,
+raise GMU or free the co-tenants. **Simplest reliable path: run on nodes 1–2**,
+which are idle and let you keep the recipe's 0.75 (measured: +70.51 GiB KV,
+3,190,974-token pool). Reserve 3–4 for when 1–2 are otherwise occupied and you
+are willing to size the pool against their co-tenant load.
 
 If you do use nodes 1–2 instead, get explicit approval first — check
 `docker ps | grep vllm_node` and `curl -s localhost:8000/v1/models`, and note
