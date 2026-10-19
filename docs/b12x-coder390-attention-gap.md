@@ -452,9 +452,23 @@ needed for index-aware loading (missing: _determine_buffer_size)
 No published instanttensor exposes `_determine_buffer_size` — 0.2.2 is the
 newest on PyPI. So the branch head is unbuildable with any released dependency.
 
-**Recommended rebuild ref: `50cbc118b`** — the direct parent of `de475def9`,
-verified to contain **zero** references to `_determine_buffer_size` (the gate
-commit has 2). Use:
+**The validated image did NOT come from this fork.** Its
+`/workspace/build-metadata.yaml` records `vllm_repo: vllm-project/vllm.git`,
+`vllm_ref: main`, `vllm_commit: 1ac942555` (vLLM `0.32.0rc1.dev301`), while
+`--exp-b12x` builds `local-inference-lab/vllm@dev/karmic-kraken`. So
+`50cbc118b` below yields a *different* vLLM than the image the recipe was
+validated against — expect the loader/behaviour differences that implies.
+
+That commit is also no longer fetchable: `git fetch` of `1ac942555` from
+`vllm-project/vllm` returns `upload-pack: not our ref`, and it is absent from
+the fork too. The exact validated image is therefore not reproducible from
+source as of 2026-10-19 — rebuilding means accepting a different vLLM and
+re-validating the recipe end to end.
+
+**If you accept a different vLLM, use `50cbc118b`** — the direct parent of
+`de475def9`, verified to contain **zero** references to
+`_determine_buffer_size` (the gate commit has 2), so it builds against the
+released instanttensor 0.2.2:
 
 ```bash
 ./build-and-copy.sh --exp-b12x --rebuild-vllm --b12x-vllm-ref 50cbc118b \
@@ -465,6 +479,10 @@ Note `--exp-b12x` rejects `--use-wheels` and `--vllm-ref` (use
 `--b12x-vllm-ref`); a cached-wheel run skips the recompile that bakes the patch
 in. Pin `--b12x-vllm-ref` to a commit, never to the moving branch, or the build
 silently changes vLLM underneath the recipe.
+
+Before pinning any rebuilt image into a recipe, boot it once and check the
+acceptance evidence in §4/§5 — the traps above show a clean build can still be
+unable to serve.
 
 ### Cost
 
