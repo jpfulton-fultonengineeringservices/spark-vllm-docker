@@ -48,14 +48,40 @@
 # flag/loader/block-size drift documented above. After deliberately
 # re-validating on a new image, update both `container:` and `image_id:`.
 #
-# The B12X storage-block patch (docker/patch_vllm_b12x_storage_block_split.py)
-# and an NCCL install fix are committed in this repo but are NOT yet in the
-# pinned image: two rebuild attempts produced images that could not serve
-# (NCCL 2.28.3 missing ncclCommResume; then a fork HEAD needing an unreleased
-# InstantTensor). This pin is the last validated build. See
-# docs/b12x-coder390-attention-gap.md, "Rebuilding this image", before
-# repinning: the exact validated vLLM commit (1ac942555) is no longer
-# fetchable, so any rebuild carries a different vLLM and needs re-validation.
+# This pin is now a REPRODUCIBLE DERIVED IMAGE, not the upstream release.
+# Building `a1fc4f18` from source was never possible (its vLLM commit
+# 1ac942555 is gone from both vllm-project/vllm and the fork, and two source
+# rebuild attempts produced images that could not serve: NCCL 2.28.3 missing
+# ncclCommResume, then a fork HEAD needing an unreleased InstantTensor).
+# But the release artifact itself is public: eugr/spark-vllm:nightly-20261016
+# resolves to config sha256:a1fc4f18d3cb..., i.e. exactly the previously
+# pinned content, at vLLM 0.32.0rc1.dev301+g1ac942555 -- the same vLLM.
+#
+# The derived image is that base plus the installed-stage patches the release
+# build omits (Dockerfile:930-945):
+#   FROM eugr/spark-vllm:nightly-20261016
+#   RUN patch_vllm_b12x_storage_block_split.py --installed
+#   RUN patch_b12x_cache_integrity.py         --installed
+#   RUN patch_vllm_wsl_cuda_uma.py            --installed
+#   RUN patch_torch_schema_enumeration.py     --installed
+# (patch_instanttensor_vllm_memory.py is already applied upstream in this base,
+# verified: both the PATCHED text and the native _host_available_bytes marker
+# are present, count=1, so it is omitted rather than re-run.)
+#
+# Stored in the node1 registry so the pin survives any upstream deletion:
+#   10.100.170.3:5000/spark-vllm:coder390-kr-20261019
+#   config sha256:f2aed1c24f65f44c8638801e3a0ba46b61c1753f7a02f24bb8f22dcbaacad842
+#
+# Validated live on gx10-node1/node2 (TP=2) before this pin: /v1/models 200,
+# max_model_len 1048576, CUDA-graph capture 35/35 + 2/2 FULL, zero
+# device-side/AcceleratorError/IllegalInstruction, and a 440,077-token prompt
+# that returned its buried passphrase (HTTP 200) -- past the 262144 native
+# window, so YaRN and the drafter's yarn rope both hold.
+#
+# NOTE the storage-block patch is INERT for this recipe: it runs FlashInfer
+# (--block-size 16, no --attention-backend), and the boot log shows
+# "Setting attention block size to 1648 tokens". The patch only matters for
+# the B12X paged-attention arm (docs/b12x-coder390-attention-gap.md).
 #
 # The `model:` id is synthetic (the checkpoint is not on the Hub); mods/fes-weights
 # presents /model as an HF hub-cache shim under this exact id, so
@@ -84,7 +110,7 @@ description: vLLM serving the NVFP4 W4A16 (ModelOpt mixed-precision) Qwen3.8-27B
 
 model: local-inference-lab/Qwen3.8-27B-Coder390-DFlash2
 container: vllm-node-b12x
-image_id: sha256:a1fc4f18d3cb1671986feb92b05243ecd31a21957dd64e28da5c9e6125733aa0
+image_id: sha256:f2aed1c24f65f44c8638801e3a0ba46b61c1753f7a02f24bb8f22dcbaacad842
 
 build_args:
   - --exp-b12x
