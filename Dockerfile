@@ -553,15 +553,21 @@ RUN python3 /tmp/vllm-patches/patch_vllm_mrv2_speculator_cudagraph_pool.py .
 RUN VLLM_PATCH_B12X_C128A_ALIGNMENT="${VLLM_PATCH_B12X_C128A_ALIGNMENT}" \
     python3 /tmp/vllm-patches/patch_vllm_b12x_c128a_topk_alignment.py .
 
-# B12X cannot boot a hybrid model whose mamba page forces an aligned KV storage
-# block above its kernel page sizes (Qwen3.8-Coder390 TP=2 lands on 1664 =
-# 13x128). vLLM already splits such a block into supported kernel pages
-# (select_common_block_size -> prepare_kernel_block_sizes), but two validators
-# compare the STORAGE size against the KERNEL PAGE set and reject it first:
-# supports_block_size (via _check_aligned_block_size) and the paged-attention
-# impl's --block-size guard. Accept a storage size a supported kernel page
-# divides, leaving get_supported_kernel_block_sizes at the exact [64, 128] so
-# the split still happens. Skips refs without the B12X backend (idempotent).
+# TEMPORARY PATCH: B12X rejects the KV storage block that hybrid mamba alignment
+# produces. _align_hybrid_block_size rounds up to cover the mamba page using the
+# backend's quantum (64 for B12X), so Qwen3.8-Coder390 TP=2 lands on 1664 =
+# 13x128. vLLM already splits any larger storage block into supported kernel
+# pages (select_common_block_size -> prepare_kernel_block_sizes -> remapped
+# block table), so the kernels only ever see 128; but two validators compare the
+# STORAGE size against the KERNEL PAGE set and raise first: supports_block_size
+# (reached from _check_aligned_block_size) and the paged-attention impl's
+# --block-size guard. Accept a storage size that a supported kernel page
+# divides, leaving get_supported_kernel_block_sizes at exact [64, 128] so the
+# split still happens. Every B12X-aligned size is a multiple of 64, hence always
+# splittable; non-64-multiple sizes (e.g. FlashInfer's 1648) still fail closed.
+# Remove once supported refs accept post-alignment storage sizes natively, or
+# when B12X is dropped. Skips refs without the B12X backend (idempotent; an
+# unexpected anchor layout fails the build).
 RUN python3 /tmp/vllm-patches/patch_vllm_b12x_storage_block_split.py .
 
 RUN python3 /tmp/vllm-patches/patch_vllm_flashinfer_b12x_swigluoai.py .

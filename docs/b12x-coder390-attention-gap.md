@@ -289,6 +289,26 @@ So the KV tensors the kernels index are 128-token pages, not 1664, and the 13
 `page_size not in (64, 128)` gates in the flashinfer layer are satisfied without
 edits.
 
+**The fix is not tuned to 1664.** `_align_hybrid_block_size` derives
+`kernel_block_alignment_size` from the backend's smallest kernel page
+(`max(min(sizes), block_size)` = 64 for B12X) and `backend_block_alignment` as
+an `lcm` of those minimums, so every B12X-aligned storage size is a multiple of
+64. Since 64 is itself a supported kernel page, *every* such size is splittable:
+
+```
+  storage=   64 -> kernel=64
+  storage=  128 -> kernel=128
+  storage= 1600 -> kernel=64
+  storage= 1664 -> kernel=128
+  storage= 1728 -> kernel=64
+non-splittable multiples of 64: NONE
+```
+
+Only a size with no supported divisor keeps failing closed, which is what the
+FlashInfer quantum-16 path produces (1648 = 16 x 103, 103 prime). That is the
+desired asymmetry: the B12X arm becomes bootable, the misaligned FlashInfer
+alignment keeps its honest error.
+
 ### Why the aligned size is not stable at 1664
 
 `_align_hybrid_block_size` rounds the result to the backend's alignment quantum
