@@ -28,15 +28,21 @@ field_or_override() { # <ENV-SUFFIX> <resolved-value>
 # b12x revision, in precedence order:
 #   1. $B12X_KCACHE_ID_B12X_REV override
 #   2. /workspace/b12x-source-commit baked into the image
-#   3. flashinfer-python dist version
+#   3. b12x dist version (legacy images that still install b12x standalone)
+#   4. flashinfer-python dist version
 # b12x ships VENDORED inside flashinfer (flashinfer/experimental/b12x/): the
 # site-packages b12x/ is only a sys.meta_path alias shim with no dist
 # metadata, so `importlib.metadata.version("b12x")` always raises
-# PackageNotFoundError. flashinfer's version is the on-disk b12x identity.
+# PackageNotFoundError there, and the flashinfer version is the on-disk b12x
+# identity. The b12x dist probe stays ahead of it so an image that still ships
+# a real b12x wheel keys on that revision instead of on flashinfer's.
 resolve_b12x_rev() {
   local v="${B12X_KCACHE_ID_B12X_REV:-}"
   if [ -z "$v" ]; then
     v=$(cat /workspace/b12x-source-commit 2>/dev/null || true)
+  fi
+  if [ -z "$v" ]; then
+    v=$(pyver b12x)
   fi
   if [ -z "$v" ]; then
     v=$(pyver flashinfer-python)
