@@ -380,7 +380,7 @@ Not yet measured: decode throughput against `caaba0f`'s 32.2 vs 26.4 tok/s.
 The image itself was not rebuilt for this run — the patcher was injected
 in-container — so the Dockerfile wiring is still unexercised by a real build.
 
-### The same verification on the production nodes (GMU caveat)
+### The same verification on the production nodes (with a KV-pool caveat)
 
 A second run, on gx10-cb11/gx10-f1d8 (Rail B `.3` and `.4`) at the recipe's
 GMU 0.75, reproduced the same acceptance evidence with a healthy KV pool:
@@ -405,11 +405,13 @@ ValueError: No available memory for the cache blocks.
 
 Two lessons:
 
-- `gpu_memory_utilization` is a fraction of **total** UMA (~120.5 GiB), not of
-  free memory, and it must cover weights + activations + CUDA-graph profiling
-  *plus* KV blocks. 0.25 leaves ~30 GiB total, which the model alone consumes,
-  so the KV pool goes negative. Use the recipe's 0.75 on an idle node, or read
-  the `Available KV cache memory` line before picking anything lower.
+- `gpu_memory_utilization` sets the budget the engine must fit weights +
+  activations + CUDA-graph profiling **and** KV blocks into. Measured on this
+  model: GMU 0.25 left `-28.74 GiB` for KV; GMU 0.75 left `+70.51 GiB`. Those
+  two runs were on different nodes with different co-tenant load, so a single
+  "non-KV footprint" figure should not be inferred from them — read the
+  `Available KV cache memory` line on the node you actually intend to use
+  rather than computing a value.
 - Defect 5's acceptance evidence (1664 accepted, planner `(64, 128)`, graph
   capture 100%, zero CUDA errors) is independent of the KV-pool outcome — it
   appeared *before* the cache-sizing failure on the starved boot.
