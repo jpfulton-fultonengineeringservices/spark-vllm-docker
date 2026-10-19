@@ -4,6 +4,11 @@ Status: **open**. The `qwen3.8-27b-coder390-{2x,4x}` recipes serve again, but
 without B12X paged attention. This document records what broke, what was
 fixed, and the paths to restore the measured B12X win.
 
+To test the arm end to end, follow
+[`b12x-attention-arm-testing-runbook.md`](./b12x-attention-arm-testing-runbook.md)
+— unit tests, patcher-vs-image anchoring, the two gates, and the live boot with
+its acceptance criteria and failure triage.
+
 Applies to image `vllm-node-b12x:latest` (`a1fc4f18d3cb`, built 2026-10-16,
 `vllm 0.32.0rc1.dev301+g1ac942555.d20261016`, `flashinfer-python 0.7.2`).
 
