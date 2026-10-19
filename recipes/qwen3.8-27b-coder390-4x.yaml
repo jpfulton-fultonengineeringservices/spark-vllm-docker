@@ -39,6 +39,14 @@
 # path and no architecture allow-list, matching the sibling
 # recipes/qwen3.8-27b-nvfp4-dflash2.yaml for the same model family.
 #
+# Attention: no --attention-backend and --block-size 16 (image defaults).
+# Commit caaba0f's B12X paged-attention arm cannot boot this model in the
+# current image: BasePlatform._align_hybrid_block_size rewrites the block size
+# to fit the mamba page size, while B12xPagedAttentionBackend only accepts
+# page sizes 64/128 (v1/attention/backends/b12x.py:47), so
+# _check_aligned_block_size raises "Aligned KV cache block size 1664 is not
+# supported". See docs/b12x-coder390-attention-gap.md for the resolution paths.
+#
 # The `model:` id is synthetic (the checkpoint is not on the Hub); mods/fes-weights
 # presents /model as an HF hub-cache shim under this exact id, so
 # `vllm serve <id>` resolves offline with HF_HUB_OFFLINE=1.
@@ -134,8 +142,7 @@ command: |
     --async-scheduling \
     --dtype bfloat16 \
     --kv-cache-dtype fp8 \
-    --block-size 64 \
-    --attention-backend B12X \
+    --block-size 16 \
     --quantization modelopt_mixed \
     --load-format instanttensor \
     --max-model-len {max_model_len} \
