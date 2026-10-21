@@ -48,24 +48,58 @@
 # supported". See docs/b12x-coder390-attention-gap.md for the resolution paths.
 #
 # Image pin: image_id is the content ID of the build this recipe was validated
-# against (vllm 0.32.0rc1.dev301+g1ac942555, flashinfer 0.7.2, built
-# 2026-10-16). The `container:` tag alone cannot pin anything: tags are mutable
-# and an unrecognised tag falls back to an upstream pull ref. The launcher
-# refuses to start when the tag resolves to different content, which is what
-# caught the flag/loader/block-size drift documented above. After deliberately
+# against. The `container:` tag alone cannot pin anything: tags are mutable and
+# an unrecognised tag falls back to an upstream pull ref. The launcher refuses
+# to start when the tag resolves to different content, which is what caught the
+# flag/loader/block-size drift documented above. After deliberately
 # re-validating on a new image, update both `container:` and `image_id:`.
 #
-# Pin state (2026-10-19): this remains the last validated build. The B12X
-# storage-block patch and an NCCL install fix are committed in this repo but are
-# NOT in any image yet -- two rebuild attempts produced images that could not
-# serve. See docs/b12x-coder390-attention-gap.md, "Rebuilding this image: two
-# traps", for the two failure modes and the hard stop on reproducing this
-# vLLM commit from source. Do not repin until a rebuilt image has booted and
-# passed the acceptance table.
+# This pin is now a REPRODUCIBLE DERIVED IMAGE, not the upstream release.
+# Building `a1fc4f18` from source was never possible (its vLLM commit
+# 1ac942555 is gone from both vllm-project/vllm and the fork, and two source
+# rebuild attempts produced images that could not serve: NCCL 2.28.3 missing
+# ncclCommResume, then a fork HEAD needing an unreleased InstantTensor).
+# But the release artifact itself is public: eugr/spark-vllm:nightly-20261016
+# resolves to config sha256:a1fc4f18d3cb..., i.e. exactly the previously
+# pinned content, at vLLM 0.32.0rc1.dev301+g1ac942555 -- the same vLLM.
+#
+# The derived image is that base plus the installed-stage patches the release
+# build omits. Rebuild it with the committed script (it asserts the base still
+# resolves to a1fc4f18, gates the result, publishes, and verifies the digest):
+#   bash docker/build-coder390-derived-image.sh
+#   -> docker/Dockerfile.coder390-derived
+#
+# Stored in the node1 registry so the pin survives any upstream deletion:
+#   10.100.170.3:5000/spark-vllm:coder390-kr-20261019
+#
+# Validated live on gx10-node1/node2 (TP=2) before this pin: /v1/models 200,
+# max_model_len 1048576, CUDA-graph capture 35/35 + 2/2 FULL, zero
+# device-side/AcceleratorError/IllegalInstruction, and a 440,077-token prompt
+# that returned its buried passphrase (HTTP 200) -- past the 262144 native
+# window, so YaRN and the drafter's yarn rope both hold.
+#
+# NOTE the storage-block patch is INERT for this recipe: it runs FlashInfer
+# (--block-size 16, no --attention-backend), and the boot log shows
+# "Setting attention block size to 1648 tokens". The patch only matters for
+# the B12X paged-attention arm (docs/b12x-coder390-attention-gap.md).
 #
 # The `model:` id is synthetic (the checkpoint is not on the Hub); mods/fes-weights
 # presents /model as an HF hub-cache shim under this exact id, so
 # `vllm serve <id>` resolves offline with HF_HUB_OFFLINE=1.
+
+# Long-context YaRN: --hf-overrides scales the target's text_config rope to 4x
+# (rope_type yarn, factor 4.0, 262144 -> 1048576).
+#
+# The drafter needs the SAME scaling, and --hf-overrides cannot deliver it: dict
+# (non-callable) overrides stay target-only in SpeculativeConfig, so the draft
+# ModelConfig is built purely from its own config.json. mods/qwen3.8-coder390-dflash
+# therefore rewrites the staged drafter config to rope_type yarn / factor 4.0 —
+# this recipe is only usable past 262144 WITH that mod change (coupled, both must
+# ship together). Without it the drafter's cos/sin cache stays 262144 rows and the
+# first request beyond the native window dies:
+#   Assertion `index out of bounds: 0 <= ... < 262144` failed (device-side assert)
+# YaRN sizes its cache as original_max_position_embeddings * factor, so the
+# drafter's max_position_embeddings stays at the checkpoint's native 262144.
 
 recipe_version: "1"
 name: Qwen3.8-27B-Coder390-DFlash2 (4x)
@@ -98,7 +132,7 @@ defaults:
   host: 0.0.0.0
   tensor_parallel: 4
   gpu_memory_utilization: 0.75
-  max_model_len: 262144
+  max_model_len: 1048576
   max_num_seqs: 32
   max_num_batched_tokens: 16384
   max_cudagraph_capture_size: 256
@@ -129,6 +163,8 @@ env:
   # b12x-kcache archives it (roots.txt entry "torchinductor"); otherwise it
   # is ephemeral and every boot re-compiles the Triton kernels.
   TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
+  # Long-context YaRN: permit --max-model-len above the 262144 native cap.
+  VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
 
 # The draft's FP8 quantization is auto-detected from its own config.json's
 # quantization_config.quant_method ("fp8"); no --quantization flag is needed or
@@ -162,6 +198,7 @@ command: |
     --block-size 16 \
     --quantization modelopt_mixed \
     --load-format instanttensor \
+    --hf-overrides '{{"text_config":{{"rope_parameters":{{"mrope_interleaved":true,"mrope_section":[11,11,10],"partial_rotary_factor":0.25,"rope_theta":10000000,"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":262144}}}}}}' \
     --max-model-len {max_model_len} \
     --max-num-seqs {max_num_seqs} \
     --max-num-batched-tokens {max_num_batched_tokens} \
@@ -175,4 +212,5 @@ command: |
     --enable-auto-tool-choice \
     --enable-mfu-metrics \
     --kv-cache-metrics \
+    --kv-cache-metrics-sample 1.0 \
     --gpu-memory-utilization {gpu_memory_utilization}
