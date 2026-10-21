@@ -994,9 +994,11 @@ fi
 
 # Resolve registry distribution target now that .env (DOTENV_*) is loaded by
 # load_env_if_exists / autodiscover. A checkout .env carrying REGISTRY= or
-# IMAGE_NAME= overrides the baked defaults; otherwise the node1 registry stands.
-REGISTRY="${DOTENV_REGISTRY:-$DEFAULT_REGISTRY}"
-IMAGE_NAME="${DOTENV_IMAGE_NAME:-$DEFAULT_IMAGE_NAME}"
+# IMAGE_NAME= overrides the baked defaults; a shell env REGISTRY=/IMAGE_NAME=
+# wins over both (mirrors docker/build-coder390-derived-image.sh). Otherwise
+# the node1 registry stands.
+REGISTRY="${REGISTRY:-${DOTENV_REGISTRY:-$DEFAULT_REGISTRY}}"
+IMAGE_NAME="${IMAGE_NAME:-${DOTENV_IMAGE_NAME:-$DEFAULT_IMAGE_NAME}}"
 
 # Validate flag combinations
 if [ -n "$VLLM_PRS" ]; then
