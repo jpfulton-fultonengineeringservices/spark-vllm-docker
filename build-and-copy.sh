@@ -47,7 +47,6 @@ B12X_CACHEBUST=""
 B12X_FROM_PYPI=0
 FLASHINFER_REF="main"
 FLASHINFER_REF_SET=false
-TMP_IMAGE=""
 PARALLEL_COPY=false
 EXP_MXFP4=false
 VLLM_PRS=""
@@ -88,6 +87,11 @@ WITH_NIXL=false
 NIXL_RUNTIME_IMAGE="ghcr.io/fulton-engineering-services/dgx-spark-wheels/nixl-runtime:24.04-cu13.3-sm121"
 NETWORK_ARG=""
 WHEELS_REPO="eugr/spark-vllm-docker"
+# Local registry distribution target (node1 Rail A, trusted via /etc/docker/certs.d).
+# Fork does not read cluster.env (separate repo boundary), so defaults are baked;
+# a checkout .env may override via REGISTRY=/IMAGE_NAME= (resolved after env load below).
+DEFAULT_REGISTRY="10.100.170.3:5000"
+DEFAULT_IMAGE_NAME="spark-vllm"
 FLASHINFER_RELEASE_TAG="prebuilt-flashinfer-current"
 VLLM_RELEASE_TAG="prebuilt-vllm-current"
 # Space-separated list of GPU architectures for which prebuilt wheels are available
@@ -103,10 +107,6 @@ FLASHINFER_STAGING_DIR=""
 VLLM_STAGING_DIR=""
 
 cleanup() {
-    if [ -n "$TMP_IMAGE" ] && [ -f "$TMP_IMAGE" ]; then
-        echo "Cleaning up temporary image $TMP_IMAGE"
-        rm -f "$TMP_IMAGE"
-    fi
     if [ -n "$FLASHINFER_STAGING_DIR" ] && [ -d "$FLASHINFER_STAGING_DIR" ]; then
         rm -rf "$FLASHINFER_STAGING_DIR"
     fi
@@ -264,25 +264,25 @@ prepare_local_vllm_source() {
     echo "Using clean local vLLM source at commit $VLLM_SOURCE_COMMIT."
 }
 
-get_remote_image_id() {
-    local host="$1"
-    local image="$2"
-    ssh "${SSH_USER}@${host}" "docker image inspect --format '{{.Id}}' ${image}" 2>/dev/null
+registry_ref() {
+    echo "${REGISTRY}/${IMAGE_NAME}:$1"
 }
 
-copy_to_host() {
-    local host="$1"
-    echo "Loading image into ${SSH_USER}@${host}..."
-    local host_copy_start host_copy_end host_copy_time
-    host_copy_start=$(date +%s)
-    if cat "$TMP_IMAGE" | ssh "${SSH_USER}@${host}" "docker load"; then
-        host_copy_end=$(date +%s)
-        host_copy_time=$((host_copy_end - host_copy_start))
-        printf "Copy to %s completed in %02d:%02d:%02d\n" "$host" $((host_copy_time/3600)) $((host_copy_time%3600/60)) $((host_copy_time%60))
-    else
-        echo "Copy to $host failed."
-        return 1
-    fi
+# Config digest (== `docker image inspect .Id`) of the content the registry currently
+# serves under the tag, or empty when the tag is absent / registry unreachable.
+# Mirrors docker/build-coder390-derived-image.sh's PUBLISHED_ID floor and
+# cluster-config spark-recipe.sh registry_manifest_config_digest. A bare tag check
+# cannot answer "does the registry hold THIS content?" - only the config digest can.
+registry_published_id() {
+    local tag="$1"
+    curl -ks -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+        -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+        "https://${REGISTRY}/v2/${IMAGE_NAME}/manifests/${tag}" 2>/dev/null \
+        | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin)["config"]["digest"])
+except Exception:
+    pass' 2>/dev/null
 }
 
 get_local_mtime() {
@@ -661,9 +661,9 @@ usage() {
     echo "  --torchvision-version <ver>   : Optional torchvision version (default: '${TORCHVISION_VERSION}')"
     echo "  --torchaudio-version <ver>    : Optional torchaudio version; use 'none' to omit it (default: '${TORCHAUDIO_VERSION}')"
     echo "  --flashinfer-ref <ref>        : FlashInfer commit SHA, branch or tag (default: 'main')"
-    echo "  -c, --copy-to [hosts]         : Copy the image. Omit hosts to use COPY_HOSTS from .env or autodiscovery; matching image IDs are skipped."
+    echo "  -c, --copy-to [hosts]         : Push the image to the local registry. Omit hosts to use COPY_HOSTS from .env or autodiscovery (hosts gate the push; peers pull it via run-recipe.py)."
     echo "      --copy-to-host            : Alias for --copy-to (backwards compatibility)."
-    echo "      --copy-parallel           : With -c, copy to all resolved hosts concurrently."
+    echo "      --copy-parallel           : Accepted for compatibility; distribution now goes through the local registry (single push + per-node pull)."
     echo "  -j, --build-jobs <jobs>       : Number of concurrent build jobs (default: ${BUILD_JOBS})"
     echo "  -u, --user <user>             : Username for ssh command (default: \$USER)"
     echo "  --tf5                         : Deprecated compatibility flag; tag defaults to 'vllm-node-tf5' (aliases: --pre-tf, --pre-transformers)"
@@ -991,6 +991,12 @@ if [ "$COPY_TO_FLAG" = true ] && [ "${#COPY_HOSTS[@]}" -eq 0 ]; then
         echo "Autodiscovered hosts: ${COPY_HOSTS[*]}"
     fi
 fi
+
+# Resolve registry distribution target now that .env (DOTENV_*) is loaded by
+# load_env_if_exists / autodiscover. A checkout .env carrying REGISTRY= or
+# IMAGE_NAME= overrides the baked defaults; otherwise the node1 registry stands.
+REGISTRY="${DOTENV_REGISTRY:-$DEFAULT_REGISTRY}"
+IMAGE_NAME="${DOTENV_IMAGE_NAME:-$DEFAULT_IMAGE_NAME}"
 
 # Validate flag combinations
 if [ -n "$VLLM_PRS" ]; then
@@ -1493,68 +1499,29 @@ fi
 # =====================================================
 COPY_TIME=0
 if [ "${#COPY_HOSTS[@]}" -gt 0 ]; then
-    echo "Checking image '$IMAGE_TAG' on ${#COPY_HOSTS[@]} host(s): ${COPY_HOSTS[*]}"
-    COPY_START=$(date +%s)
-
     if ! LOCAL_IMAGE_ID=$(docker image inspect --format '{{.Id}}' "$IMAGE_TAG"); then
         echo "Error: Local image '$IMAGE_TAG' not found."
         exit 1
     fi
 
-    COPY_TARGETS=()
-    for host in "${COPY_HOSTS[@]}"; do
-        REMOTE_IMAGE_ID=$(get_remote_image_id "$host" "$IMAGE_TAG" || true)
-        if [ -n "$REMOTE_IMAGE_ID" ] && [ "$REMOTE_IMAGE_ID" = "$LOCAL_IMAGE_ID" ]; then
-            echo "Image '$IMAGE_TAG' is already up to date on ${SSH_USER}@${host}; skipping."
-        else
-            if [ -n "$REMOTE_IMAGE_ID" ]; then
-                echo "Image '$IMAGE_TAG' differs on ${SSH_USER}@${host}; will copy."
-            else
-                echo "Image '$IMAGE_TAG' not found on ${SSH_USER}@${host}; will copy."
-            fi
-            COPY_TARGETS+=("$host")
-        fi
-    done
-
-    if [ "${#COPY_TARGETS[@]}" -eq 0 ]; then
-        COPY_END=$(date +%s)
-        COPY_TIME=$((COPY_END - COPY_START))
-        echo "All remote images are up to date; skipping save/copy."
+    if [ ! -f "/etc/docker/certs.d/${REGISTRY}/ca.crt" ]; then
+        echo "Error: registry ${REGISTRY} is not trusted on this build host." >&2
+        echo "       Run setup-node1-registry.sh (client-trust step) here first." >&2
+        exit 1
+    fi
+    REG_REF="${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+    PUBLISHED_ID="$(registry_published_id "$IMAGE_TAG")"
+    if [ -n "$PUBLISHED_ID" ] && [ "$PUBLISHED_ID" = "$LOCAL_IMAGE_ID" ]; then
+        echo "Registry already publishes $REG_REF ($LOCAL_IMAGE_ID); skipping push."
+        COPY_TIME=0
     else
-        echo "Copying image '$IMAGE_TAG' to ${#COPY_TARGETS[@]} host(s): ${COPY_TARGETS[*]}"
-        if [ "$PARALLEL_COPY" = true ]; then
-            echo "Parallel copy enabled."
-        fi
-
-        TMP_IMAGE=$(mktemp -t vllm_image.XXXXXX)
-        echo "Saving image locally to $TMP_IMAGE..."
-        docker save -o "$TMP_IMAGE" "$IMAGE_TAG"
-
-        if [ "$PARALLEL_COPY" = true ]; then
-            PIDS=()
-            for host in "${COPY_TARGETS[@]}"; do
-                copy_to_host "$host" &
-                PIDS+=($!)
-            done
-            COPY_FAILURE=0
-            for pid in "${PIDS[@]}"; do
-                if ! wait "$pid"; then
-                    COPY_FAILURE=1
-                fi
-            done
-            if [ "$COPY_FAILURE" -ne 0 ]; then
-                echo "One or more copies failed."
-                exit 1
-            fi
-        else
-            for host in "${COPY_TARGETS[@]}"; do
-                copy_to_host "$host"
-            done
-        fi
-
+        COPY_START=$(date +%s)
+        echo "Pushing image '$IMAGE_TAG' to local registry as $REG_REF ..."
+        docker tag "$IMAGE_TAG" "$REG_REF" || { echo "docker tag $IMAGE_TAG -> $REG_REF failed."; exit 1; }
+        docker push "$REG_REF" || { echo "docker push $REG_REF failed (registry reachable? certs trusted?)."; exit 1; }
         COPY_END=$(date +%s)
         COPY_TIME=$((COPY_END - COPY_START))
-        echo "Copy complete."
+        echo "Push complete: $REG_REF"
     fi
 else
     echo "No host specified, skipping copy."

@@ -107,6 +107,11 @@ BUILD_SCRIPT = SCRIPT_DIR / "build-and-copy.sh"
 DOWNLOAD_SCRIPT = SCRIPT_DIR / "hf-download.sh"
 AUTODISCOVER_SCRIPT = SCRIPT_DIR / "autodiscover.sh"
 ENV_FILE = None  # Will be set from CLI argument or default
+# Local registry distribution target (node1 Rail A, trusted via /etc/docker/certs.d).
+# The fork intentionally does not read cluster.env (separate repo boundary); a checkout
+# .env may override via REGISTRY=/IMAGE_NAME=, mirroring build-and-copy.sh.
+DEFAULT_REGISTRY = "10.100.170.3:5000"
+DEFAULT_REGISTRY_IMAGE_NAME = "spark-vllm"
 DISTRIBUTED_EXECUTOR_RE = re.compile(
     r"--distributed-executor-backend(?:=|\s+)\S+"
 )
@@ -377,14 +382,44 @@ def check_image_exists(image: str, host: str | None = None) -> bool:
     return result.returncode == 0
 
 
+def pull_from_registry(container: str, reg_ref: str, host: str | None = None) -> bool:
+    """Pull an image from the local registry and retag it to the plain container name.
+
+    Mirrors check_image_exists's local/remote split (identical ssh options). The
+    plain-tag retag keeps check_image_exists(container, worker) and
+    launch-cluster.sh's inspect-based .Id comparison working unchanged.
+    """
+    if host:
+        result = subprocess.run(
+            [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "StrictHostKeyChecking=no",
+                host,
+                f"docker pull '{reg_ref}' && docker tag '{reg_ref}' '{container}'",
+            ],
+            capture_output=True,
+        )
+        return result.returncode == 0
+    pull = subprocess.run(["docker", "pull", reg_ref], capture_output=True)
+    if pull.returncode != 0:
+        return False
+    retag = subprocess.run(["docker", "tag", reg_ref, container], capture_output=True)
+    return retag.returncode == 0
+
+
 def build_image(
-    image: str, copy_to: list[str] | None = None, build_args: list[str] | None = None
+    image: str, copy_targets: list[str] | None = None, build_args: list[str] | None = None
 ) -> bool:
     """
     Build the container image using build-and-copy.sh.
 
-    Delegates to the build-and-copy.sh script which handles multi-stage builds,
-    cache optimization, and distribution to worker nodes.
+    Delegates to the build-and-copy.sh script which handles multi-stage builds and
+    cache optimization. Builds locally only: distribution to workers no longer happens
+    here. The registry push (build-and-copy.sh -c) and the per-node pull
+    (distribute_image below) are the two halves of image distribution.
 
     EXTENSIBILITY:
     - To add new build options: Add them to build_args in the recipe's build_args field
@@ -399,11 +434,12 @@ def build_image(
 
     Args:
         image: Target image tag
-        copy_to: List of worker hostnames to copy image to after build
+        copy_targets: Accepted for compatibility; distribution now happens via the
+            registry (distribute_image), not inside build-and-copy.sh.
         build_args: Extra arguments passed to build-and-copy.sh
 
     Returns:
-        True if build (and copy) succeeded, False otherwise
+        True if the local build succeeded, False otherwise
     """
     if not BUILD_SCRIPT.exists():
         print(f"Error: Build script not found: {BUILD_SCRIPT}")
@@ -412,17 +448,34 @@ def build_image(
     cmd = [str(BUILD_SCRIPT), "-t", image]
     if build_args:
         cmd.extend(build_args)
-    if copy_to:
-        cmd.extend(["--copy-to", ",".join(copy_to), "--copy-parallel"])
 
     print(f"Building image '{image}'...")
     if build_args:
         print(f"Build args: {' '.join(build_args)}")
-    if copy_to:
-        print(f"Will copy to: {', '.join(copy_to)}")
 
     result = subprocess.run(cmd)
     return result.returncode == 0
+
+
+def distribute_image(container: str, reg_ref: str, copy_targets: list[str]) -> bool:
+    """Pull an image from the local registry onto the head and every worker.
+
+    build-and-copy.sh -c has already published the exact local content to the registry
+    (digest-skip guarantees the tag holds what the local tag resolves to). Pulling by
+    tag and retagging to the plain recipe name keeps check_image_exists and
+    launch-cluster.sh's .Id verification working unchanged.
+
+    Returns True only if the head pull and every worker pull succeeded.
+    """
+    print(f"Pulling {reg_ref} onto head + workers: {', '.join(copy_targets)}")
+    if not pull_from_registry(container, reg_ref):
+        print(f"Error: Failed to pull '{reg_ref}' onto head")
+        return False
+    for worker in copy_targets:
+        if not pull_from_registry(container, reg_ref, worker):
+            print(f"Error: Failed to pull '{reg_ref}' onto {worker}")
+            return False
+    return True
 
 
 def download_model(model: str, copy_to: list[str] | None = None) -> bool:
@@ -657,6 +710,13 @@ def load_env_file() -> dict[str, str]:
                     value = value.strip().strip('"').strip("'")
                     env[key.strip()] = value
     return env
+
+
+def registry_ref(env: dict[str, str], container: str) -> str:
+    """Registry reference for a container tag (e.g. 10.100.170.3:5000/spark-vllm:vllm-node-b12x)."""
+    registry = env.get("REGISTRY") or DEFAULT_REGISTRY
+    name = env.get("IMAGE_NAME") or DEFAULT_REGISTRY_IMAGE_NAME
+    return f"{registry}/{name}:{container}"
 
 
 def run_autodiscover() -> dict[str, str] | None:
@@ -1251,41 +1311,37 @@ Examples:
 
     # --- Build Phase ---
     if args.build_only or args.setup or args.force_build:
+        reg_ref = registry_ref(load_env_file(), container)
         if args.dry_run:
             image_exists = check_image_exists(container)
             if args.force_build or not image_exists:
                 print(f"Would build container: {container}")
                 if copy_targets:
-                    print(f"  Would copy to: {', '.join(copy_targets)}")
+                    print(f"  Would pull {reg_ref} onto head + workers: {', '.join(copy_targets)}")
             else:
                 print(f"Container '{container}' already exists locally.")
                 if copy_targets:
-                    print(f"  Would check/copy to workers: {', '.join(copy_targets)}")
+                    print(f"  Would pull {reg_ref} onto head + workers: {', '.join(copy_targets)}")
             print()
         else:
             image_exists = check_image_exists(container)
 
             if args.force_build or not image_exists:
                 print("=== Building Container ===")
-                if not build_image(container, copy_targets, build_args):
+                if not build_image(container, copy_targets, build_args=build_args):
                     print("Error: Failed to build container")
                     return 1
                 print()
             else:
                 print(f"Container '{container}' already exists locally.")
-                # Check worker nodes in cluster mode
-                if copy_targets:
-                    missing_on = []
-                    for worker in copy_targets:
-                        if not check_image_exists(container, worker):
-                            missing_on.append(worker)
-                    if missing_on:
-                        print(f"Container missing on workers: {', '.join(missing_on)}")
-                        print("Building and copying...")
-                        if not build_image(container, missing_on, build_args):
-                            print("Error: Failed to build/copy container")
-                            return 1
-                print()
+            # Distribution: build-and-copy.sh -c published the exact local content to
+            # the registry (digest-skip guarantees the tag holds what the local tag
+            # resolves to). Pull it onto head and every worker, retagging to the plain
+            # recipe name. This replaces the old build_image(missing_on, ...) copy path.
+            if copy_targets:
+                if not distribute_image(container, reg_ref, copy_targets):
+                    return 1
+            print()
 
         if args.build_only:
             print("Build complete." if not args.dry_run else "")
