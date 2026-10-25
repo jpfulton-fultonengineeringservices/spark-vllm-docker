@@ -67,7 +67,12 @@ class MooncakeStoreCoordinator:
         hash_block_size: int,
         use_eagle: bool = False,
         retention_interval: int | None = None,
+        excluded_group_ids: set[int] | frozenset[int] = frozenset(),
     ) -> None:
+        # Groups excluded from store IO (the speculative drafter's). They must
+        # also be dropped from hit convergence: they hold no keys, so including
+        # them makes every prefix lookup converge to zero.
+        self.excluded_group_ids = frozenset(excluded_group_ids)
         assert all(
             g.kv_cache_spec.block_size % hash_block_size == 0 for g in kv_cache_groups
         ), "block_size must be divisible by hash_block_size"
@@ -104,6 +109,10 @@ class MooncakeStoreCoordinator:
         """
         attention_groups: list[SpecGroup] = []
         for i, g in enumerate(self.kv_cache_groups):
+            # Excluded groups never hold stored keys, so a hit check that
+            # includes them always converges to zero.
+            if i in self.excluded_group_ids:
+                continue
             spec = _unwrap_spec(g.kv_cache_spec)
             manager_cls = KVCacheSpecRegistry.get_manager_class(spec)
             assert manager_cls is not None, (

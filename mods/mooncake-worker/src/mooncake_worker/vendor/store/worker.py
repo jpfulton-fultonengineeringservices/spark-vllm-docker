@@ -1843,8 +1843,9 @@ class MooncakeStoreWorker:
 
         self._kv_cache_config = kv_cache_config
         self.token_dbs: list[ChunkedTokenDatabase] = []
-        # Groups holding the speculative drafter's KV: never stored, loaded or
-        # looked up. Populated at registration (see _drafter_group_ids).
+        # Groups holding the speculative drafter's KV: never stored, loaded,
+        # looked up, or considered by hit convergence. Resolved in __init__
+        # (see _drafter_group_ids) before the coordinator is constructed.
         self._excluded_group_ids: set[int] = set()
 
         # a capacity-only instance does not need below utils
@@ -1871,6 +1872,10 @@ class MooncakeStoreWorker:
                 )
             ]
         self._kv_cache_groups: list[KVCacheGroupSpec] = groups
+        # Resolve the drafter's groups BEFORE the coordinator is built: its hit
+        # convergence must not consider groups that hold no stored keys, or
+        # every prefix lookup converges to zero.
+        self._excluded_group_ids = self._drafter_group_ids()
         # Databases must exist before register_kv_caches installs their
         # per-group segment addressing.
         self._init_group_databases()
@@ -1923,6 +1928,7 @@ class MooncakeStoreWorker:
             hash_block_size=self.hash_block_size,
             use_eagle=use_eagle,
             retention_interval=envs.VLLM_PREFIX_CACHE_RETENTION_INTERVAL,
+            excluded_group_ids=self._excluded_group_ids,
         )
         # One ChunkedTokenDatabase per group; addresses populated in
         # register_kv_caches once the kv-cache layout is known. Each group's
@@ -2126,7 +2132,8 @@ class MooncakeStoreWorker:
         # acceptance collapses to zero, live 2026-10-25). Groups are dropped
         # wholesale at the put/get loops (self._excluded_group_ids) — the
         # per-group addressing below still needs every group's descriptors.
-        self._excluded_group_ids = self._drafter_group_ids()
+        # (_excluded_group_ids is resolved in __init__ before the coordinator
+        # is built; recomputing it here would desynchronize the two.)
 
         def _repr_tensor(v: torch.Tensor | list[torch.Tensor]) -> torch.Tensor:
             assert isinstance(v, torch.Tensor | list)

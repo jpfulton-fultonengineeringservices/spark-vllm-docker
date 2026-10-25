@@ -71,3 +71,31 @@ def test_obsolete_layer_name_detector_removed() -> None:
     """The name-based detector was a no-op here (num_hidden_layers None)."""
     assert "_drafter_layer_names" not in WORKER_SRC
     assert "MOONCAKE_STORE_LAYOUT_PROBE" not in WORKER_SRC
+
+
+COORD_SRC = (gates.vendor_dir() / "coordinator.py").read_text()
+
+
+def test_coordinator_excludes_groups_from_hit_convergence() -> None:
+    """Excluded groups must not participate in prefix-hit convergence.
+
+    They never hold stored keys, so including them makes every lookup converge
+    to zero — measured live as 686,878 external queries with 0 hits.
+    """
+    assert "excluded_group_ids" in COORD_SRC
+    assert "self.excluded_group_ids = frozenset(excluded_group_ids)" in COORD_SRC
+    # The skip must precede spec/manager resolution in _verify_and_split.
+    idx = COORD_SRC.index("def _verify_and_split_kv_cache_groups")
+    body = COORD_SRC[idx : COORD_SRC.index("def find_longest_cache_hit", idx)]
+    assert "if i in self.excluded_group_ids:" in body
+    assert body.index("if i in self.excluded_group_ids:") < body.index(
+        "spec = _unwrap_spec(g.kv_cache_spec)"
+    )
+
+
+def test_worker_resolves_exclusion_before_coordinator() -> None:
+    """The set must exist before the coordinator is constructed, or it goes stale."""
+    i_excl = WORKER_SRC.index("self._excluded_group_ids = self._drafter_group_ids()")
+    i_coord = WORKER_SRC.index("self.coord = MooncakeStoreCoordinator(")
+    i_kwarg = WORKER_SRC.index("excluded_group_ids=self._excluded_group_ids,")
+    assert i_excl < i_coord < i_kwarg
