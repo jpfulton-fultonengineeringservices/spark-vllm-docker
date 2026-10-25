@@ -75,13 +75,13 @@ def install(
 
     vendor = gates.verify_vendor(package_root)
 
+    pre_install_md5 = gates.md5_of(paths.store_dir / "worker.py")
     state = gates.classify_installed(paths.store_dir / "worker.py")
     if state == "already_ported":
         return f"already installed (worker md5={gates.MD5_MOD_WORKER})"
     if state == "unknown":
-        actual = gates.md5_of(paths.store_dir / "worker.py")
         raise InstallError(
-            f"installed worker md5 {actual} is not a known base"
+            f"installed worker md5 {pre_install_md5} is not a known base"
             f" (stock={','.join(gates.MD5_STOCK_WORKERS)},"
             f" ported={gates.MD5_MOD_WORKER});"
             " re-port the vendored set against the new image — do NOT blind-overwrite"
@@ -99,7 +99,7 @@ def install(
 
     return (
         f"installed host-staged store package (8 files;"
-        f" worker {gates.MD5_STOCK_WORKER} -> {gates.MD5_MOD_WORKER})"
+        f" worker {pre_install_md5} -> {gates.MD5_MOD_WORKER})"
     )
 
 
@@ -144,13 +144,13 @@ def install_p2p(site: str | Path = VLLM_SITE_DEFAULT, *, package_root: Path | No
     facade = p2p_dir / "mooncake_connector.py"
     if not facade.is_file():
         raise InstallError(f"image P2P facade missing: {facade}")
+    pre_install_md5 = gates.md5_of(facade)
     state = gates.classify_p2p_installed(facade)
     if state == "p2p_ported":
         return f"already installed (facade md5={gates.MD5_MOD_P2P_CONNECTOR})"
     if state == "unknown":
-        actual = gates.md5_of(facade)
         raise InstallError(
-            f"installed p2p facade md5 {actual} is not a known base"
+            f"installed p2p facade md5 {pre_install_md5} is not a known base"
             f" (stock={','.join(gates.MD5_STOCK_P2P_CONNECTORS)},"
             f" ported={gates.MD5_MOD_P2P_CONNECTOR});"
             " re-port the vendored set against the new image — do NOT blind-overwrite"
@@ -165,8 +165,7 @@ def install_p2p(site: str | Path = VLLM_SITE_DEFAULT, *, package_root: Path | No
     return (
         f"installed P2P host-staged MooncakeConnector package"
         f" ({len(gates.P2P_PACKAGE_FILES)} files;"
-        f" facade {gates.MD5_STOCK_P2P_CONNECTOR[:12]}… ->"
-        f" {gates.MD5_MOD_P2P_CONNECTOR})"
+        f" facade {pre_install_md5} -> {gates.MD5_MOD_P2P_CONNECTOR})"
     )
 
 
