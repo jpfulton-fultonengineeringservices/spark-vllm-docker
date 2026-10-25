@@ -634,6 +634,7 @@ class KVCacheStoreSendingThread(KVTransferThread):
         record_operation: Callable[..., None] | None = None,
         host_staging: bool = False,
         staging_put_pool: _StagingSlotPool | None = None,
+        excluded_group_ids: set[int] | frozenset[int] = frozenset(),
     ):
         super().__init__(
             store,
@@ -644,6 +645,8 @@ class KVCacheStoreSendingThread(KVTransferThread):
             name="KVCacheStoreSendingThread",
             record_operation=record_operation,
         )
+        # Speculative-drafter groups: never saved (see _drafter_group_ids).
+        self._excluded_group_ids = excluded_group_ids
         # Only ranks with identical group bytes may stripe PUTs (e.g., MLA).
         self.group_put_steps = group_put_steps
         self.coord = coord
@@ -796,6 +799,10 @@ class KVCacheStoreSendingThread(KVTransferThread):
         )
         saved = self._saved_offset.get(req_meta.req_id, 0)
         for g_idx, db in enumerate(self.token_databases):
+            if g_idx in self._excluded_group_ids:
+                # Speculative drafter: decode-local, never stored (see
+                # _drafter_group_ids).
+                continue
             group_blocks = req_meta.block_ids[g_idx]
             # Distribute across ranks by the same rule as normal chunks.
             put_step = self.group_put_steps[g_idx]
@@ -1078,6 +1085,10 @@ class KVCacheStoreSendingThread(KVTransferThread):
             kv_event_block_hashes: list[BlockHash] = []
             group_indices: list[int] = []
             for g_idx, db in enumerate(self.token_databases):
+                if g_idx in self._excluded_group_ids:
+                    # Speculative drafter: decode-local, never stored (see
+                    # _drafter_group_ids).
+                    continue
                 # Rotate the stride phase per group to balance load across ranks.
                 put_step = self.group_put_steps[g_idx]
                 put_step_rank = (self.tp_rank + g_idx) % put_step
@@ -1298,6 +1309,7 @@ class KVCacheStoreRecvingThread(KVTransferThread):
         request_queue: queue.Queue[Any] | None = None,
         host_staging: bool = False,
         staging_get_pool: _StagingSlotPool | None = None,
+        excluded_group_ids: set[int] | frozenset[int] = frozenset(),
     ):
         super().__init__(
             store,
@@ -1309,6 +1321,8 @@ class KVCacheStoreRecvingThread(KVTransferThread):
             record_operation=record_operation,
             request_queue=request_queue,
         )
+        # Speculative-drafter groups: never loaded (see _drafter_group_ids).
+        self._excluded_group_ids = excluded_group_ids
         self._host_staging = host_staging
         # _invalid_block_ids can be access by both the Worker and RecvingThread
         self._invalid_block_ids_lock = threading.Lock()
@@ -1481,6 +1495,10 @@ class KVCacheStoreRecvingThread(KVTransferThread):
         key_list: list[str] = []
         block_id_list: list[int] = []
         for g_idx, db in enumerate(self.token_databases):
+            if g_idx in self._excluded_group_ids:
+                # Speculative drafter: never loaded from the store — its KV is
+                # rebuilt every decode (see _drafter_group_ids).
+                continue
             mask = load_mask_per_group[g_idx]
             chunks: list[tuple[int, int]] = []
             for start, end, block_hash in db.process_tokens(
@@ -1825,6 +1843,9 @@ class MooncakeStoreWorker:
 
         self._kv_cache_config = kv_cache_config
         self.token_dbs: list[ChunkedTokenDatabase] = []
+        # Groups holding the speculative drafter's KV: never stored, loaded or
+        # looked up. Populated at registration (see _drafter_group_ids).
+        self._excluded_group_ids: set[int] = set()
 
         # a capacity-only instance does not need below utils
         if self._capacity_only:
@@ -1850,6 +1871,9 @@ class MooncakeStoreWorker:
                 )
             ]
         self._kv_cache_groups: list[KVCacheGroupSpec] = groups
+        # Databases must exist before register_kv_caches installs their
+        # per-group segment addressing.
+        self._init_group_databases()
 
     def _alloc_staging_buffer(self) -> None:
         num_slots = self._staging_num_slots
@@ -1879,6 +1903,14 @@ class MooncakeStoreWorker:
             "get",
         )
 
+    def _init_group_databases(self) -> None:
+        """Create the coordinator and one ChunkedTokenDatabase per KV group.
+
+        Called from ``__init__`` so the databases exist before
+        ``register_kv_caches`` installs their segment addressing (previously
+        they were created inside ``_alloc_staging_buffer``, i.e. after
+        registration, which forced the single-segment fallback).
+        """
         spec_cfg = getattr(self._vllm_config, "speculative_config", None)
         use_eagle = bool(
             spec_cfg.use_eagle()
@@ -1917,7 +1949,9 @@ class MooncakeStoreWorker:
                 dataclasses.replace(
                     metadata,
                     group_id=g_idx,
-                    tp_rank=self.tp_rank // self._group_tp_replication_factors[g_idx],
+                    tp_rank=(
+                        self.tp_rank // self._group_tp_replication_factors[g_idx]
+                    ),
                 ),
                 g.kv_cache_spec.block_size,
                 hash_block_size=self.hash_block_size,
@@ -1989,6 +2023,68 @@ class MooncakeStoreWorker:
             for g_idx, db in enumerate(self.token_dbs)
         )
 
+    def _target_num_hidden_layers(self) -> int | None:
+        """The target model's decoder-layer count, or None when undetectable.
+
+        Qwen3.5-style VL checkpoints nest ``num_hidden_layers`` under
+        ``text_config``; flat hf_config's attribute is None there (probe
+        2026-10-25: LAYOUT-PROBE num_hidden_layers=None with text_config=64).
+        """
+        hf_cfg = getattr(self._vllm_config.model_config, "hf_config", None)
+        if hf_cfg is None:
+            return None
+        direct = getattr(hf_cfg, "num_hidden_layers", None)
+        if direct is not None:
+            return int(direct)
+        text_cfg = getattr(hf_cfg, "text_config", None)
+        nested = getattr(text_cfg, "num_hidden_layers", None)
+        return int(nested) if nested is not None else None
+
+    def _drafter_group_ids(self) -> set[int]:
+        """Indices of ``_kv_cache_groups`` holding speculative-drafter layers.
+
+        The drafter builds its own KV during decode and is never shipped or
+        stored; a store load that sweeps its group corrupts it (spec-decode
+        acceptance collapses to zero, live 2026-10-25).
+
+        Detection is name-disjointness (the P2P rule, 1a580fb08c): a group is
+        the drafter's when it has layer indices and none of them falls in
+        [0, num_hidden_layers) of the target — probe ground truth: target
+        layers live at 0..63 under ``language_model.model.layers.N``, the
+        drafter's at 64..68 under ``model.layers.N``. Falls back to layer
+        count via ``_target_num_hidden_layers`` (handles the nested
+        text_config). Fail-safe: empty set on any detection failure, so a
+        target group is never silently dropped.
+        """
+        try:
+            spec_cfg = getattr(self._vllm_config, "speculative_config", None)
+            if spec_cfg is None or not self._kv_cache_groups:
+                return set()
+            boundary = self._target_num_hidden_layers()
+            if boundary is None:
+                return set()
+            drafter: set[int] = set()
+            for g_idx, group in enumerate(self._kv_cache_groups):
+                indices = {
+                    extract_layer_index(name) for name in group.layer_names
+                }
+                if indices and all(idx >= boundary for idx in indices):
+                    drafter.add(g_idx)
+            if drafter:
+                logger.info(
+                    "Mooncake: excluding speculative-drafter KV group(s) %s "
+                    "from store put/get (layers at/above target "
+                    "num_hidden_layers=%d)",
+                    sorted(drafter),
+                    boundary,
+                )
+            return drafter
+        except Exception:
+            logger.exception(
+                "Mooncake: drafter-group detection failed; including all groups"
+            )
+            return set()
+
     def register_cross_layers_kv_caches(self, kv_cache: torch.Tensor) -> None:
         """Register a cross-layers KV cache tensor.
 
@@ -1997,57 +2093,6 @@ class MooncakeStoreWorker:
         the correct single-segment result (block_len = page_size * num_layers).
         """
         self.register_kv_caches({"__cross_layer__": kv_cache})
-
-    def _drafter_layer_names(
-        self,
-        kv_caches: dict[str, torch.Tensor | list[torch.Tensor]],
-    ) -> set[str]:
-        """Return the speculative drafter's KV layer names (empty when none).
-
-        Port of the P2P drafter exclusion (1a580fb08c). The draft model is not
-        a KV-cache group, but its tensors still arrive in ``kv_caches``; a
-        store load that sweeps them corrupts the drafter's KV, which shows up
-        as spec-decode acceptance collapsing to zero (MAL 1.00, every
-        per-position rate 0.000) right after the first load while the target's
-        own output stays coherent — live 2026-10-25.
-
-        Detection is fail-safe: only with speculative_config set, and only for
-        layers whose index is at/above the target model's own layer count.
-        On any failure returns an empty set (previous behaviour: register all).
-        """
-        spec_cfg = getattr(self._vllm_config, "speculative_config", None)
-        if spec_cfg is None:
-            return set()
-        try:
-            num_target_layers = getattr(
-                self._vllm_config.model_config.hf_config,
-                "num_hidden_layers",
-                None,
-            )
-            if num_target_layers is None:
-                return set()
-            boundary = int(num_target_layers)
-            excluded: set[str] = set()
-            for layer_name in kv_caches:
-                try:
-                    index = extract_layer_index(layer_name)
-                except Exception:
-                    continue
-                if index >= boundary:
-                    excluded.add(layer_name)
-            if excluded:
-                logger.info(
-                    "Mooncake: excluding speculative-drafter KV from store "
-                    "registration (%d layers, e.g. %s)",
-                    len(excluded),
-                    sorted(excluded)[0],
-                )
-            return excluded
-        except Exception:
-            logger.exception(
-                "Mooncake: drafter-layer detection failed; registering all KV"
-            )
-            return set()
 
     def register_kv_caches(
         self,
@@ -2076,66 +2121,162 @@ class MooncakeStoreWorker:
         block_lens: list[int] = []
 
         # Exclude the speculative drafter's KV from registration. The drafter
-        # is not a KV-cache group (boot log: "no KV cache group could
-        # identified draft model's"), yet register_kv_caches receives its
-        # tensors; sweeping them with the target's page-base addressing makes
-        # every store load overwrite them with unwritten/foreign staging bytes.
-        # The drafter builds its own KV during decode, so it must never be
-        # registered or copied. Same class as the P2P fix (1a580fb08c).
-        _excluded = self._drafter_layer_names(kv_caches)
-        for layer_name, value in kv_caches.items():
-            if layer_name in _excluded:
-                continue
-            cache = _repr_tensor(value)
-            cache_storage = cache.untyped_storage()
-            base_addr = cache_storage.data_ptr()
-            if base_addr in seen_ptrs:
-                continue
-            seen_ptrs.add(base_addr)
-            region_len = cache_storage.nbytes()
+        # builds its own KV during decode and is never shipped or stored; a
+        # store load that sweeps it corrupts the drafter (spec-decode
+        # acceptance collapses to zero, live 2026-10-25). Groups are dropped
+        # wholesale at the put/get loops (self._excluded_group_ids) — the
+        # per-group addressing below still needs every group's descriptors.
+        self._excluded_group_ids = self._drafter_group_ids()
 
-            ret = self.store.register_buffer(base_addr, region_len)
-            if ret != 0:
-                logger.error(
-                    "register_buffer failed for addr %#x len %d: %d",
-                    base_addr,
-                    region_len,
-                    ret,
-                )
+        def _repr_tensor(v: torch.Tensor | list[torch.Tensor]) -> torch.Tensor:
+            assert isinstance(v, torch.Tensor | list)
+            return v if isinstance(v, torch.Tensor) else v[0]
 
-            # Detect layout via stride: a dim whose byte-stride exceeds
-            # page_size_bytes is an outer segment dim (e.g. the K/V dim of
-            # FlashAttn's (2, num_blocks, ...)). FlashInfer/MLA's blocks-
-            # outermost layout has no such dim and yields a single segment.
-            el = cache.element_size()
-            page_size_bytes = region_len // self.num_blocks
-            outer_dims = [
-                d for d in range(cache.ndim) if cache.stride(d) * el > page_size_bytes
-            ]
-            if not outer_dims:
-                # Blocks-first layout (FlashInfer / MLA): one segment.
+        # Per-group segment addressing.
+        #
+        # This stack registers ONE backing allocation holding every layer's
+        # view (probe 2026-10-25: 39,919,042,560 B at one storage, 5 physical
+        # layer planes, 15 overlay groups). Storage-pointer dedup therefore
+        # collapses to a single segment whose block_len works out to
+        # region//num_blocks = 5 x the real page — "block b" then addresses a
+        # contiguous 5-page span in layer plane 0, so only 1 of 5 layer slots is
+        # ever stored and neighbouring blocks are clobbered.
+        #
+        # Instead derive each group's segments from KVCacheTensor metadata
+        # (authoritative; vLLM's allocate_kv_cache docstring: layer l of block b
+        # starts at offset + l*layer_stride + b*block_stride): one segment per
+        # member layer, block_len = block_stride, so every layer slot is
+        # addressed and the DB list per group is exact.
+        def _register_group_segments() -> bool:
+            cfg = self._kv_cache_config
+            if cfg is None or not cfg.kv_cache_tensors or not self.token_dbs:
+                return False
+            # layer name -> (tensor, position within that tensor's layer list)
+            layer_pos: dict[str, tuple[Any, int]] = {}
+            for tensor in cfg.kv_cache_tensors:
+                for pos, name in enumerate(tensor.layers):
+                    layer_pos[name] = (tensor, pos)
+            # The backing storage is shared by every view; resolve it once.
+            storage_base = None
+            for value in kv_caches.values():
+                storage_base = _repr_tensor(value).untyped_storage().data_ptr()
+                break
+            if storage_base is None:
+                return False
+            group_addrs: list[list[int]] = []
+            group_blens: list[list[int]] = []
+            for group in self._kv_cache_groups:
+                g_addrs: list[int] = []
+                g_blens: list[int] = []
+                for name in group.layer_names:
+                    entry = layer_pos.get(name)
+                    if entry is None:
+                        raise KeyError(name)
+                    tensor, pos = entry
+                    g_addrs.append(
+                        storage_base + tensor.offset + pos * tensor.layer_stride
+                    )
+                    g_blens.append(tensor.block_stride)
+                group_addrs.append(g_addrs)
+                group_blens.append(g_blens)
+            if len(group_addrs) != len(self.token_dbs):
+                return False
+            for db, g_addrs, g_blens in zip(
+                self.token_dbs, group_addrs, group_blens, strict=True
+            ):
+                db.set_kv_caches_base_addr(g_addrs)
+                db.set_block_len(g_blens)
+            return True
+
+        _per_group = False
+        try:
+            _per_group = _register_group_segments()
+        except Exception:
+            logger.exception(
+                "Mooncake: per-group segment derivation failed; falling back to "
+                "single-segment registration (layer coverage may be incomplete)"
+            )
+        if _per_group:
+            # One RDMA registration per unique backing storage, not per layer.
+            for value in kv_caches.values():
+                storage = _repr_tensor(value).untyped_storage()
+                base_addr = storage.data_ptr()
+                if base_addr in seen_ptrs:
+                    continue
+                seen_ptrs.add(base_addr)
+                region_len = storage.nbytes()
+                ret = self.store.register_buffer(base_addr, region_len)
+                if ret != 0:
+                    logger.error(
+                        "register_buffer failed for addr %#x len %d: %d",
+                        base_addr,
+                        region_len,
+                        ret,
+                    )
                 addrs.append(base_addr)
-                block_lens.append(page_size_bytes)
-            else:
-                # K/V-first layout (FlashAttn / ROCm): split segments.
-                seg_stride = cache.stride(outer_dims[0]) * el
-                for idx in range(cache.shape[outer_dims[0]]):
-                    addrs.append(base_addr + idx * seg_stride)
-                    block_lens.append(seg_stride // self.num_blocks)
+                block_lens.append(storage.nbytes() // self.num_blocks)
+
+        if not _per_group:
+            for layer_name, value in kv_caches.items():
+                cache = _repr_tensor(value)
+                cache_storage = cache.untyped_storage()
+                base_addr = cache_storage.data_ptr()
+                if base_addr in seen_ptrs:
+                    continue
+                seen_ptrs.add(base_addr)
+                region_len = cache_storage.nbytes()
+
+                ret = self.store.register_buffer(base_addr, region_len)
+                if ret != 0:
+                    logger.error(
+                        "register_buffer failed for addr %#x len %d: %d",
+                        base_addr,
+                        region_len,
+                        ret,
+                    )
+
+                # Detect layout via stride: a dim whose byte-stride exceeds
+                # page_size_bytes is an outer segment dim (e.g. the K/V dim of
+                # FlashAttn's (2, num_blocks, ...)). FlashInfer/MLA's blocks-
+                # outermost layout has no such dim and yields a single segment.
+                el = cache.element_size()
+                page_size_bytes = region_len // self.num_blocks
+                outer_dims = [
+                    d
+                    for d in range(cache.ndim)
+                    if cache.stride(d) * el > page_size_bytes
+                ]
+                if not outer_dims:
+                    # Blocks-first layout (FlashInfer / MLA): one segment.
+                    addrs.append(base_addr)
+                    block_lens.append(page_size_bytes)
+                else:
+                    # K/V-first layout (FlashAttn / ROCm): split segments.
+                    seg_stride = cache.stride(outer_dims[0]) * el
+                    for idx in range(cache.shape[outer_dims[0]]):
+                        addrs.append(base_addr + idx * seg_stride)
+                        block_lens.append(seg_stride // self.num_blocks)
 
         logger.info(
-            "Registered KV caches: num_groups=%d, num_segments=%d, num_blocks=%d",
+            "Registered KV caches: num_groups=%d, num_segments=%d, num_blocks=%d, "
+            "per_group_addressing=%s, excluded_groups=%s",
             len(self.token_dbs),
             len(addrs),
             self.num_blocks,
+            _per_group,
+            sorted(self._excluded_group_ids),
         )
 
         if self.host_staging:
             self._alloc_staging_buffer()
 
-        for db in self.token_dbs:
-            db.set_kv_caches_base_addr(addrs)
-            db.set_block_len(block_lens)
+        if not _per_group:
+            # Per-group addressing was already installed by
+            # _register_group_segments(); the legacy fallback shares one
+            # global segment list across every group.
+            for db in self.token_dbs:
+                db.set_kv_caches_base_addr(addrs)
+                db.set_block_len(block_lens)
 
         # Start transfer threads
         if self.kv_role in ["kv_producer", "kv_both"]:
@@ -2156,6 +2297,7 @@ class MooncakeStoreWorker:
                 record_operation=self._record_kv_connector_operation,
                 host_staging=self.host_staging,
                 staging_put_pool=self._staging_put_pool,
+                excluded_group_ids=self._excluded_group_ids,
             )
             self.kv_send_thread.start()
 
@@ -2175,6 +2317,7 @@ class MooncakeStoreWorker:
                 request_queue=self.recv_request_queue,
                 host_staging=self.host_staging,
                 staging_get_pool=self._staging_get_pool,
+                excluded_group_ids=self._excluded_group_ids,
             )
             recv_thread.name = f"KVCacheStoreRecvingThread-{i}"
             recv_thread.start()
@@ -2347,6 +2490,10 @@ class MooncakeStoreWorker:
         fine_grained = self.coord.enable_partial_hash_hits
         lookup_masks = None if fine_grained else self.coord.lookup_mask(token_len)
         for g_idx, db in enumerate(self.token_dbs):
+            if g_idx in self._excluded_group_ids:
+                # The drafter's keys are never stored; including it would make
+                # every lookup miss the per-group all-namespaces check.
+                continue
             spec_block_size = db.block_size
             key_prefixes = self._lookup_key_prefixes[g_idx]
             if fine_grained:

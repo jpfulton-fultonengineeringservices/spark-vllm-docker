@@ -89,22 +89,33 @@ mods:
   # shared blocks a KV connector exposes on an external prefix hit.
   - mods/mamba-spec-relocate-guard
 
-# enable_lookup=false (see --kv-transfer-config below): this stack registers
-# ONE fused cross-layer KV tensor (`Registered KV caches: num_groups=0,
-# num_segments=1`), and vLLM reports "Speculative decoding (method=dflash) is
-# enabled but no KV cache group could be identified as draft model's" — the
-# DFlash drafter's KV lives inside that fused pool, so a store load sweeps it
-# and spec-decode acceptance collapses to zero (MAL 1.00, every per-position
-# rate 0.000, drafted>0 accepted=0) for the rest of the boot while the target's
-# own output stays coherent. Live 2026-10-25: collapse began in the same 10s
-# window as each load_get (12:05:19, 07:39:12, 07:40:22).
+# enable_lookup=true (see --kv-transfer-config below). History: the first
+# store loads of 2026-10-25 collapsed DFlash2 spec-decode acceptance to zero
+# (MAL 1.00, every per-position rate 0.000) for the rest of the boot while the
+# target's own output stayed coherent, so lookups were disabled as a
+# mitigation (a87632d7a0). Two root causes were then found and fixed in the
+# vendored store connector (mod-deployed, no image change):
 #
-# Loads are also currently useless: batch_is_exist returns false for any key
-# saved by a different client session (0/30 cross-boot vs 30/30 same-boot),
-# so the durable L2 can never serve another boot's KV. Saving still runs, so
-# the store cohort keeps recording prompt KV for operators/future work.
-# Re-enable once the drafter's byte range is excluded from the fused pool's
-# page addressing (see the session write-up for the fix plan).
+# 1. Segment collapse. This stack registers ONE backing allocation holding
+#    every layer's view (probe: 39.9 GB, 5 physical layer planes, 15 overlay
+#    groups x 5 layers). The old storage-dedup registration computed
+#    block_len = region // num_blocks = 5x the true page size, so "block b"
+#    addressed a contiguous 5-page span in layer plane 0: only 1 of 5 layer
+#    slots was ever stored, and neighbouring blocks were clobbered. The
+#    connector now derives per-group segments from KVCacheTensor metadata
+#    (offset + pos*layer_stride + b*block_stride), addressing all 5 slots.
+# 2. Drafter sweep. The DFlash drafter's group (model.layers.64..68) is not a
+#    target group: a store load swept it with target page addressing and
+#    corrupted the drafter's KV. The connector now excludes the drafter's
+#    group from save/load/lookup (group-level detection keyed on layer names
+#    at/above the target's num_hidden_layers, resolved through text_config —
+#    the flat hf_config attribute is None on this Qwen3.5 VL checkpoint, which
+#    made the earlier name-based detector aa4f0d9f55 a no-op).
+#
+# Cross-boot durability remains open (D1): batch_is_exist returns false for
+# any key saved by a different client session (0/30 cross-boot vs 30/30
+# same-boot, mooncake-layer object visibility). Same-boot external loads are
+# the value this recipe serves today; cross-boot stays deferred.
 
 defaults:
   port: 8000
@@ -214,7 +225,7 @@ command: |
     --max-num-batched-tokens {max_num_batched_tokens} \
     --max-cudagraph-capture-size {max_cudagraph_capture_size} \
     --speculative-config '{{"method":"dflash","model":"/workspace/Qwen3.8-27B-Coder390-dflash","num_speculative_tokens":{num_speculative_tokens},"draft_tensor_parallel_size":{draft_tensor_parallel_size}}}' \
-    --kv-transfer-config '{{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both","kv_connector_extra_config":{{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048,"enable_lookup":false}}}}' \
+    --kv-transfer-config '{{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both","kv_connector_extra_config":{{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048,"enable_lookup":true}}}}' \
     --gdn-prefill-backend cutedsl \
     --linear-backend b12x \
     --mm-encoder-tp-mode data \
