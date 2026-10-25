@@ -52,8 +52,11 @@ store-only path.
 
 - `gates.verify_vendor()` — vendor set complete, every file parses, worker md5
   == branch tip.
-- `gates.classify_installed()` — `stock` (`b180493c…`) | `already_ported`
-  (`09388dea…`) | `unknown`.
+- `gates.classify_installed()` — `stock` (any admitted image lineage:
+  `b180493c…` vllm-node-b12x, `8cc1f01a…` derived coder390 image
+  sha256:e9f6e32941ec…) | `already_ported` (`09388dea…`) | `unknown`.
+  Each new pinned image lineage needs its stock md5 probed live and appended
+  to `MD5_STOCK_WORKERS` — see `tests/test_gates.py` for the probe commands.
 - Installer **fails closed** on `unknown` (image drift): re-port the vendored
   set, never blind-overwrite.
 - `envs_shim.inject()` — `vllm.envs` resolves attributes through its
@@ -98,6 +101,16 @@ P2P facade (irrelevant without a PD topology) is not installed:
 ```
 MOONCAKE_WORKER_P2P=skip run.sh install
 ```
+
+Recipe-env gotcha (bit the coder390 store-L2 recipes 2026-10-25): a recipe's
+`env:` block CANNOT reach a mod — mods run in a separate process before the
+exec-script exports recipe env, so `MOONCAKE_WORKER_P2P: "skip"` in the recipe
+YAML is inert and the direct `mods/mooncake-worker` entry runs with the
+default `auto` (and trips the P2P gate). Either omit the direct entry
+(`mods/mooncake-store-l2` calls the installer itself with `P2P=skip` forced),
+or inject the env as a container `-e` at docker-run time
+(cluster-config's spark-serve.sh store-L2 branch does exactly that) —
+`apply_mod_to_container`'s docker execs inherit the container env.
 
 The P2P auto-add is idempotent and gate-fails-closed, so omitting the pin is
 safe but installs unused files. `mods/mooncake-store-l2` is the recipe-side

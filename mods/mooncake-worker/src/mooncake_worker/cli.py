@@ -81,12 +81,12 @@ def _cmd_manifest(_args: argparse.Namespace) -> int:
     print(
         json.dumps(
             {
-                "md5_stock_worker": gates.MD5_STOCK_WORKER,
+                "md5_stock_workers": list(gates.MD5_STOCK_WORKERS),
                 "md5_mod_worker": gates.MD5_MOD_WORKER,
                 "package_files": list(gates.PACKAGE_FILES),
                 "p2p_package_files": list(gates.P2P_PACKAGE_FILES),
                 "md5_mod_p2p_connector": gates.MD5_MOD_P2P_CONNECTOR,
-                "md5_stock_p2p_connector": gates.MD5_STOCK_P2P_CONNECTOR,
+                "md5_stock_p2p_connectors": list(gates.MD5_STOCK_P2P_CONNECTORS),
                 "envs_target": envs_shim.TARGET_ENV,
                 "vendor_dir": str(gates.vendor_dir()),
             },
