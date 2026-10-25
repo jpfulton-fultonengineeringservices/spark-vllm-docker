@@ -77,22 +77,20 @@ mods:
   # shared blocks a KV connector exposes on an external prefix hit.
   - mods/mamba-spec-relocate-guard
 
-# enable_lookup=false (see --kv-transfer-config below): this stack registers
-# ONE fused cross-layer KV tensor (`Registered KV caches: num_groups=0,
-# num_segments=1`), and vLLM reports "Speculative decoding (method=dflash) is
-# enabled but no KV cache group could be identified as draft model's" — the
-# DFlash drafter's KV lives inside that fused pool, so a store load sweeps it
-# and spec-decode acceptance collapses to zero (MAL 1.00, every per-position
-# rate 0.000, drafted>0 accepted=0) for the rest of the boot while the target's
-# own output stays coherent. Live 2026-10-25: collapse began in the same 10s
-# window as each load_get (12:05:19, 07:39:12, 07:40:22).
+# enable_lookup=true (see --kv-transfer-config below). Lookups were disabled
+# as a mitigation (a87632d7a0) after the first store loads of 2026-10-25
+# collapsed DFlash2 spec-decode acceptance to zero (MAL 1.00, every
+# per-position rate 0.000) while the target stayed coherent. The vendored
+# store connector now fixes both root causes (mod-deployed, no image change):
+# a storage-dedup segment collapse that stored only 1 of the 5 fused layer
+# slots per block (block_len was region//num_blocks = 5x the real page), and
+# the DFlash drafter's group (model.layers.64..68) being swept by store loads.
+# Segments are now per-group from KVCacheTensor metadata, and the drafter's
+# group is excluded from save/load/lookup — see the 2x recipe's fuller note.
 #
-# Loads are also currently useless: batch_is_exist returns false for any key
-# saved by a different client session (0/30 cross-boot vs 30/30 same-boot),
-# so the durable L2 can never serve another boot's KV. Saving still runs, so
-# the store cohort keeps recording prompt KV for operators/future work.
-# Re-enable once the drafter's byte range is excluded from the fused pool's
-# page addressing (see the session write-up for the fix plan).
+# Cross-boot durability remains open (D1): batch_is_exist returns false for
+# keys saved by a different client session (0/30 cross-boot vs 30/30
+# same-boot). Same-boot external loads are what this recipe serves today.
 
 defaults:
   port: 8000
@@ -200,7 +198,7 @@ command: |
     --max-num-batched-tokens {max_num_batched_tokens} \
     --max-cudagraph-capture-size {max_cudagraph_capture_size} \
     --speculative-config '{{"method":"dflash","model":"/workspace/Qwen3.8-27B-Coder390-dflash","num_speculative_tokens":{num_speculative_tokens},"draft_tensor_parallel_size":{draft_tensor_parallel_size}}}' \
-    --kv-transfer-config '{{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both","kv_connector_extra_config":{{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048,"enable_lookup":false}}}}' \
+    --kv-transfer-config '{{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both","kv_connector_extra_config":{{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048,"enable_lookup":true}}}}' \
     --gdn-prefill-backend cutedsl \
     --linear-backend b12x \
     --mm-encoder-tp-mode data \

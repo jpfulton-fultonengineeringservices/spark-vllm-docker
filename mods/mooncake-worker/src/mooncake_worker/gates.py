@@ -31,11 +31,21 @@ MD5_STOCK_WORKERS = (MD5_STOCK_WORKER, MD5_STOCK_WORKER_CODER390_DERIVED)
 # The vendored branch tip
 # (Fulton-Engineering-Services/vllm @ cuda13.3-aarch64-gb10-glm5next-modular,
 #  4e79d6be6f, 2574 lines — carries the completed host-staging series).
+# 2026-10-25: per-group segment addressing + drafter-GROUP exclusion.
+#   Probe ground truth (node1 TP0): one 39,919,042,560-byte backing storage,
+#   5 physical layer planes (layer_stride = 4731 blocks x 1,687,552 page),
+#   15 overlay groups x 5 layers. The old storage-dedup segment collapsed to
+#   region//num_blocks = 5x the true page, so only 1 of 5 layer slots was ever
+#   stored and neighbouring blocks were clobbered. Segments are now derived per
+#   group from KVCacheTensor metadata, and the drafter's group (layers >=
+#   target num_hidden_layers, resolved through text_config) is excluded from
+#   put/get/lookup. Also fixes num_hidden_layers=None on Qwen3.5-style VL
+#   checkpoints, which made the previous name-based detector a no-op.
 # 2026-10-25: + synchronous H2D completion in the store get path (garbled
 #   decode after a store load, live). Diagnostic MKDBG build reverted.
 # 2026-10-11: + LookupKeyClient SND/RCVTIMEO + rebuild-on-Again
 #   (2574→2619 lines, fix-prefill-lookup-livelock).
-MD5_MOD_WORKER = "66b9ab9b6a27fb3f28f0744f7fb141f7"
+MD5_MOD_WORKER = "96f631ff39c9f1728f2ebfc0901c0db2"
 
 PACKAGE_FILES: tuple[str, ...] = (
     "__init__.py",
