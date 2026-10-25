@@ -39,6 +39,18 @@
 # path and no architecture allow-list, matching the sibling
 # recipes/qwen3.8-27b-nvfp4-dflash2.yaml for the same model family.
 #
+# Reasoning effort: the checkpoint's own chat_template.jinja accepts only
+# xhigh|medium|low (xhigh IS its default when no effort is sent), and `none`
+# bypasses the check because vLLM maps it to enable_thinking: false first. It
+# has no `high`, `minimal`, or `max` tier and no alias logic, so those reach the
+# template verbatim and raise a Jinja exception the engine returns as HTTP 400.
+# The translation lives at the gateway, not here: LiteLLM's
+# session_tracking.reasoning_defaults maps caller effort onto this route's
+# advertised supports_reasoning_efforts ladder -- high->xhigh, max->xhigh,
+# minimal->low, others with no rung dropped so the template default applies.
+# Callers talking to the engine DIRECTLY (bypassing LiteLLM) must therefore use
+# the template's own spellings.
+#
 # Attention: no --attention-backend and --block-size 16 (image defaults).
 # Commit caaba0f's B12X paged-attention arm cannot boot this model in the
 # current image: BasePlatform._align_hybrid_block_size rewrites the block size

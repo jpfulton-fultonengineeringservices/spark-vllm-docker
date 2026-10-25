@@ -43,6 +43,12 @@
 # the Mooncake store cohort co-tenants the GB10 unified pool, the store
 # connector pins 2x2048 MiB host-staging slots AFTER vLLM sizes KV, and the
 # sibling live run showed 0.65 driving the node to 0 free.
+#
+# Reasoning effort follows the base 4x recipe: the checkpoint's chat_template
+# accepts only xhigh|medium|low (xhigh default, `none` -> enable_thinking:
+# false), and the caller-side translation (high->xhigh, max->xhigh,
+# minimal->low) happens in LiteLLM's session_tracking.reasoning_defaults, not
+# here -- callers hitting the engine directly must use the template spellings.
 
 recipe_version: "1"
 name: Qwen3.8-27B-Coder390-DFlash2 (4x, durable Mooncake store L2)

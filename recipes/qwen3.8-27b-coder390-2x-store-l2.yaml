@@ -50,6 +50,15 @@
 # The `model:` id is synthetic (the checkpoint is not on the Hub); mods/fes-weights
 # presents /model as an HF hub-cache shim under this exact id, so
 # `vllm serve <id>` resolves offline with HF_HUB_OFFLINE=1.
+#
+# Reasoning effort: identical to the base 2x recipe -- the checkpoint's
+# chat_template.jinja accepts only xhigh|medium|low (xhigh IS its default when no
+# effort is sent) and `none` bypasses the check via enable_thinking: false.
+# Caller effort is translated at the gateway, not here: LiteLLM's
+# session_tracking.reasoning_defaults maps it onto this route's advertised
+# supports_reasoning_efforts ladder -- high->xhigh, max->xhigh, minimal->low,
+# anything else dropped so the template default applies. Direct-to-engine
+# callers must use the template's own spellings.
 
 recipe_version: "1"
 name: Qwen3.8-27B-Coder390-DFlash2 (2x, durable Mooncake store L2)
