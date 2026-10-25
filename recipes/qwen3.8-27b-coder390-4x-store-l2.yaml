@@ -86,11 +86,18 @@ defaults:
   # slots (~8 GiB) AFTER vLLM sizes KV against total*utilization, so the KV
   # budget must leave that plus the mooncake-client's ~8 GiB DRAM segment and
   # the ~13.5 GiB of weights/activations. At 0.65 on the 2x sibling the 56 GiB
-  # KV cache drove the node to 0 free; 0.50 leaves real headroom.
+  # KV cache drove the node to 0 free; 0.50 caps KV at ~38 GiB and leaves real
+  # headroom. At the YaRN window below that is ~1.8x full-window concurrency.
   gpu_memory_utilization: 0.50
-  max_model_len: 262144
+  # Long-context YaRN, same as the base recipe: --hf-overrides scales the
+  # target's rope to 4x (262144 -> 1048576) and VLLM_ALLOW_LONG_MAX_MODEL_LEN
+  # permits the override. The store-L2's durability is for LONG prefixes, so
+  # the window converges with the base's 1048576.
+  max_model_len: 1048576
   max_num_seqs: 8
   max_num_batched_tokens: 2048
+  # Same cudagraph tightening as the base recipe (45df67ae2b).
+  max_cudagraph_capture_size: 256
   num_speculative_tokens: 7
   draft_tensor_parallel_size: 4
 
@@ -103,7 +110,6 @@ env:
   VLLM_SSM_CONV_STATE_LAYOUT: "DS"
   VLLM_USE_AOT_COMPILE: "1"
   VLLM_USE_V2_MODEL_RUNNER: "1"
-  B12X_POLICY_MODE: "auto"
   VLLM_ENABLE_ROCE_ALLREDUCE: "1"
   VLLM_ROCE_ALLREDUCE_MAX_SIZE: "2MB"
   # b12x _reclaim_programs runs an unguarded O(exponential) retained-owner walk
@@ -119,6 +125,9 @@ env:
   # b12x-kcache archives it (roots.txt entry "torchinductor"); otherwise it
   # is ephemeral and every boot re-compiles the Triton kernels.
   TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
+  # Long-context YaRN: permit --max-model-len above the 262144 native cap
+  # (same as the base recipe).
+  VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
   # --- durable Mooncake store L2 -----------------------------------------
   # Store-only connector set (no P2P topology for a single-instance serve).
   MOONCAKE_WORKER_P2P: "skip"
@@ -168,17 +177,20 @@ command: |
     --block-size 16 \
     --quantization modelopt_mixed \
     --load-format instanttensor \
+    --hf-overrides '{{"text_config":{{"rope_parameters":{{"mrope_interleaved":true,"mrope_section":[11,11,10],"partial_rotary_factor":0.25,"rope_theta":10000000,"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":262144}}}}}}' \
     --max-model-len {max_model_len} \
     --max-num-seqs {max_num_seqs} \
     --max-num-batched-tokens {max_num_batched_tokens} \
+    --max-cudagraph-capture-size {max_cudagraph_capture_size} \
     --speculative-config '{{"method":"dflash","model":"/workspace/Qwen3.8-27B-Coder390-dflash","num_speculative_tokens":{num_speculative_tokens},"draft_tensor_parallel_size":{draft_tensor_parallel_size}}}' \
     --kv-transfer-config '{{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both","kv_connector_extra_config":{{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048,"enable_lookup":true}}}}' \
+    --gdn-prefill-backend cutedsl \
     --linear-backend b12x \
-    --no-enable-flashinfer-autotune \
     --mm-encoder-tp-mode data \
     --reasoning-parser qwen3 \
     --tool-call-parser qwen3_xml \
     --enable-auto-tool-choice \
     --enable-mfu-metrics \
     --kv-cache-metrics \
+    --kv-cache-metrics-sample 1.0 \
     --gpu-memory-utilization {gpu_memory_utilization}
