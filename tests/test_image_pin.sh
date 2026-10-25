@@ -22,7 +22,11 @@ bash -n "$LAUNCH" || fail "launch-cluster.sh does not parse"
 grep -qF -- '--image-id' "$LAUNCH" || fail "launcher does not accept --image-id"
 grep -qF 'verify_pinned_image_id' "$LAUNCH" || fail "pin verification missing"
 
-PIN="sha256:a1fc4f18d3cb1671986feb92b05243ecd31a21957dd64e28da5c9e6125733aa0"
+# The coder390 recipes are pinned to the derived-image digest the repo build
+# script produces (docker/build-coder390-derived-image.sh; commit 3377be48d1
+# repinned them from the a1fc4f18 nightly). Keep this in sync with the pins:
+# the whole point of (f) is that every pinned recipe forwards its pin.
+PIN="sha256:e9f6e32941ec5680a58edfbfefaad6997f0527e22344b5b505cf8267de4625f2"
 OTHER="sha256:4aef4572b26eb283a1757aeedddc24f5b2bce3ff2c16d961f7334b0f480c3150"
 
 # Extract just the guard so it can run standalone (no cluster/bootstrap).
@@ -84,7 +88,8 @@ if STUB_ID="$OTHER" run_guard "$PIN" >/dev/null 2>&1; then
 fi
 
 # (f) recipes that pin must actually reach the launcher with --image-id
-for r in qwen3.8-27b-coder390-2x qwen3.8-27b-coder390-4x qwen3.8-27b-coder390-2x-store-l2; do
+for r in qwen3.8-27b-coder390-2x qwen3.8-27b-coder390-4x \
+         qwen3.8-27b-coder390-2x-store-l2 qwen3.8-27b-coder390-4x-store-l2; do
   out="$(cd "$ROOT" && python3 run-recipe.py "$r" --dry-run -n 10.0.0.1,10.0.0.2 2>&1)" \
     || fail "(f) $r dry-run failed"
   case "$out" in
