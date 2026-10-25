@@ -6,6 +6,7 @@ Torch-free, per the house rule (gates.py stays importable on host + container).
 from __future__ import annotations
 
 import re
+import unittest.mock
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,30 @@ def test_classify_p2p_fails_closed_on_missing_facade() -> None:
     """A nonexistent facade path gates, never crashes with FileNotFoundError."""
     with pytest.raises(gates.GateError, match="missing"):
         gates.classify_p2p_installed("whatever")
+
+
+def test_derived_image_stock_p2p_facade_is_classified_stock(
+    tmp_path: Path,
+) -> None:
+    """The pinned coder390 image's monolith facade admits the overlay.
+
+    Derived image sha256:e9f6e32941ec… (eugr nightly-20261016 base, vLLM
+    0.32.0rc1.dev301+g1ac942555), probed 2026-10-25: 3082 lines,
+    host_staging count 0.
+    """
+    facade = tmp_path / "mooncake_connector.py"
+    facade.write_text("# derived image stock facade\n")
+    with unittest.mock.patch.object(
+        gates, "md5_of", return_value=gates.MD5_STOCK_P2P_CONNECTOR_CODER390_DERIVED
+    ):
+        assert gates.classify_p2p_installed(facade) == "stock_p2p"
+
+
+def test_p2p_stock_base_tuple_covers_both_lineages() -> None:
+    assert gates.MD5_STOCK_P2P_CONNECTORS == (
+        "5697ebd6979f7fdcc92106a8f70103d5",  # vllm-node-b12x 2026-10-12
+        "c626af08807a0b78350850e6370ecc90",  # coder390-derived e9f6e329
+    )
 
 
 def test_envs_shim_p2p_roundtrip(tmp_path: Path) -> None:

@@ -82,7 +82,8 @@ def install(
         actual = gates.md5_of(paths.store_dir / "worker.py")
         raise InstallError(
             f"installed worker md5 {actual} is not a known base"
-            f" (stock={gates.MD5_STOCK_WORKER}, ported={gates.MD5_MOD_WORKER});"
+            f" (stock={','.join(gates.MD5_STOCK_WORKERS)},"
+            f" ported={gates.MD5_MOD_WORKER});"
             " re-port the vendored set against the new image — do NOT blind-overwrite"
         )
 
@@ -150,7 +151,7 @@ def install_p2p(site: str | Path = VLLM_SITE_DEFAULT, *, package_root: Path | No
         actual = gates.md5_of(facade)
         raise InstallError(
             f"installed p2p facade md5 {actual} is not a known base"
-            f" (stock={gates.MD5_STOCK_P2P_CONNECTOR},"
+            f" (stock={','.join(gates.MD5_STOCK_P2P_CONNECTORS)},"
             f" ported={gates.MD5_MOD_P2P_CONNECTOR});"
             " re-port the vendored set against the new image — do NOT blind-overwrite"
         )

@@ -11,9 +11,22 @@ import hashlib
 import sys
 from pathlib import Path
 
-# The stock connector shipped in vllm-node-b12x:latest
-# (vLLM 0.1.dev21546+g502d6cb5a, 2633 lines, host_staging count 0).
+# Stock store/worker.py md5s, keyed by image lineage (classify_installed
+# accepts any of these as a safe base for the atomic overlay; the vendored
+# set replaces the whole store/ dir, so only the guard file's state matters).
+#
+# vllm-node-b12x:latest (vLLM 0.1.dev21546+g502d6cb5a, 2633 lines,
+# host_staging count 0) — the lineage the vendored set was first ported
+# against, 2026-10-12.
 MD5_STOCK_WORKER = "b180493c964225f6a9282b30a47fb967"
+# Derived coder390 image sha256:e9f6e32941ec… (eugr/spark-vllm:nightly-20261016
+# base + docker/Dockerfile.coder390-derived installed-stage patches; vLLM
+# 0.32.0rc1.dev301+g1ac942555). Stock store/worker.py re-probed 2026-10-25
+# (2494 lines, host_staging count 0). The store recipes pin this image.
+MD5_STOCK_WORKER_CODER390_DERIVED = "8cc1f01a49aebec1ccda89d1545e445c"
+
+# Admitted stock bases for the store gate.
+MD5_STOCK_WORKERS = (MD5_STOCK_WORKER, MD5_STOCK_WORKER_CODER390_DERIVED)
 
 # The vendored branch tip
 # (Fulton-Engineering-Services/vllm @ cuda13.3-aarch64-gb10-glm5next-modular,
@@ -65,10 +78,24 @@ P2P_PACKAGE_FILES: tuple[str, ...] = (
 # file the connector factory imports by class name).
 MD5_MOD_P2P_CONNECTOR = "8bd9c7fc214e032271c843dbce51ce5d"
 
-# The stock image's monolith connector. Captured live 2026-10-12 on
-# gx10-node1 vllm_node (vLLM 0.1.dev21546+g502d6cb5a.d20261003):
-# image tree is monolith + mooncake_utils/rdma_utils/stats + store/.
+# Stock monolith facade md5s, keyed by image lineage (classify_p2p_installed
+# accepts any of these as a safe base for the facade replacement).
+#
+# vllm-node-b12x:latest pre-decomposition monolith, captured live 2026-10-12
+# on gx10-node1 vllm_node (vLLM 0.1.dev21546+g502d6cb5a.d20261003); image
+# tree is monolith + mooncake_utils/rdma_utils/stats + store/.
 MD5_STOCK_P2P_CONNECTOR = "5697ebd6979f7fdcc92106a8f70103d5"
+# Derived coder390 image sha256:e9f6e32941ec… monolith (eugr base, vLLM
+# 0.32.0rc1.dev301+g1ac942555: 3082 lines, host_staging count 0). Re-probed
+# 2026-10-25; different upstream tree, same pre-decomposition layout
+# (monolith + mooncake_utils/rdma_utils/stats + store/).
+MD5_STOCK_P2P_CONNECTOR_CODER390_DERIVED = "c626af08807a0b78350850e6370ecc90"
+
+# Admitted stock bases for the P2P gate.
+MD5_STOCK_P2P_CONNECTORS = (
+    MD5_STOCK_P2P_CONNECTOR,
+    MD5_STOCK_P2P_CONNECTOR_CODER390_DERIVED,
+)
 
 
 class GateError(RuntimeError):
@@ -144,7 +171,7 @@ def classify_p2p_installed(installed_connector: str | Path) -> str:
     actual = md5_of(installed_connector)
     if actual == MD5_MOD_P2P_CONNECTOR:
         return "p2p_ported"
-    if actual == MD5_STOCK_P2P_CONNECTOR:
+    if actual in MD5_STOCK_P2P_CONNECTORS:
         return "stock_p2p"
     return "unknown"
 
@@ -174,13 +201,13 @@ def classify_installed(installed_worker: str | Path) -> str:
 
     Returns one of:
       - "already_ported"  (worker == vendored branch tip)
-      - "stock"           (worker == pristine vllm-node-b12x)
+      - "stock"           (worker == a captured stock image lineage)
       - "unknown"         (image drift; installer must fail closed)
     """
     actual = md5_of(installed_worker)
     if actual == MD5_MOD_WORKER:
         return "already_ported"
-    if actual == MD5_STOCK_WORKER:
+    if actual in MD5_STOCK_WORKERS:
         return "stock"
     return "unknown"
 
