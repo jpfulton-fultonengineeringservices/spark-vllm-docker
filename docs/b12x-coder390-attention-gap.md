@@ -516,8 +516,9 @@ silently changes vLLM underneath the recipe.
 **Do not pin any rebuilt image into a recipe until it has booted once and passed
 the §4/§5 acceptance table** (1664 alignment, planner `(64,128)`, CUDA-graph
 100%, zero CUDA errors, HTTP 200). Leave the existing `a1fc4f18d3cb` pins — in
-`qwen3.8-27b-coder390-2x.yaml`, `-4x.yaml`, and `-2x-store-l2.yaml` — unchanged
-until then; they match the image that is actually deployed.
+`qwen3.8-27b-coder390-2x.yaml`, `-4x.yaml`, `-2x-store-l2.yaml`, and
+`-4x-store-l2.yaml` — unchanged until then; they match the image that is
+actually deployed.
 
 ### Cost
 
@@ -650,7 +651,7 @@ docker run --rm --entrypoint bash vllm-node-b12x:latest -c '
 - `mods/b12x-reclaim-gate/` — v4 gate, discovery, second sweep site
 - `mods/b12x-kernel-cache/lib/key.sh` — fail-closed identity fields, v2 schema
 - `docker/patch_b12x_cache_integrity.py` — layout-aware root discovery
-- `recipes/qwen3.8-27b-coder390-{2x,4x,2x-store-l2}.yaml`
+- `recipes/qwen3.8-27b-coder390-{2x,4x,2x-store-l2,4x-store-l2}.yaml`
 - `recipes/qwen3.8-27b-nvfp4-dflash2.yaml` — the same-family precedent
 - `tests/test_b12x_reclaim_gate_mod.sh`, `tests/test_b12x_kernel_cache.sh`,
   `tests/test_b12x_cache_integrity_patch.py`
