@@ -31,9 +31,11 @@ MD5_STOCK_WORKERS = (MD5_STOCK_WORKER, MD5_STOCK_WORKER_CODER390_DERIVED)
 # The vendored branch tip
 # (Fulton-Engineering-Services/vllm @ cuda13.3-aarch64-gb10-glm5next-modular,
 #  4e79d6be6f, 2574 lines — carries the completed host-staging series).
-# 2026-10-11: + LookupKeyClient SND/RCVTIMEO + rebuild-on-Again (2574→2619
-# lines, fix-prefill-lookup-livelock).
-MD5_MOD_WORKER = "09388dea01fd935d7cb0335fb0cf736e"
+# 2026-10-25: + synchronous H2D completion in the store get path (garbled
+#   decode after a store load, live). Diagnostic MKDBG build reverted.
+# 2026-10-11: + LookupKeyClient SND/RCVTIMEO + rebuild-on-Again
+#   (2574→2619 lines, fix-prefill-lookup-livelock).
+MD5_MOD_WORKER = "40c8b012ae6c138ab34424e42964c767"
 
 PACKAGE_FILES: tuple[str, ...] = (
     "__init__.py",

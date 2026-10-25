@@ -1436,6 +1436,15 @@ class KVCacheStoreRecvingThread(KVTransferThread):
                         dst_mp.copy_from_device_async(src_mp, seg_size)
 
             slot["event"].record(slot["stream"])
+            # Complete the H2D before the chunk reports success. The put
+            # path synchronizes its D2H before its RDMA for the same
+            # reason: the slot buffer is released to the pool the moment
+            # this function returns, and a consumer that reads the GPU
+            # destination before the copy lands decodes garbage. The
+            # deferred request-end _sync_slots only protected the slot
+            # reuse race, not consumer ordering (garbled decode after a
+            # store load, live 2026-10-25).
+            slot["event"].synchronize()
             return chunk_idxs, list(results), slot_idx
         finally:
             pool.release(slot_idx)
