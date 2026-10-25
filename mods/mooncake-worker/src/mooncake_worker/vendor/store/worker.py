@@ -56,6 +56,7 @@ from vllm.distributed.kv_transfer.kv_connector.v1.mooncake.store.protocol import
     RESP_OK,
 )
 from vllm.logger import init_logger
+from vllm.model_executor.models.utils import extract_layer_index
 from vllm.utils.math_utils import cdiv
 from vllm.utils.network_utils import get_ip, make_zmq_socket
 from vllm.v1.attention.backends.utils import NULL_BLOCK_ID
@@ -1997,6 +1998,57 @@ class MooncakeStoreWorker:
         """
         self.register_kv_caches({"__cross_layer__": kv_cache})
 
+    def _drafter_layer_names(
+        self,
+        kv_caches: dict[str, torch.Tensor | list[torch.Tensor]],
+    ) -> set[str]:
+        """Return the speculative drafter's KV layer names (empty when none).
+
+        Port of the P2P drafter exclusion (1a580fb08c). The draft model is not
+        a KV-cache group, but its tensors still arrive in ``kv_caches``; a
+        store load that sweeps them corrupts the drafter's KV, which shows up
+        as spec-decode acceptance collapsing to zero (MAL 1.00, every
+        per-position rate 0.000) right after the first load while the target's
+        own output stays coherent — live 2026-10-25.
+
+        Detection is fail-safe: only with speculative_config set, and only for
+        layers whose index is at/above the target model's own layer count.
+        On any failure returns an empty set (previous behaviour: register all).
+        """
+        spec_cfg = getattr(self._vllm_config, "speculative_config", None)
+        if spec_cfg is None:
+            return set()
+        try:
+            num_target_layers = getattr(
+                self._vllm_config.model_config.hf_config,
+                "num_hidden_layers",
+                None,
+            )
+            if num_target_layers is None:
+                return set()
+            boundary = int(num_target_layers)
+            excluded: set[str] = set()
+            for layer_name in kv_caches:
+                try:
+                    index = extract_layer_index(layer_name)
+                except Exception:
+                    continue
+                if index >= boundary:
+                    excluded.add(layer_name)
+            if excluded:
+                logger.info(
+                    "Mooncake: excluding speculative-drafter KV from store "
+                    "registration (%d layers, e.g. %s)",
+                    len(excluded),
+                    sorted(excluded)[0],
+                )
+            return excluded
+        except Exception:
+            logger.exception(
+                "Mooncake: drafter-layer detection failed; registering all KV"
+            )
+            return set()
+
     def register_kv_caches(
         self,
         kv_caches: dict[str, torch.Tensor | list[torch.Tensor]],
@@ -2023,7 +2075,17 @@ class MooncakeStoreWorker:
         addrs: list[int] = []
         block_lens: list[int] = []
 
-        for value in kv_caches.values():
+        # Exclude the speculative drafter's KV from registration. The drafter
+        # is not a KV-cache group (boot log: "no KV cache group could
+        # identified draft model's"), yet register_kv_caches receives its
+        # tensors; sweeping them with the target's page-base addressing makes
+        # every store load overwrite them with unwritten/foreign staging bytes.
+        # The drafter builds its own KV during decode, so it must never be
+        # registered or copied. Same class as the P2P fix (1a580fb08c).
+        _excluded = self._drafter_layer_names(kv_caches)
+        for layer_name, value in kv_caches.items():
+            if layer_name in _excluded:
+                continue
             cache = _repr_tensor(value)
             cache_storage = cache.untyped_storage()
             base_addr = cache_storage.data_ptr()

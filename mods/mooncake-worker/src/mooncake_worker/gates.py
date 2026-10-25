@@ -35,7 +35,7 @@ MD5_STOCK_WORKERS = (MD5_STOCK_WORKER, MD5_STOCK_WORKER_CODER390_DERIVED)
 #   decode after a store load, live). Diagnostic MKDBG build reverted.
 # 2026-10-11: + LookupKeyClient SND/RCVTIMEO + rebuild-on-Again
 #   (2574→2619 lines, fix-prefill-lookup-livelock).
-MD5_MOD_WORKER = "40c8b012ae6c138ab34424e42964c767"
+MD5_MOD_WORKER = "66b9ab9b6a27fb3f28f0744f7fb141f7"
 
 PACKAGE_FILES: tuple[str, ...] = (
     "__init__.py",
