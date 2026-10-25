@@ -1,0 +1,35 @@
+[[refs]]
+type = "self"
+repo = "spark-vllm-docker"
+ref = "fulton/mimo-v2.6-flash"
+description = "This project's own codekeeper index (active working branch)."
+
+[[refs]]
+type = "upstream"
+repo = "spark-vllm-docker-upstream"
+ref = "main"
+description = "Upstream spark-vllm-docker (eugr); this fork adds B12X/PD-disagg recipes."
+
+[[refs]]
+type = "dependency"
+repo = "vllm-cuda13.3-aarch64-gb10-glm53-flash"
+ref = "main"
+description = "The GB10 vLLM fork whose mods/ tree drives the serving image builds."
+
+[[refs]]
+type = "dependency"
+repo = "vllm-router"
+ref = "main"
+description = "PD rank-0 sibling container; upstream-router contracts live in docs/pd-router/."
+
+[[refs]]
+type = "dependency"
+repo = "lm-evaluation-harness"
+ref = "main"
+description = "eval/ configs target the EleutherAI harness registered in codekeeper."
+
+[[refs]]
+type = "dependency"
+repo = "litellm-upstream"
+ref = "main"
+description = "eval tooling points at the dell litellm gateway (litellm-upstream registry entry)."
