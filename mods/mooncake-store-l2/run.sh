@@ -80,6 +80,26 @@ MOONCAKE_WORKER_P2P=skip bash "${MOONCAKE_WORKER_DIR}/run.sh" install \
 # verbatim from mods/pd-disagg/run.sh; the pin is load-bearing for GB10: 0.3.13's
 # rdma_context gates RNIC open on GPU-RDMA support (DMA-BUF / nvidia-peermem)
 # and GB10 has neither, so every RNIC is disabled and engine init fails.
+# libnuma1: the mooncake-transfer-engine wheel dlopens it (engine.so/store.so
+# DT_NEEDED); the derived coder390 image ships without it, so `import
+# mooncake.store` died with "libnuma.so.1: cannot open shared object file"
+# AFTER pip install (observed live 2026-10-25 on the qwen3.8-27b-coder390-2x
+# store-L2 apply). Install before the import probes; -y + update-tolerant so
+# the base apt lists being stale does not wedge the mod.
+: "${MOONCAKE_L2_INSTALL_NUMA:=1}"
+if ! ldconfig -p 2>/dev/null | grep -q "libnuma.so.1"; then
+    if [ "${MOONCAKE_L2_INSTALL_NUMA}" = "1" ] && command -v apt-get >/dev/null 2>&1; then
+        info "libnuma.so.1 missing; apt-get installing libnuma1"
+        apt-get update >/dev/null 2>&1 || true
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libnuma1 >/dev/null \
+            || fail "op=install_libnuma reason=apt_failed hint='set MOONCAKE_L2_INSTALL_NUMA=0 if the image pre-bakes libnuma, or bake libnuma1 into the image'"
+    fi
+    ldconfig -p 2>/dev/null | grep -q "libnuma.so.1" \
+        || fail "op=verify_libnuma reason=absent hint='libnuma.so.1 must be resolvable for mooncake-transfer-engine'"
+    info "libnuma1 installed"
+else
+    info "libnuma.so.1 already present"
+fi
 : "${MOONCAKE_L2_INSTALL_DEPS:=1}"
 : "${MOONCAKE_L2_MOONCAKE_SPEC:=mooncake-transfer-engine-cuda13==0.3.12.post1}"
 if ! python3 -c 'import mooncake' >/dev/null 2>&1; then
