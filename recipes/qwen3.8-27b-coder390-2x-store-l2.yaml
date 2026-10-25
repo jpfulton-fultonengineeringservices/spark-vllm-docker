@@ -102,8 +102,8 @@ defaults:
   # concurrency at 262144) and leaves real headroom.
   gpu_memory_utilization: 0.50
   max_model_len: 262144
-  max_num_seqs: 32
-  max_num_batched_tokens: 16384
+  max_num_seqs: 8
+  max_num_batched_tokens: 2048
   num_speculative_tokens: 7
   draft_tensor_parallel_size: 2
 
