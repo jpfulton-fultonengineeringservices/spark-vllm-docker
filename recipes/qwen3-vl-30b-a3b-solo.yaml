@@ -1,0 +1,101 @@
+# Recipe: Qwen3-VL-30B-A3B-Instruct-Abliterated (solo, single DGX Spark)
+#
+# Serves huihui-ai/Huihui-Qwen3-VL-30B-A3B-Instruct-abliterated (the
+# abliterated variant of Qwen/Qwen3-VL-30B-A3B-Instruct) in BF16 at TP=1 on
+# one GB10 node. Qwen3-VL is a hybrid attention + linear-attention (Gated
+# DeltaNet) MoE vision-language model: 30B total / 3B active, native 256K
+# context, image + video input. The b12x stack's hybrid GDN path is the same
+# family the coder390 recipes run (Qwen3_5 hybrid), so the mamba/GDN env
+# block and --mamba-cache-mode align mirror recipes/qwen3.8-27b-coder390-2x.yaml.
+#
+# NO quantization: BF16 checkpoint (58 GB), no hf_quant_config.json, no
+# --quantization flag. --kv-cache-dtype fp8 keeps the KV pool small.
+# --mm-encoder-tp-mode data is required at TP=1: the default "weights" mode
+# shards vision-encoder weights across TP ranks and fails to partition at
+# TP=1 (upstream default at TP=1 per the Qwen3-VL recipes page).
+#
+# Weights: FES-staged slug qwen3-vl-30b-a3b-instruct-abliterated
+# (NAS /nas-1/models/qwen3-vl/qwen3-vl-30b-a3b-instruct-abliterated ->
+# node-local NVMe /opt/llm/models/<slug>), bind-mounted :ro at /model and
+# presented as the hub-cache shim id by mods/fes-weights so
+# `vllm serve <id>` resolves offline (HF_HUB_OFFLINE=1).
+#
+# SOLO placement ONLY: this recipe co-tenants a node with the live flagship
+# cluster chat serve elsewhere; it must be run on a node with ~85+ GiB of the
+# 120.5 GiB unified pool free (bge-m3 embed ~8 GiB + mooncake-client ~11 GiB
+# are normal co-tenants). gpu_memory_utilization 0.70 = ~84 GiB GMU budget.
+#
+# Launch (staged mode, from cluster-config on the head rank):
+#   ./scripts/spark-vllm-docker-serve.sh launch --daemon --force \
+#     --recipe qwen3-vl-30b-a3b-solo --slug qwen3-vl-30b-a3b-instruct-abliterated \
+#     --rank-order <host>:0
+# Direct eval (host with staged weights):
+#   scripts/fes-eval.sh qwen3-vl-30b-a3b-solo qwen3-vl-30b-a3b-instruct-abliterated --solo
+
+recipe_version: "1"
+name: Qwen3-VL-30B-A3B-Instruct-Abliterated (Solo)
+description: vLLM serving huihui-ai/Huihui-Qwen3-VL-30B-A3B-Instruct-abliterated BF16 on one DGX Spark (TP=1, b12x stack, GDN hybrid)
+
+# Synthetic id: the checkpoint is not on the hub at this name; mods/fes-weights
+# presents the staged /model copy under this exact id so serve resolves offline.
+model: local-inference-lab/Qwen3-VL-30B-A3B-Instruct-Abliterated
+container: vllm-node-b12x
+
+build_args:
+  - --exp-b12x
+
+solo_only: true
+
+mods:
+  - mods/fes-weights
+  - mods/b12x-kernel-cache
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 1
+  pipeline_parallel: 1
+  block_size: 16
+  max_model_len: 262144
+  max_num_seqs: 16
+  max_num_batched_tokens: 8192
+  gpu_memory_utilization: 0.70
+
+# Qwen3-VL hybrid (GDN + full attention) on the b12x stack: same env block as
+# the coder390 recipes (VLLM_SSM_CONV_STATE_LAYOUT, AOT/V2 runner), minus the
+# NVFP4/ModelOpt and YaRN-specific entries (this checkpoint is BF16 at native
+# 256K context, no rope override).
+env:
+  CUTE_DSL_ARCH: "sm_121a"
+  SAFETENSORS_FAST_GPU: "1"
+  VLLM_WORKER_MULTIPROC_METHOD: "spawn"
+  VLLM_SSM_CONV_STATE_LAYOUT: "DS"
+  VLLM_USE_AOT_COMPILE: "1"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+  # Persist torch inductor cache outside /tmp so b12x-kcache archives it.
+  TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
+
+command: |
+  b12x-kcache exec vllm serve local-inference-lab/Qwen3-VL-30B-A3B-Instruct-Abliterated \
+    --host {host} \
+    --port {port} \
+    --trust-remote-code \
+    --tensor-parallel-size {tensor_parallel} \
+    --mamba-cache-mode align \
+    --enable-prefix-caching \
+    --enable-chunked-prefill \
+    --async-scheduling \
+    --dtype bfloat16 \
+    --kv-cache-dtype fp8 \
+    --block-size {block_size} \
+    --max-model-len {max_model_len} \
+    --max-num-seqs {max_num_seqs} \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --mm-encoder-tp-mode data \
+    --limit-mm-per-prompt '{"image": 4, "video": 0}' \
+    --reasoning-parser qwen3 \
+    --tool-call-parser qwen3_xml \
+    --enable-auto-tool-choice \
+    --enable-mfu-metrics \
+    --kv-cache-metrics \
+    --gpu-memory-utilization {gpu_memory_utilization}
