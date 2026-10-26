@@ -92,7 +92,7 @@ command: |
     --max-num-seqs {max_num_seqs} \
     --max-num-batched-tokens {max_num_batched_tokens} \
     --mm-encoder-tp-mode data \
-    --limit-mm-per-prompt '{"image": 4, "video": 0}' \
+    --limit-mm-per-prompt '{{"image": 4, "video": 0}}' \
     --reasoning-parser qwen3 \
     --tool-call-parser qwen3_xml \
     --enable-auto-tool-choice \
