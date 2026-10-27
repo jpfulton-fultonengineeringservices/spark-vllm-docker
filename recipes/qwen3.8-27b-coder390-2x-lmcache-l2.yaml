@@ -27,6 +27,18 @@
 # Boot guard: validate_mamba_step_alignment requires max_num_batched_tokens
 # >= block_size; this recipe's 2048 >= 16 passes.
 #
+# Transfer mode: lmcache_driven (NOT engine_driven). The async engine-driven
+# store path hard-requires a single KV group (_single_group_block_ids raises
+# "engine-driven transfer does not support hybrid KV cache groups"), which
+# this hybrid model violates. The historical reason engine_driven was forced
+# on GB10 (commit 3a587079cc) was cross-container CUDA IPC failure via
+# PyTorch's UntypedStorage._share_cuda_, which needs a shared /dev/shm;
+# isolated_ipc=true switches both sides to RawCudaIPCWrapper
+# (driver-level cudaIpcGetMemHandle/OpenMemHandle), documented to work
+# across fully isolated containers, so the zero-copy path is viable here.
+# Server side must run --isolated-ipc + supported-transfer-mode auto (the
+# lmcache-ext unit drop-in sets both).
+#
 # Known upstream parity risks (docs/pd-router/lmcache-parity-fixes.md, wheel
 # 0.5.5rc1): L2 prefetch can vanish (scheduler WAITING_FOR_REMOTE_KVS wedge)
 # and the MP heartbeat starts lazily. Both fire only with L2 adapters active;
@@ -158,7 +170,7 @@ command: |
     --max-num-batched-tokens {max_num_batched_tokens} \
     --max-cudagraph-capture-size {max_cudagraph_capture_size} \
     --speculative-config '{{"method":"dflash","model":"/workspace/Qwen3.8-27B-Coder390-dflash","num_speculative_tokens":{num_speculative_tokens},"draft_tensor_parallel_size":{draft_tensor_parallel_size}}}' \
-    --kv-transfer-config '{{"kv_connector":"LMCacheMPConnector","kv_role":"kv_both","kv_connector_extra_config":{{"lmcache.mp.host":"tcp://127.0.0.1","lmcache.mp.port":5555,"lmcache.mp.mp_transfer_mode":"engine_driven"}}}}' \
+    --kv-transfer-config '{{"kv_connector":"LMCacheMPConnector","kv_role":"kv_both","kv_connector_extra_config":{{"lmcache.mp.host":"tcp://127.0.0.1","lmcache.mp.port":5555,"lmcache.mp.mp_transfer_mode":"lmcache_driven","lmcache.mp.isolated_ipc":true}}}}' \
     --gdn-prefill-backend cutedsl \
     --linear-backend b12x \
     --mm-encoder-tp-mode data \
