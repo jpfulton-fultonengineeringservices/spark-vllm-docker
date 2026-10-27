@@ -253,3 +253,99 @@ for path in glob.glob(
         f.write(src)
     print(f"[lmcache-mp-engine] patched handle shim in {path}")
 PYEOF
+
+# --- 5. Fork patch: exclude the speculative drafter's KV groups ---------------
+# A speculative drafter builds its OWN KV during decode; LMCache must never
+# store or load it. When a store/load sweeps the drafter's layers its KV is
+# corrupted and draft acceptance collapses. Measured on qwen3.8-27b-coder390
+# (2x TP2, DFlash2, num_speculative_tokens=7), 400-token generations:
+#   control (no LMCache) : mean accept len 3.32-4.10, pos0 acceptance 76-81%
+#   with LMCache L2      : mean accept length 2.18,  pos0 acceptance 42.6%
+# Drafter quality is a model property, so the ~2x collapse is LMCache sweeping
+# drafter KV -- the same failure the mooncake store-l2 path documents and
+# already guards against (mods/mooncake-worker/.../store/worker.py
+# :_drafter_group_ids, "spec-decode acceptance collapses to zero,
+# live 2026-10-25"). The MP path had no equivalent guard.
+#
+# Detection is name-disjointness, copied from that path: a vLLM engine group
+# belongs to the drafter when it has layer indices and NONE falls inside
+# [0, target num_hidden_layers). Ground truth here: target layers 0..63
+# (`language_model.model.layers.N`), drafter 64..68 (`model.layers.N`).
+# Those layers are marked EXCLUDED_ENGINE_GROUP so group_layers_by_identity
+# drops them and they join no LMCache group.
+# Fail-safe: any detection failure logs a warning and leaves grouping
+# untouched, so a target group can never be dropped.
+python3 - <<'PYEOF'
+import glob
+
+target = "/usr/local/lib/python3.12/dist-packages/lmcache/integration/vllm/kv_cache_groups.py"
+paths = glob.glob(target)
+if not paths:
+    print("[lmcache-mp-engine] drafter exclusion not applicable (kv_cache_groups absent)")
+    raise SystemExit(0)
+
+path = paths[0]
+with open(path) as f:
+    src = f.read()
+
+if "lmcache-mp-engine: exclude speculative-drafter" in src:
+    print("[lmcache-mp-engine] drafter exclusion already applied")
+    raise SystemExit(0)
+
+anchor = "    return [\n        EngineGroupInfo(\n"
+if src.count(anchor) != 1:
+    print(
+        "[lmcache-mp-engine] WARN: drafter-exclusion anchor not unique (%d matches); skipping"
+        % src.count(anchor)
+    )
+    raise SystemExit(0)
+
+inject = (
+    "    # --- lmcache-mp-engine: exclude speculative-drafter KV groups ---\n"
+    "    if per_layer_group_idx is not None:\n"
+    "        try:\n"
+    "            from vllm.config import get_current_vllm_config\n"
+    "            _vc = get_current_vllm_config()\n"
+    "            if getattr(_vc, 'speculative_config', None) is not None:\n"
+    "                _mc = getattr(_vc, 'model_config', None)\n"
+    "                _hf = getattr(_mc, 'hf_config', None) or getattr(_mc, 'hf_text_config', None)\n"
+    "                _n = getattr(_hf, 'num_hidden_layers', None)\n"
+    "                if _n is None:\n"
+    "                    _n = getattr(getattr(_hf, 'text_config', None), 'num_hidden_layers', None)\n"
+    "                if _n:\n"
+    "                    _boundary = int(_n)\n"
+    "                    _marked = 0\n"
+    "                    for _g in vllm_groups or ():\n"
+    "                        _idx = set()\n"
+    "                        for _ln in getattr(_g, 'layer_names', ()) or ():\n"
+    "                            try:\n"
+    "                                _idx.add(int(str(_ln).rsplit('.', 1)[-1]))\n"
+    "                            except Exception:\n"
+    "                                pass\n"
+    "                        if _idx and all(_i >= _boundary for _i in _idx):\n"
+    "                            for _ln in _g.layer_names:\n"
+    "                                if _ln in layer_to_idx:\n"
+    "                                    per_layer_group_idx[layer_to_idx[_ln]] = EXCLUDED_ENGINE_GROUP\n"
+    "                                    _marked += 1\n"
+    "                    if _marked:\n"
+    "                        logger.info(\n"
+    "                            'LMCache: excluding speculative-drafter KV layers '\n"
+    "                            '(%d layers at/above target num_hidden_layers=%d)',\n"
+    "                            _marked,\n"
+    "                            _boundary,\n"
+    "                        )\n"
+    "        except Exception:\n"
+    "            logger.warning(\n"
+    "                'LMCache: drafter-group exclusion skipped (detection failed); grouping left unchanged',\n"
+    "                exc_info=True,\n"
+    "            )\n"
+    "    # --- end lmcache-mp-engine patch ---\n"
+    "\n"
+)
+
+src = src.replace(anchor, inject + anchor, 1)
+with open(path, "w") as f:
+    f.write(src)
+compile(open(path).read(), path, "exec")
+print("[lmcache-mp-engine] patched drafter-exclusion into", path)
+PYEOF
