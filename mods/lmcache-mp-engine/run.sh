@@ -141,45 +141,51 @@ python3 - <<'PYEOF'
 import glob
 import re
 
-targets = glob.glob(
+# The pinned cuda-python bindings ship opaque getPtr()-backed handle objects
+# WITHOUT .reserved. THREE sites in two files touch it: the timeline-semaphore
+# event backend (export + import) and the RawCudaIPCWrapper KV-tensor path
+# (reserved-blob stash + restore). Shim all of them via ctypes — getPtr()
+# returns the live 64-byte buffer pointer (verified live on the engine
+# container). Idempotent per site; log-and-continue on wheel drift.
+
+def _ensure_ctypes(src):
+    if re.search(r"^import ctypes$", src, re.M) is None:
+        src = src.replace("import struct\n", "import struct\nimport ctypes\n", 1)
+    return src
+
+for path in glob.glob(
     "/usr/local/lib/python3.12/dist-packages/lmcache/v1/platform/cuda/timeline_semaphore_event_ipc.py"
-)
-if not targets:
-    print("[lmcache-mp-engine] timeline-semaphore shim not applicable (file absent)")
-    raise SystemExit(0)
-
-path = targets[0]
-with open(path) as f:
-    src = f.read()
-
-orig_src = src
-
-# Import site: fill the 64-byte buffer from handle_bytes.
-if "ipc_handle.reserved = handle_bytes" in src:
+) + glob.glob(
+    "/usr/local/lib/python3.12/dist-packages/lmcache/v1/platform/cuda/ipc_wrapper.py"
+):
+    with open(path) as f:
+        src = f.read()
+    orig_src = src
     src = src.replace(
         "ipc_handle.reserved = handle_bytes",
         "ctypes.memmove(ipc_handle.getPtr(), bytes(handle_bytes), 64)",
         1,
     )
-
-# Export site: read the 64-byte buffer out.
-if "bytes(handle.reserved)" in src:
     src = src.replace(
         "bytes(handle.reserved)",
         "ctypes.string_at(handle.getPtr(), 64)",
         1,
     )
-
-if src == orig_src:
-    print("[lmcache-mp-engine] timeline-semaphore shim already applied or no vulnerable pattern")
-    raise SystemExit(0)
-
-# The pinned wheel already imports ctypes in this module; re-add defensively
-# if upstream ever drops it.
-if re.search(r"^import ctypes$", src, re.M) is None:
-    src = src.replace("import struct\n", "import struct\nimport ctypes\n", 1)
-
-with open(path, "w") as f:
-    f.write(src)
-print(f"[lmcache-mp-engine] patched timeline-semaphore handle shim in {path}")
+    src = src.replace(
+        "self._ipc_handle_reserved = bytes(ipc_handle.reserved)",
+        "self._ipc_handle_reserved = ctypes.string_at(ipc_handle.getPtr(), 64)",
+        1,
+    )
+    src = src.replace(
+        "handle.reserved = self._ipc_handle_reserved",
+        "ctypes.memmove(handle.getPtr(), bytes(self._ipc_handle_reserved), 64)",
+        1,
+    )
+    if src == orig_src:
+        print(f"[lmcache-mp-engine] handle shim already applied or no vulnerable pattern: {path}")
+        continue
+    src = _ensure_ctypes(src)
+    with open(path, "w") as f:
+        f.write(src)
+    print(f"[lmcache-mp-engine] patched handle shim in {path}")
 PYEOF
