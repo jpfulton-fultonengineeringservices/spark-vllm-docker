@@ -116,6 +116,15 @@ env:
   # Stable content-hash keys across restarts (the MP server hashes the same
   # PYTHONHASHSEED=0 side; the lmcache-server entrypoint already sets it).
   PYTHONHASHSEED: "0"
+  # LMCache chunk size MUST be a multiple of the resolved attention block
+  # size for mamba-align hybrids: Qwen3_5 pads the attention block to 1648
+  # tokens so its page size covers the mamba page (engine log:
+  # "Setting attention block size to 1648 ... >= mamba page size"; the
+  # connector hard-fails otherwise: "LMCache chunk size 256 must be a
+  # multiple of 1648"). 1648 = 103 blocks of 16 raw tokens per LMCache
+  # chunk. Any future mamba-align model with a different resolved block
+  # size must override this.
+  LMCACHE_CHUNK_SIZE: "1648"
   # Activate mods/mamba-spec-relocate-guard (mods cannot read recipe env, so
   # the launcher injects the container -e).
   MAMBA_SPEC_RELOCATE_GUARD: "1"
