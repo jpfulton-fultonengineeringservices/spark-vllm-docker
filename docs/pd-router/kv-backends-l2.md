@@ -292,7 +292,7 @@ engine stays with launch-cluster.sh" (`compose.yaml:1-7`).
 | Service | Profile | Where | Command | Ports/devices |
 |---|---|---|---|---|
 | `mooncake-master` | `rank0` | rank-0 node only | `mooncake_master --port 50051 --enable_offload=true --promotion_on_hit=true --promotion_admission_threshold=2` (`compose.yaml:49-55`) | TCP :50051, `network_mode: host`, no GPUs/uverbs (`:44-47`; healthcheck TCP on 50051 `:56-61`) |
-| `mooncake-client` | `client` | every node | `mooncake_client --global_segment_size <SEG>GB --master_server_address <rank0>:50051 --metadata_server P2PHANDSHAKE --protocol rdma --device_names roceP2p1s0f1 --host <host-ip>:50053 --enable_offload=true` (`compose.yaml:93-107`) | host net; `/dev/infiniband/uverbs1,uverbs3,rdma_cm`; `ulimits.memlock=-1`; NVMe bind-mount `/nvme/mooncake_offload:/mooncake-offload` (`:76-86`); env `MOONCAKE_OFFLOAD_FILE_STORAGE_PATH=/mooncake-offload`, `…_STORAGE_BACKEND_DESCRIPTOR=bucket_storage_backend`, `…_BUCKET_EVICTION_POLICY=lru`, `…_BUCKET_MAX_PHYSICAL_BYTES`, `…_LOCAL_BUFFER_SIZE_BYTES=2147483648` (`:87-92`) |
+| `mooncake-client` | `client` | every node | `mooncake_client --global_segment_size ${MOONCAKE_SEGMENT_SIZE_GIB:-24}GB --master_server_address <rank0>:50051 --metadata_server P2PHANDSHAKE --protocol rdma --device_names roceP2p1s0f1 --host <host-ip>:50053 --enable_offload=true` (`compose.yaml:102-116`) | host net; `/dev/infiniband/uverbs1,uverbs3,rdma_cm`; `ulimits.memlock=-1`; NVMe bind-mount `/nvme/mooncake_offload:/mooncake-offload` (`:79-86`); env `MOONCAKE_OFFLOAD_FILE_STORAGE_PATH=/mooncake-offload`, `…_STORAGE_BACKEND_DESCRIPTOR=bucket_storage_backend`, `…_BUCKET_EVICTION_POLICY=lru`, `…_BUCKET_MAX_PHYSICAL_BYTES=${MOONCAKE_OFFLOAD_BUCKET_MAX_PHYSICAL_BYTES:?computed from MOONCAKE_OFFLOAD_MAX_GIB}`, `…_LOCAL_BUFFER_SIZE_BYTES=${MOONCAKE_OFFLOAD_LOCAL_BUFFER_SIZE_BYTES:-4294967296}` — 4 GiB, "one value across the template, this compose file and the docs" (`:87-95`) |
 
 Profile gating is the lmcache-mode contract: "EVERY node in the default 'mooncake' KV
 backend (serve.sh passes --profile client). Gated behind a profile so the 'lmcache' KV
@@ -300,27 +300,77 @@ backend (PD_KV_BACKEND=lmcache) can bring up ONLY the master (--profile rank0): 
 per-node LMCache MP server owns its own DRAM segment and the standalone client cohort must
 NOT run" (`compose.yaml:68-73`; restated at
 `mods/pd-disagg/README.md:137-139` and
-`scripts/lib/spark-serve.sh:250-253`).
+`scripts/lib/spark-serve.sh:369-372` — the client "would double-book the unified-memory pool").
+
 Healthchecks: master = TCP connect on :50051 (`compose.yaml:56-61`); client = process-table
 probe for the `mooncake_client` binary because "in P2P-handshake mode the TransferEngine
 binds an EPHEMERAL RPC port (observed 16800), so a TCP check on :50053 would fail forever"
 (`compose.yaml:114-125`).
 
-Per-node env rendered by serve.sh (`scripts/lib/spark-serve.sh:176-198`): `NODE_RANK`,
+Per-node env rendered by `_mc_node_env()` (`scripts/lib/spark-serve.sh:256-302`): `NODE_RANK`,
 `MOONCAKE_HOST_IP`, `MOONCAKE_MASTER_SERVER_ADDRESS`, `MOONCAKE_STORE_IMAGE`,
 `MOONCAKE_MASTER_PORT=50051`, `MOONCAKE_CLIENT_PORT=50053`,
-`MOONCAKE_SEGMENT_SIZE_GIB=${PD_MOONCAKE_SEGMENT_GIB:-8}`,
-`MOONCAKE_OFFLOAD_LOCAL_BUFFER_SIZE_BYTES=2147483648`,
-`MOONCAKE_OFFLOAD_MAX_GIB=100`, `MOONCAKE_OFFLOAD_BUCKET_MAX_PHYSICAL_BYTES`. The
-example env shows `MOONCAKE_SEGMENT_SIZE_GIB=8` with the GB10 rationale: "client DRAM
-segment + offload buffer come out of the same pool vLLM's gpu_memory_utilization sizes
-against. 8 GiB / 2 GiB keeps the 0.7 GMU budget intact" (`compose.env.example:25-29`).
+`MOONCAKE_SEGMENT_SIZE_GIB=${PD_MOONCAKE_SEGMENT_GIB:-${MOONCAKE_SEGMENT_SIZE_GIB:-24}}`,
+`MOONCAKE_OFFLOAD_LOCAL_BUFFER_SIZE_BYTES=${PD_MOONCAKE_OFFLOAD_BUFFER_BYTES:-${MOONCAKE_OFFLOAD_LOCAL_BUFFER_SIZE_BYTES:-4294967296}}`,
+`MOONCAKE_OFFLOAD_MAX_GIB=${MOONCAKE_OFFLOAD_MAX_GIB:-96}`,
+`MOONCAKE_OFFLOAD_BUCKET_MAX_PHYSICAL_BYTES=$(( ${MOONCAKE_OFFLOAD_MAX_GIB:-96} * 1073741824 ))`
+(`:284-294`).
+
+The sizing chain is `operator launch override → cluster.env → literal default`: "PD_MOONCAKE_SEGMENT_GIB /
+PD_MOONCAKE_OFFLOAD_BUFFER_BYTES are launch-time operator overrides only (no cluster.env sets
+them), so the chain is override -> cluster.env -> literal default, and the compose and -e paths
+land on the same numbers" (`scripts/lib/spark-serve.sh:278-283`). The fleet contract
+(`infra/cluster-config/cluster.env:770-835`) is **per client node: a 24 GiB DRAM segment
+(`MOONCAKE_SEGMENT_SIZE_GIB=24`, `:800`) + a 96 GiB local-NVMe offload cap
+(`MOONCAKE_OFFLOAD_MAX_GIB=96`, `:829`; byte form
+`MOONCAKE_OFFLOAD_BUCKET_MAX_PHYSICAL_BYTES=103079215104`, `:835`), plus a 4 GiB per-rank
+TransferEngine local buffer (`MOONCAKE_LOCAL_BUFFER_GIB=4`, `:806`) and a 4 GiB per-client
+offload staging buffer (`MOONCAKE_OFFLOAD_LOCAL_BUFFER_SIZE_BYTES=4294967296`, `:814`)**. The
+compose fallbacks are the same literals — `${MOONCAKE_SEGMENT_SIZE_GIB:-24}` and
+`${MOONCAKE_OFFLOAD_LOCAL_BUFFER_SIZE_BYTES:-4294967296}` — so "rendering the compose file
+without a node env still lands on the fleet contract"
+(`docker/mooncake-store/compose.yaml:92-105`).
+
+Why 24 GiB and not "as large as the cache": GB10 unified memory is zero-sum, so the segment and
+the buffers come out of the same pool vLLM's `gpu_memory_utilization` sizes against — "the
+client DRAM segment + offload local buffer come out of the same pool vLLM's
+gpu_memory_utilization sizes against, which is why the hot tier is capped at 24 GiB rather than
+grown to cover the whole cache. Fleet contract (cluster.env): 24 GiB DRAM segment per client
+node + 96 GiB local-NVMe cold tier + 4 GiB TransferEngine local buffer"
+(`docker/mooncake-store/compose.env.example:25-30`). The segment math is in cluster.env: "At
+max-model-len 262144 one full request is ~9.5-9.7 GiB of fp8 KV, so 24 GiB keeps ~2 full-length
+requests resident before LRU eviction pushes further traffic down to the NVMe tier below. DRAM
+is deliberately the hot tier only; the SSD tier absorbs the remainder instead of growing the
+segment" (`cluster.env:794-799`); the 4 GiB per-rank buffer is "sized to match the template
+budget comments (110/120 prefill, 104/120 decode at 24 GiB segment) so a rank's staging claim
+on unified memory is bounded and the ~10 GiB prefill headroom stays clear of the co-tenant
+embed reserve" (`cluster.env:801-806`).
+
+That makes the engine GMU budget the derived quantity, not the store size: `gpu_memory_utilization`
+is set *around* the reserved 24 GiB segment + 4 GiB rank buffers + 4 GiB staging buffer, and the
+client's own cgroup is capped to match — 32 GiB high-water / 40 GiB kill line
+(`MOONCAKE_CLIENT_OOM_HIGH_GIB=32`, `cluster.env:820`; `MOONCAKE_CLIENT_OOM_MAX_GIB=40`, `:821`),
+because "the client cap must cover its DRAM segment (24 GiB) + the offload local buffer (4 GiB)
++ working overhead, hence ≈32 GiB high-water and a 40 GiB kill line — with a 24 GiB segment a
+22/24 cap would OOM-kill the unit the moment the segment fills"
+(`cluster.env:815-819`; the docker `--memory`/`--memory-swap` flags are on the unit,
+`templates/mooncake-client.service.tmpl:32-34`). Re-budgeting GMU is therefore a per-recipe
+operation, not a client-sizing one: the recipe knob `pd_mooncake_segment_size_gib`
+(`infra/cluster-config/scripts/lib/spark-recipe.sh:173-179`) is consumed only by the LMCache MP
+server's `mooncake_store` L2 segment sizing (MP-adapter-only: an unset recipe falls back to its
+own 8 GiB literal there, not to cluster.env's 24), which converts that GiB value to bytes with a
+1073741824 multiplier (`scripts/lib/spark-serve.sh:423-426`; knob and fallback at
+`spark-recipe.sh:173-179`). It never sizes the mooncake-client cohort, which reads
+`MOONCAKE_SEGMENT_SIZE_GIB` straight from cluster.env.
 
 Launch flow: `launch_mooncake_daemons()` runs `docker compose -p pd-disagg-mooncake
 --env-file <node.env> --profile rank0 --profile client up -d --wait` rank-ascending, master
-first (`scripts/lib/spark-serve.sh:200-242`; rank0+client on rank 0 at `:223-224`);
+first (`scripts/lib/spark-serve.sh:304-361`; rank0+client on rank 0 at `:327-328`);
 teardown is `docker compose -p pd-disagg-mooncake down --remove-orphans --timeout 10`
-degrading to `docker rm -f mooncake-master mooncake-client` (`:128-139`).
+degrading to `docker rm -f mooncake-master mooncake-client` (`:213-217`). The teardown names
+`--profile client` explicitly because "mooncake-client is client-profile-gated and pins a 24 GiB
+unified-memory segment; without the client started by a prior (non-skip) run [being included in
+teardown it] survives and starves the next launch's request_memory guard" (`:208-212`).
 
 ### 5.3 `docker/lmcache-server/` — the LMCache MP-server image
 
@@ -405,7 +455,7 @@ within 60 s (`scripts/lib/spark-serve.sh:341-351`), image re-pull because
 `LMCACHE_MOONCAKE_LOCAL_HOSTNAME=<node>`,
 `LMCACHE_MOONCAKE_GLOBAL_SEGMENT_BYTES=<seg>` sized from the recipe's
 `pd_mooncake_segment_size_gib` so the MP server does not over-register on GB10's unified
-pool (`:293-324`).
+pool (`:423-426`, drop-in written at `:446-452`).
 
 The systemd unit (`templates/lmcache-server@.service.tmpl:30-41`) is thin: container name
 `lmcache-server-%i`, `Restart=on-failure` ("MP server failure does NOT take down vLLM —
@@ -448,8 +498,11 @@ drop-ins) [for] one placement instance. Idempotent" (`scripts/setup-mooncake-pd.
   --global_segment_size ${MOONCAKE_SEGMENT_SIZE_GIB}GB --master_server_address
   __RANK0_RAILB_IP__:50051 --metadata_server P2PHANDSHAKE --protocol rdma --device_names
   roceP2p1s0f1 --host __THIS_RAILB_IP__:50053 --enable_offload=true`, offload env
-  (`MOONCAKE_OFFLOAD_LOCAL_BUFFER_SIZE_BYTES=8589934592` in this template vs 2 GiB in
-  compose), `Restart=on-failure`, `MemoryHigh`/`MemoryMax` caps
+  (`-e "MOONCAKE_OFFLOAD_BUCKET_MAX_PHYSICAL_BYTES=${MOONCAKE_OFFLOAD_BUCKET_MAX_PHYSICAL_BYTES}"` and
+  `-e "MOONCAKE_OFFLOAD_LOCAL_BUFFER_SIZE_BYTES=${MOONCAKE_OFFLOAD_LOCAL_BUFFER_SIZE_BYTES}"` —
+  the template hardcodes no byte values; both are rendered from cluster.env through `envsubst`,
+  so the offload staging buffer is `4294967296` and the bucket cap `103079215104` on every node,
+  the same 4 GiB / 96 GiB the compose cohort uses), `Restart=on-failure`, `MemoryHigh`/`MemoryMax` caps
   (`templates/mooncake-client.service.tmpl:25-57`); "the client registers its DRAM segment
   via ibv_reg_mr (host DRAM registers cleanly on GB10). The vLLM ranks use host_staging=true
   to D2H-copy GPU KV into a pinned staging buffer, then RDMA-write from staging to this
@@ -524,10 +577,12 @@ Documented GB10 constraints (each with its citation):
 4. **Unified memory is zero-sum.** MP-server `mooncake_store` segment is sized from the
    recipe's `pd_mooncake_segment_size_gib`, not the entrypoint's 16 GiB default
    (`mods/pd-disagg/README.md:133-136`; sizing code
-   `scripts/lib/spark-serve.sh:296-299`); compose client segment 8 GiB / 2 GiB buffer keeps
-   the 0.7 GMU budget intact (`compose.env.example:25-29`); the standalone `mooncake-client`
-   cohort must NOT run in lmcache mode (`mods/pd-disagg/README.md:137-139`;
-   `compose.yaml:68-73`).
+   `scripts/lib/spark-serve.sh:423-426`); the fleet `mooncake-client` cohort is the *other*
+   budget line — 24 GiB DRAM segment + 96 GiB NVMe offload cap + 4 GiB per-rank buffer + 4 GiB
+   staging buffer per client node (`cluster.env:770-835`), with the engine GMU sized around
+   that reservation rather than the store grown to fit the engine
+   (`compose.env.example:25-30`); the standalone `mooncake-client` cohort must NOT run in
+   lmcache mode (`mods/pd-disagg/README.md:137-139`; `compose.yaml:68-73`).
 5. **L1 CPU pool minimal on GB10**: `--l1-size-gb 1` default — "On unified-memory GB10, CPU
    and GPU share the same physical LPDDR5X pool — every GiB to LMCache L1 is a GiB taken
    from vLLM KV cache / FlexTensor weight blocks. The real offload value comes from L2
@@ -574,8 +629,8 @@ mandated workaround. No file states this reconciliation explicitly.
 | Sidecar containers | `mooncake-master` (rank-0, :50051 TCP, profile `rank0`) + `mooncake-client` (every node, :50053, RoCE, profile `client`), image `mooncake-store:v0.3.12.post1-1` | `mooncake-master` ONLY (rank 0, :50051) + `lmcache-server-<node>` per node (`lmcache server`, :5555 ZMQ, :8080/:8082 HTTP), image `lmcache-server` (vllm-gb10 overlay) | none |
 | Boot-time pip installs (engine container) | `mooncake-transfer-engine-cuda13==0.3.12.post1`, `cupy-cuda13x<14.1.0`, `xxhash` | `lmcache` wheel (dgx-spark-wheels, `--no-deps`) + filtered requirements + `xxhash` | same lmcache wheel + requirements + `valkey-glide-sync` |
 | Key env (vLLM ranks) | `MOONCAKE_CONFIG_PATH=/tmp/pd-disagg/mooncake-store.json`, `MOONCAKE_PREFERRED_SEGMENT=<ip>:50053`, `MOONCAKE_REQUESTER_LOCAL_HOSTNAME=<ip>`, master addr/port, `PYTHONHASHSEED=0` | `LMCACHE_MP_HOST=tcp://127.0.0.1`, `LMCACHE_MP_PORT=5555`, master addr/port, `PYTHONHASHSEED=0` | `LMCACHE_CONFIG_FILE`, `LMCACHE_LOCAL_CPU_GIB=8`, `LMCACHE_LOCAL_DISK_GIB=50` |
-| Key env (daemons) | client: `MOONCAKE_SEGMENT_SIZE_GIB=8`, offload bucket env (2 GiB local buffer, 100 GiB NVMe cap) | server: `LMCACHE_MOONCAKE_MASTER_ADDR`, `LMCACHE_MOONCAKE_GLOBAL_SEGMENT_BYTES` (=recipe segment), `LMCACHE_SUPPORTED_TRANSFER_MODE=engine_driven`, `LMCACHE_L1_SIZE_GB=1` | — |
-| L2 tiers | client DRAM segment (8 GiB) + NVMe SSD offload (`/nvme/mooncake_offload`, 100 GiB bucket) | `mooncake_store` (RDMA, 16 GiB default seg / 4 GiB buffer), `fs_native` (NFS), `valkey` (Dell), optional P2P (:6767) | `fs_native` per-node NFS + `valkey://10.10.10.53:6379` |
+| Key env (daemons) | client: `MOONCAKE_SEGMENT_SIZE_GIB=24`, `MOONCAKE_OFFLOAD_MAX_GIB=96`, offload bucket env (4 GiB staging buffer `4294967296`, 96 GiB NVMe cap `103079215104`), cgroup 32 GiB / 40 GiB | server: `LMCACHE_MOONCAKE_MASTER_ADDR`, `LMCACHE_MOONCAKE_GLOBAL_SEGMENT_BYTES` (=recipe segment), `LMCACHE_SUPPORTED_TRANSFER_MODE=engine_driven`, `LMCACHE_L1_SIZE_GB=1` | — |
+| L2 tiers | client DRAM segment (24 GiB) + NVMe SSD offload (`/nvme/mooncake_offload`, 96 GiB bucket) | `mooncake_store` (RDMA, 16 GiB default seg / 4 GiB buffer), `fs_native` (NFS), `valkey` (Dell), optional P2P (:6767) | `fs_native` per-node NFS + `valkey://10.10.10.53:6379` |
 | Ports | 50051 master, 50053 client, 8000 pd-proxy, 8100/8200 APIs | 50051 master, 5555 MP ZMQ, 8080/8082 MP HTTP, 6767 P2P, 8000 router | none (in-process) |
 
 Citations for each cell are in the sections above; port map line:

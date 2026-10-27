@@ -20,9 +20,12 @@ Topology (4 nodes, `NNODES=4` fail-closed):
   `--vllm-pd-disaggregation` mode; OpenAI API :8000, Prometheus :29000.
   NOT an in-engine process.
 - **mooncake-client** (every node): sibling container from the dedicated
-  image; owns the node's 16 GiB DRAM segment + 100 GiB NVMe SSD offload tier;
+  image; owns the node's 24 GiB DRAM segment + 96 GiB NVMe SSD offload tier;
   RoCE RDMA via `roceP2p1s0f1` (uverbs1/uverbs3 + rdma_cm, memlock=-1);
-  `--network host`, port 50053.
+  `--network host`, port 50053. Client cgroup capped at the docker level
+  (`--memory 40g --memory-swap 40g --memory-reservation 32g`,
+  mooncake-client.service.tmpl) — unit-level MemoryHigh/MemoryMax
+  bind only the docker client process, not the container scope.
 - **KV data path**: vLLM ranks host-stage GPU KV → pinned DRAM → RDMA-write
   into the client's registered segment (hash-based dedup; GPU-VA registration
   is the GB10 dead end — same class as the NIXL-GPU failure).
@@ -69,9 +72,10 @@ Port map: 8000 (vllm-router API), 29000 (vllm-router /metrics), 8100 (prefill AP
 | `MOONCAKE_MASTER_SERVER_ADDRESS` | Rank-0 Rail B IP (REQUIRED; store cohort + lmcache twin) | — | serve.sh `-e` |
 | `MOONCAKE_MASTER_PORT` | Master RPC port | `50051` | serve.sh |
 | `MOONCAKE_CLIENT_PORT` | Client TransferEngine port | `50053` | serve.sh |
-| `MOONCAKE_SEGMENT_SIZE_GIB` | Per-node DRAM segment | `16` | serve.sh |
+| `MOONCAKE_SEGMENT_SIZE_GIB` | Per-node DRAM segment (24 GiB hot tier holds ~2 full-length 262144-token fp8 requests before LRU eviction to NVMe) | `24` | serve.sh |
 | `MOONCAKE_LOCAL_BUFFER_GIB` | vLLM rank local buffer | `4` | mooncake-env.sh |
-| `MOONCAKE_OFFLOAD_MAX_GIB` | SSD offload cap per node | `100` | serve.sh |
+| `MOONCAKE_OFFLOAD_LOCAL_BUFFER_SIZE_BYTES` | Client offload staging buffer | `4294967296` (4 GiB) | serve.sh / cluster.env |
+| `MOONCAKE_OFFLOAD_MAX_GIB` | SSD offload cap per node | `96` | serve.sh |
 | `MOONCAKE_REQUESTER_LOCAL_HOSTNAME` | vLLM rank Rail B IP | `<railb-ip>` | mooncake-env.sh |
 | `PYTHONHASHSEED` | MUST be `0` — store connector dedup (lmcache twin) requires it; P2P keeps it for determinism | `0` | mooncake-env.sh |
 | `WITH_NVIDIA_PEERMEM` | **MUST be unset** for the P2P backend — mooncake engine.so treats it as a hard DMABUF gate (`=0` prunes every RNIC → engine init rc=-1, verified 2026-10-12); host_staging arenas are host-pinned by design so GPU-VA registration never occurs regardless | unset | run.sh (mooncake backend) |
@@ -159,7 +163,11 @@ parity default" section below.
 - **Segment sizing is shared on GB10.** The MP server's `mooncake_store`
   segment comes out of the same unified pool as vLLM's KV budget, so it is
   sized from the recipe's `pd_mooncake_segment_size_gib` (served through the
-  MP-server systemd drop-in), NOT the entrypoint's 16 GiB default.
+  MP-server systemd drop-in), NOT the entrypoint's literal
+  `LMCACHE_MOONCAKE_GLOBAL_SEGMENT_BYTES` default in the table above. The
+  segment cap exists to bound unified-memory pressure — 24 GiB holds
+  ~2 full-length 262144-token fp8 requests (~9.5–9.7 GiB each) before LRU
+  eviction to NVMe — not to "cover the whole cache".
 - **The standalone `mooncake-client` cohort must NOT run** in lmcache mode —
   the MP server's L2 adapter self-registers its own segment. serve.sh gates
   the client behind the compose `client` profile and only starts master+MP.
