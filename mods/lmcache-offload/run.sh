@@ -90,17 +90,21 @@ fi
 # bare /cluster-shared/lmcache-l2 is deliberately NOT used -- the PD MP-server
 # fleet writes there). L2 remote = Valkey on Dell (no PD, no MP server, no RDMA).
 L1_GIB="${LMCACHE_LOCAL_CPU_GIB:-8}"
-DISK_GIB="${LMCACHE_LOCAL_DISK_GIB:-50}"
+DISK_GIB="${LMCACHE_LOCAL_DISK_GIB:-1024}"
 CONFIG_FILE="${LMCACHE_CONFIG_FILE:-/tmp/lmcache-config.yaml}"
 L2_DIR="/cluster-shared/lmcache-l2/${HOSTNAME}"
+L2_DIR_2="${LMCACHE_L2_PATH_2:-/nas-1/lmcache-l2/${HOSTNAME}}"
 mkdir -p "$L2_DIR"
+mkdir -p "$L2_DIR_2"
 
 cat > "$CONFIG_FILE" <<EOF
 # Rendered by mods/lmcache-offload/run.sh -- LMCacheConnectorV1 offload+durability.
 chunk_size: 256
 local_cpu: true
 max_local_cpu_size: ${L1_GIB}
-local_disk: ${L2_DIR}
+local_disk:
+  - ${L2_DIR_2}
+  - ${L2_DIR}
 max_local_disk_size: ${DISK_GIB}
 save_unfull_chunk: false
 save_decode_cache: true
