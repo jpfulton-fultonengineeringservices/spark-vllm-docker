@@ -10,6 +10,27 @@
 # values. NO mooncake cohort: 24 GiB DRAM segment + 96 GiB NVMe offload
 # of the store-l2 sibling are REPLACED by 1 GiB L1 + shared NFS + Dell valkey.
 #
+# STORE-ONLY L2 (lmcache.mp.store_only=true, 2026-10-27). L2 *loads* corrupt
+# this hybrid stack's speculative drafter: a single restore collapses draft
+# acceptance for the rest of the boot (MAL 1.00, per-position 0.000 x7,
+# drafted>0/accepted=0), starting in the same 10 s window as the retrieve and
+# never recovering. Measured with all three adapters healthy and registration
+# already reconciled to 64 layers:
+#
+#   L2 off (L1-only)      -> MAL 3.96-5.43, draft acceptance 42-64%
+#   any single L2 restore -> MAL 1.00-1.30, draft acceptance  1-7%
+#
+# --separate-object-groups did not help (the 1648-slot attention chunk and the
+# 16-slot GDN state geometries still share an object group), so the corridor
+# keeps the durable *saves* (prompt KV keeps landing on NFS/NAS/valkey for
+# future enablement and for operators) and turns the load probe off. This is
+# the MP-corridor equivalent of the enable_lookup=false remedy the sibling
+# Mooncake recipes took for the identical signature (a87632d7a0). The patch
+# lives in mods/lmcache-mp-engine (section 4c) and no-ops unless a recipe sets
+# the flag. Re-enable by dropping lmcache.mp.store_only and re-running the
+# wiped-L2 single-restore A/B in docs/lmcache/06-verification-and-observability
+# terms before trusting loads again.
+#
 # Why the MP connector and not the in-process LMCacheConnectorV1: the model
 # is a Qwen3_5 hybrid (16 FullAttention + 48 Gated DeltaNet layers,
 # --mamba-cache-mode align). The pinned wheel
@@ -171,7 +192,7 @@ command: |
     --max-num-batched-tokens {max_num_batched_tokens} \
     --max-cudagraph-capture-size {max_cudagraph_capture_size} \
     --speculative-config '{{"method":"dflash","model":"/workspace/Qwen3.8-27B-Coder390-dflash","num_speculative_tokens":{num_speculative_tokens},"draft_tensor_parallel_size":{draft_tensor_parallel_size}}}' \
-    --kv-transfer-config '{{"kv_connector":"LMCacheMPConnector","kv_role":"kv_both","kv_connector_extra_config":{{"lmcache.mp.host":"tcp://127.0.0.1","lmcache.mp.port":5555,"lmcache.mp.mp_transfer_mode":"lmcache_driven","lmcache.mp.isolated_ipc":true}}}}' \
+    --kv-transfer-config '{{"kv_connector":"LMCacheMPConnector","kv_role":"kv_both","kv_connector_extra_config":{{"lmcache.mp.host":"tcp://127.0.0.1","lmcache.mp.port":5555,"lmcache.mp.mp_transfer_mode":"lmcache_driven","lmcache.mp.isolated_ipc":true,"lmcache.mp.store_only":true}}}}' \
     --gdn-prefill-backend cutedsl \
     --linear-backend b12x \
     --mm-encoder-tp-mode data \
