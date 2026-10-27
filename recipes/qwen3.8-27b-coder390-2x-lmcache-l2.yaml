@@ -1,0 +1,162 @@
+# Recipe: Qwen3.8-27B-Coder390-DFlash2 (two-node TP=2, durable LMCache MP L2)
+#
+# Extends recipes/qwen3.8-27b-coder390-2x.yaml with durable computed KV cache
+# via the LMCache MP corridor: LMCacheMPConnector (kv_both) attaches each
+# vLLM rank to a per-node lmcache-server (ZMQ, localhost :5555), whose L1
+# host-DRAM pool (1 GiB, cluster.env LMCACHE_L1_SIZE_GB) pushes to L2
+# adapters (fs_native on shared NFS /cluster-shared/lmcache-l2, 100 GiB;
+# valkey on Dell 10.10.10.53:6379, 50 GiB) per cluster.env's LMCACHE_L2_*
+# values. NO mooncake cohort: the 24 GiB DRAM segment + 96 GiB NVMe offload
+# of the store-l2 sibling are REPLACED by 1 GiB L1 + shared NFS + Dell valkey.
+#
+# Why the MP connector and not the in-process LMCacheConnectorV1: the model
+# is a Qwen3_5 hybrid (16 FullAttention + 48 Gated DeltaNet layers,
+# --mamba-cache-mode align). The pinned wheel
+# (lmcache-mooncake-v0.5.5rc1-cu13.3) ships LMCacheMPConnector as
+# (KVConnectorBase_V1, SupportsHMA) with validate_kv_cache_groups ACCEPTING
+# MambaSpec in align/all modes and create_engine_group_infos_from_vllm
+# handling multi-group hybrid layouts -- so HMA stays ON with this connector.
+# The in-process LMCacheConnectorV1 impl (vllm_v1_adapter) builds one uniform
+# kv_shape with no group handling, forcing --disable-hybrid-kv-cache-manager,
+# whose _promote_local_kv_cache_specs has NO Mamba branch (raises "Failed to
+# promote local KV cache specs to one unified type"). This supersedes the old
+# "LMCacheMPConnector hard-requires HMA OFF" note -- that described the
+# pre-0.5.5rc1/MiMo-DiffKV state; the shipped wheel validates mamba-align
+# groups directly.
+#
+# Boot guard: validate_mamba_step_alignment requires max_num_batched_tokens
+# >= block_size; this recipe's 2048 >= 16 passes.
+#
+# Known upstream parity risks (docs/pd-router/lmcache-parity-fixes.md, wheel
+# 0.5.5rc1): L2 prefetch can vanish (scheduler WAITING_FOR_REMOTE_KVS wedge)
+# and the MP heartbeat starts lazily. Both fire only with L2 adapters active;
+# the lmcache-ext backend keeps LMCACHE_L2_DISABLED=1 (L1-only, proven state)
+# until the L1 path is verified, then flips to 0 in cluster.env. Pass A/B
+# staging is a value flip + unit restart, not a code change.
+#
+# Model/staging/launch: identical to the 2x recipe header -- staged
+# qwen3.8-27b-coder390-ethink-dflash2-nvfp4-w4a16 slug, launched on the head
+# rank with --rank-order gx10-cb11:0,gx10-f1d8:1.
+
+recipe_version: "1"
+name: Qwen3.8-27B-Coder390-DFlash2 (2x, durable LMCache MP L2)
+description: vLLM serving NVFP4 W4A16 (ModelOpt mixed-precision) Qwen3.8-27B-Coder390 checkpoint with its bundled FP8 DFlash2 drafter, TP=2 across two DGX Spark nodes, durable LMCache MP L2 KV cache (L1 host DRAM + fs_native NFS + valkey on Dell; no mooncake cohort, no PD transfer)
+
+model: local-inference-lab/Qwen3.8-27B-Coder390-DFlash2
+
+container: vllm-node-b12x
+image_id: sha256:e9f6e32941ec5680a58edfbfefaad6997f0527e22344b5b505cf8267de4625f2
+
+build_args:
+  - --exp-b12x
+
+# fes-weights must be first mod: verifies staged weights and builds the
+# offline hub-cache shim that `vllm serve <model>` resolves against.
+# lmcache-mp-engine installs the lmcache wheel the vllm-node-b12x image
+# lacks (engine side of the MP corridor; the MP server runs from the
+# cluster-config lmcache-server image). b12x-reclaim-gate + B12X_SKIP_RECLAIM:
+# LMCache registers KV memory which joins b12x's retained-owner set -- the
+# unguarded evict_unretained sweep wedges (observed live 2026-10-15).
+# mamba-spec-relocate-guard: guards Mamba-align speculative-block relocation
+# against hashed/shared blocks any external KV connector exposes on prefix
+# hit.
+mods:
+  - mods/fes-weights
+  - mods/qwen3.8-coder390-dflash
+  - mods/b12x-kernel-cache
+  - mods/b12x-reclaim-gate
+  - mods/mamba-spec-relocate-guard
+  - mods/lmcache-mp-engine
+
+# Backend id consumed by cluster-config spark-serve.sh's lmcache-ext arm
+# (non-PD: no mooncake master, no mooncake clients; per-node lmcache-server
+# units only). Default when absent is mooncake (pre-pd_kv_backend recipes).
+pd_kv_backend: lmcache-ext
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 2
+  # 0.50 (not base recipe's 0.75): keeps the proven budget class for this
+  # model on b12x + DFlash2. With the mooncake cohort torn down the pool is
+  # freer than store-l2's (no 24 GiB segment + 4 GiB staging), but the L1
+  # 1 GiB and MP-server overhead ride on the same unified pool; revisit
+  # 0.65+ only after the cohort teardown proves stable across a soak.
+  gpu_memory_utilization: 0.50
+  # Long-context YaRN, same base recipe: --hf-overrides scales the target's
+  # rope 4x (262144 -> 1048576); VLLM_ALLOW_LONG_MAX_MODEL_LEN permits it.
+  max_model_len: 1048576
+  max_num_seqs: 8
+  # validate_mamba_step_alignment (wheel) requires max_num_batched_tokens
+  # >= block_size; 2048 satisfies it with margin.
+  max_num_batched_tokens: 2048
+  # Same cudagraph tightening as base recipe.
+  max_cudagraph_capture_size: 256
+  num_speculative_tokens: 7
+  draft_tensor_parallel_size: 2
+
+# Qwen3.5 hybrid (Gated DeltaNet + full attention) on b12x stack.
+# Same block as recipes/qwen3.8-flash-next-nvfp4-cluster.yaml.
+env:
+  CUTE_DSL_ARCH: "sm_121a"
+  SAFETENSORS_FAST_GPU: "1"
+  VLLM_WORKER_MULTIPROC_METHOD: "spawn"
+  VLLM_SSM_CONV_STATE_LAYOUT: "DS"
+  VLLM_USE_AOT_COMPILE: "1"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+  VLLM_ENABLE_ROCE_ALLREDUCE: "1"
+  VLLM_ROCE_ALLREDUCE_MAX_SIZE: "2MB"
+  # b12x _reclaim_programs wedge guard (see mods list above).
+  B12X_SKIP_RECLAIM: "1"
+  # Persist the torch inductor Triton autotuner cache outside /tmp so
+  # b12x-kcache archives it (roots.txt entry "torchinductor").
+  TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
+  # Long-context YaRN: permit --max-model-len above 262144 native cap.
+  VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
+  # Stable content-hash keys across restarts (the MP server hashes the same
+  # PYTHONHASHSEED=0 side; the lmcache-server entrypoint already sets it).
+  PYTHONHASHSEED: "0"
+  # Activate mods/mamba-spec-relocate-guard (mods cannot read recipe env, so
+  # the launcher injects the container -e).
+  MAMBA_SPEC_RELOCATE_GUARD: "1"
+
+# The drafter's FP8 quantization is auto-detected from its own config.json's
+# quantization_config.quant_method ("fp8"); no --quantization flag needed
+# (same as the store-l2 sibling).
+command: |
+  # vLLM hard-rejects any KV connector with expandable_segments
+  # (config/vllm.py:952-970); LMCache registers KV memory the same way.
+  # Same belt-and-suspenders as mods/pd-disagg/dispatch.sh and the
+  # in-process mimo-lmcache recipe.
+  unset PYTORCH_CUDA_ALLOC_CONF
+  b12x-kcache exec vllm serve local-inference-lab/Qwen3.8-27B-Coder390-DFlash2 \
+    --host {host} \
+    --port {port} \
+    --trust-remote-code \
+    --tensor-parallel-size {tensor_parallel} \
+    --mamba-cache-mode align \
+    --enable-prefix-caching \
+    --enable-chunked-prefill \
+    --async-scheduling \
+    --dtype bfloat16 \
+    --kv-cache-dtype fp8 \
+    --block-size 16 \
+    --quantization modelopt_mixed \
+    --load-format instanttensor \
+    --hf-overrides '{{"text_config":{{"rope_parameters":{{"mrope_interleaved":true,"mrope_section":[11,11,10],"partial_rotary_factor":0.25,"rope_theta":10000000,"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":262144}}}}}}' \
+    --max-model-len {max_model_len} \
+    --max-num-seqs {max_num_seqs} \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --max-cudagraph-capture-size {max_cudagraph_capture_size} \
+    --speculative-config '{{"method":"dflash","model":"/workspace/Qwen3.8-27B-Coder390-dflash","num_speculative_tokens":{num_speculative_tokens},"draft_tensor_parallel_size":{draft_tensor_parallel_size}}}' \
+    --kv-transfer-config '{{"kv_connector":"LMCacheMPConnector","kv_role":"kv_both","kv_connector_extra_config":{{"lmcache.mp.host":"tcp://127.0.0.1","lmcache.mp.port":5555,"lmcache.mp.mp_transfer_mode":"engine_driven"}}}}' \
+    --gdn-prefill-backend cutedsl \
+    --linear-backend b12x \
+    --mm-encoder-tp-mode data \
+    --reasoning-parser qwen3 \
+    --tool-call-parser qwen3_xml \
+    --enable-auto-tool-choice \
+    --enable-mfu-metrics \
+    --kv-cache-metrics \
+    --kv-cache-metrics-sample 1.0 \
+    --gpu-memory-utilization {gpu_memory_utilization}
