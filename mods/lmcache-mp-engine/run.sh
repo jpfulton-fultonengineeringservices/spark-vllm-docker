@@ -126,3 +126,60 @@ if not patched_any:
 PYEOF
 
 echo "$PREFIX ok engine-side MP connector ready"
+
+# --- 3. Fork patch: timeline-semaphore handle struct vs cuda-python bindings ---
+# The pinned cuda-python bindings ship cudaIpcMemHandle_t/CUipcMemHandle as
+# opaque objects exposing getPtr() (address of the internal 64-byte buffer),
+# NOT a `.reserved` byte-array field. The lmcache timeline-semaphore event
+# backend (used by the isolated-IPC / lmcache_driven corridor) reads/writes
+# `.reserved` directly and raises "'cudaIpcMemHandle_t' object has no
+# attribute 'reserved'" at KV-cache registration. Shim both sites via
+# ctypes (the object IS ctypes-backed; getPtr() is a live buffer pointer,
+# verified live on the engine container).
+# Idempotent; log-and-continue when the pattern is absent (wheel drift).
+python3 - <<'PYEOF'
+import glob
+import re
+
+targets = glob.glob(
+    "/usr/local/lib/python3.12/dist-packages/lmcache/v1/platform/cuda/timeline_semaphore_event_ipc.py"
+)
+if not targets:
+    print("[lmcache-mp-engine] timeline-semaphore shim not applicable (file absent)")
+    raise SystemExit(0)
+
+path = targets[0]
+with open(path) as f:
+    src = f.read()
+
+orig_src = src
+
+# Import site: fill the 64-byte buffer from handle_bytes.
+if "ipc_handle.reserved = handle_bytes" in src:
+    src = src.replace(
+        "ipc_handle.reserved = handle_bytes",
+        "ctypes.memmove(ipc_handle.getPtr(), bytes(handle_bytes), 64)",
+        1,
+    )
+
+# Export site: read the 64-byte buffer out.
+if "bytes(handle.reserved)" in src:
+    src = src.replace(
+        "bytes(handle.reserved)",
+        "ctypes.string_at(handle.getPtr(), 64)",
+        1,
+    )
+
+if src == orig_src:
+    print("[lmcache-mp-engine] timeline-semaphore shim already applied or no vulnerable pattern")
+    raise SystemExit(0)
+
+# The pinned wheel already imports ctypes in this module; re-add defensively
+# if upstream ever drops it.
+if re.search(r"^import ctypes$", src, re.M) is None:
+    src = src.replace("import struct\n", "import struct\nimport ctypes\n", 1)
+
+with open(path, "w") as f:
+    f.write(src)
+print(f"[lmcache-mp-engine] patched timeline-semaphore handle shim in {path}")
+PYEOF
