@@ -564,9 +564,17 @@ inject_load = (
     "        # --- end lmcache-mp-engine store-only ---\n"
 )
 
+# on_new_request must STILL create the request tracker: vLLM's scheduler calls
+# update_state_after_alloc -> _get_request_tracker() unconditionally once a
+# request is admitted, and that asserts the tracker exists. An early `return`
+# here crashes the engine on the first request with
+#   AssertionError: Request tracker for request_id ... not found
+# (observed live 2026-10-27). So in store-only mode we create the tracker and
+# skip only the lookup submission.
 inject_new = (
     "        # --- lmcache-mp-engine: store-only L2 (suppress eager lookup) ---\n"
     "        if getattr(self, '_lmcache_store_only', False):\n"
+    "            self._get_or_create_request_tracker(request)\n"
     "            return\n"
     "        # --- end lmcache-mp-engine store-only ---\n"
 )
@@ -581,7 +589,11 @@ inject_matched = (
     "        # Report zero matched tokens so vLLM computes locally and never\n"
     "        # enters WAITING_FOR_REMOTE_KVS. This is the load-decision path;\n"
     "        # guarding start_load_kv alone leaves the lookup/retrieve live.\n"
+    "        # Trackers are still created: the scheduler calls\n"
+    "        # update_state_after_alloc on every admitted request, and the\n"
+    "        # store path needs the tracker's allocated block ids to save.\n"
     "        if getattr(self, '_lmcache_store_only', False):\n"
+    "            self._get_or_create_request_tracker(request)\n"
     "            return 0, False\n"
     "        # --- end lmcache-mp-engine store-only ---\n"
 )
