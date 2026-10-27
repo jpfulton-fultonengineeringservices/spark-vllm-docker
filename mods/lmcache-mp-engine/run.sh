@@ -357,3 +357,87 @@ with open(path, "w") as f:
 compile(open(path).read(), path, "exec")
 print("[lmcache-mp-engine] drafter exclusion: patched into", path)
 PYEOF
+
+# --- 4b. Drop excluded groups from the REGISTERED set -------------------------
+# The patch above only marks drafter layers EXCLUDED_ENGINE_GROUP, which keeps
+# them out of the engine-group list. It does NOT remove them from the
+# kv_caches dict handed to worker_adapter.register_kv_caches(), so the server
+# still registers every layer (observed live 2026-10-27: "Registered KV cache
+# for GPU ID ... with 69 layers" = 64 target + 5 drafter, while the group dump
+# stops at index 63). A 69-wide registration against a 64-wide group map shifts
+# every restored block by 5 slots, so L2 hits return KV belonging to the wrong
+# layer -> DFlash's context selector reads garbage -> 0% draft acceptance at
+# every position (Mean acceptance length pinned at 1.00).
+#
+# Same root cause as the PD-path fix (commit 1a580fb: "exclude
+# speculative-drafter KV from P2P registration") -- that one patched the
+# mooncake worker; this is the MP-corridor equivalent.
+#
+# Fail-safe: if the anchor is missing or already patched, log and continue
+# (never drop target layers).
+python3 - <<'PYEOF'
+import glob
+
+target = "/usr/local/lib/python3.12/dist-packages/lmcache/integration/vllm/lmcache_mp_connector.py"
+paths = glob.glob(target)
+if not paths:
+    print("[lmcache-mp-engine] register-drop: lmcache_mp_connector.py absent, skipping")
+    raise SystemExit(0)
+
+path = paths[0]
+with open(path) as f:
+    src = f.read()
+
+MARK = "lmcache-mp-engine: drop excluded layers from registration"
+if MARK in src:
+    print("[lmcache-mp-engine] register-drop: already applied")
+    raise SystemExit(0)
+
+anchor = (
+    "        self.worker_adapter.register_kv_caches(\n"
+    "            kv_caches,\n"
+    "            engine_group_infos=engine_group_infos,\n"
+)
+if src.count(anchor) != 1:
+    print(
+        "[lmcache-mp-engine] register-drop: ANCHOR NOT UNIQUE (%d) - skipping"
+        % src.count(anchor)
+    )
+    raise SystemExit(0)
+
+inject = (
+    "        # --- lmcache-mp-engine: drop excluded layers from registration ---\n"
+    "        # Names absent from every engine group are drafter/alias layers.\n"
+    "        # Registering them widens the transfer map past the group map and\n"
+    "        # shifts every restored block; drop them before registration.\n"
+    "        try:\n"
+    "            _keep_names = set()\n"
+    "            for _g in ((kv_cache_config.kv_cache_groups or ()) if kv_cache_config else ()):\n"
+    "                for _ln in (getattr(_g, 'layer_names', ()) or ()):\n"
+    "                    if _ln in kv_caches:\n"
+    "                        _keep_names.add(_ln)\n"
+    "            if _keep_names and len(_keep_names) < len(kv_caches):\n"
+    "                _dropped = [n for n in kv_caches if n not in _keep_names]\n"
+    "                print(\n"
+    "                    '[lmcache-mp-engine] register-drop: %d registered -> %d '\n"
+    "                    '(dropped %d: %r)'\n"
+    "                    % (len(kv_caches), len(_keep_names), len(_dropped), _dropped[:6])\n"
+    "                )\n"
+    "                kv_caches = {n: kv_caches[n] for n in kv_caches if n in _keep_names}\n"
+    "            else:\n"
+    "                print(\n"
+    "                    '[lmcache-mp-engine] register-drop: no excluded layers '\n"
+    "                    '(%d in groups, %d registered)'\n"
+    "                    % (len(_keep_names), len(kv_caches))\n"
+    "                )\n"
+    "        except Exception as _e:\n"
+    "            print('[lmcache-mp-engine] register-drop: skipped (%r)' % (_e,))\n"
+    "        # --- end lmcache-mp-engine register-drop ---\n"
+)
+
+src = src.replace(anchor, inject + anchor, 1)
+with open(path, "w") as f:
+    f.write(src)
+compile(open(path).read(), path, "exec")
+print("[lmcache-mp-engine] register-drop: patched into", path)
+PYEOF
