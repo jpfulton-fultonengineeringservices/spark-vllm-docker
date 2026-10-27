@@ -127,7 +127,7 @@ PYEOF
 
 echo "$PREFIX ok engine-side MP connector ready"
 
-# --- 4. Fork patch: report load failures per-request for multi-group models ---
+# --- 4. Fork patch: suppress flat block-id load failures (multi-group models) --
 # vLLM's scheduler hard-raises for models with >1 KV cache group when a
 # connector reports a flat `invalid_block_ids` set:
 #   "A KV connector reported block-level load failures (invalid_block_ids)
@@ -136,19 +136,21 @@ echo "$PREFIX ok engine-side MP connector ready"
 #    KVConnectorTransferResults.failed_recving instead."
 # (vllm/v1/core/sched/scheduler.py:_handle_invalid_blocks). A mamba-align
 # hybrid ALWAYS has >1 group, and LMCache's MP adapter routes a failed
-# retrieve (partial L2 hit after a restart, or an unhealthy server) into
+# retrieve (partial L2 hit after a restart, unhealthy server) into
 # `error_block_ids`, which vLLM surfaces as invalid_block_ids -> EngineCore
-# dies. The upstream-blessed path is request-level: failed recv requests go
-# in `failed_recving`, and the scheduler's _handle_failed_recving resets
-# num_computed_tokens and recomputes (kv_load_failure_policy=recompute).
+# dies.
 #
-# Patch: (a) stop populating error_block_ids on retrieve failure, recording
-# the request id in a new failed_recving set instead; (b) expose that set so
-# the connector can report it; (c) make get_block_ids_with_load_errors return
-# an empty set for multi-group safety.
+# Fix: stop emitting block-level failures entirely. Under vLLM's default
+# kv_load_failure_policy=recompute a request whose KV never arrives simply
+# recomputes its prefix, which is exactly the desired degraded behavior; the
+# request is still released through finished_recving by the normal path
+# (upstream's own contract: "Failed receives also appear in finished_recving
+# so the scheduler can release the request from its transfer wait state").
+# Reporting per-request failures as well was tried and rejected: vLLM's
+# _update_from_kv_xfer_finished asserts the id is still in scheduler.requests
+# and dies for requests that already completed.
 python3 - <<'PYEOF'
 import glob
-import re
 
 target = "/usr/local/lib/python3.12/dist-packages/lmcache/integration/vllm/vllm_multi_process_adapter.py"
 paths = glob.glob(target)
@@ -161,130 +163,26 @@ with open(path) as f:
     src = f.read()
 orig = src
 
-# (a) declare the new set next to error_block_ids
-if "self.failed_recving_req_ids" not in src:
-    src = src.replace(
-        "        self.error_block_ids: set[int] = set()",
-        "        self.error_block_ids: set[int] = set()\n"
-        "        # Request ids whose retrieve failed: reported to vLLM via\n"
-        "        # KVConnectorTransferResults.failed_recving so the scheduler\n"
-        "        # recomputes them (multi-group models reject invalid_block_ids).\n"
-        "        self.failed_recving_req_ids: set[str] = set()",
-        1,
-    )
-
-# (b) retrieve-failure sites: request-level instead of block-level
-src = src.replace(
-    """            if not r_result:
-                self.error_block_ids.update(r_block_ids)
-                logger.error(""",
-    """            if not r_result:
-                # Multi-group models: per-request failure, not block-level.
-                self.failed_recving_req_ids.add(request_id)
-                logger.error(""",
-)
-
-# unhealthy early-return inside submit_retrieve_request
-src = src.replace(
-    """        if not self.is_healthy:
-            self.error_block_ids.update(op.flat_block_ids)
-            self._dropped_retrieves.add(request_id)
-            return""",
-    """        if not self.is_healthy:
-            self.failed_recving_req_ids.add(request_id)
-            self._dropped_retrieves.add(request_id)
-            return""",
-)
-
-# (c) never emit flat block-id failures
 src = src.replace(
     """        errors = self.error_block_ids.copy()
         self.error_block_ids.clear()
         return errors""",
-    """        # Flat block ids are ambiguous across KV cache groups; failures are
-        # reported per-request via take_failed_recving_requests() instead.
+    """        # Flat block ids are ambiguous across KV cache groups and vLLM
+        # hard-rejects them for multi-group models; failures are handled by
+        # the recompute policy via the normal finished_recving path.
         self.error_block_ids.clear()
         return set()""",
     1,
 )
 
-# (d) accessor for the connector to drain the set
-if "def take_failed_recving_requests" not in src:
-    src = src.replace(
-        "    def get_block_ids_with_load_errors(self) -> set[int]:",
-        "    def take_failed_recving_requests(self) -> set[str]:\n"
-        '        """Drain request ids whose KV retrieve failed (per-request report)."""\n'
-        "        failed = self.failed_recving_req_ids.copy()\n"
-        "        self.failed_recving_req_ids.clear()\n"
-        "        return failed\n\n"
-        "    def get_block_ids_with_load_errors(self) -> set[int]:",
-        1,
-    )
-
 if src == orig:
-    print("[lmcache-mp-engine] multi-group failure patch already applied or no anchors matched")
+    print("[lmcache-mp-engine] multi-group failure patch already applied or no anchor")
 else:
     with open(path, "w") as f:
         f.write(src)
-    print(f"[lmcache-mp-engine] patched per-request load-failure reporting in {path}")
+    print(f"[lmcache-mp-engine] suppressed block-level load failures in {path}")
 compile(open(path).read(), path, "exec")
 print("[lmcache-mp-engine] adapter compiles OK")
-PYEOF
-
-# 4b. Same patch, connector side: surface the drained set through
-# KVConnectorOutput.failed_recving (vllm/v1/outputs.py documents that field
-# explicitly as the unambiguous channel "for hybrid/multi-pool cache layouts
-# where numeric block IDs overlap"). Without this the adapter's new set is
-# never read and failed retrieves would instead stall in
-# WAITING_FOR_REMOTE_KVS.
-python3 - <<'PYEOF'
-import glob
-
-target = "/usr/local/lib/python3.12/dist-packages/lmcache/integration/vllm/lmcache_mp_connector.py"
-paths = glob.glob(target)
-if not paths:
-    print("[lmcache-mp-engine] connector failure patch not applicable (absent)")
-    raise SystemExit(0)
-
-path = paths[0]
-with open(path) as f:
-    src = f.read()
-orig = src
-
-if "def get_transfer_results" not in src:
-    src = src.replace(
-        "    def get_block_ids_with_load_errors(self) -> set[int]:",
-        "    def get_transfer_results(self, finished_req_ids):\n"
-        '        """Extend vLLM\'s transfer results with per-request recv failures.\n\n'
-        "        vLLM (v1/worker/kv_connector_model_runner_mixin.py) copies\n"
-        "        ``get_transfer_results(...).failed_recving`` into\n"
-        "        KVConnectorOutput, which the scheduler consumes via\n"
-        "        _handle_failed_recving() -> recompute. The base\n"
-        "        implementation only wraps get_finished(), which cannot express\n"
-        "        failures for multi-group models, so the adapter's per-request\n"
-        "        failure set is merged in here.\n"
-        '        """\n'
-        "        results = super().get_transfer_results(finished_req_ids)\n"
-        "        adapter = getattr(self, 'worker_adapter', None)\n"
-        "        if adapter is not None and hasattr(\n"
-        "            adapter, 'take_failed_recving_requests'\n"
-        "        ):\n"
-        "            failed = adapter.take_failed_recving_requests()\n"
-        "            if failed:\n"
-        "                results.failed_recving |= failed\n"
-        "        return results\n\n"
-        "    def get_block_ids_with_load_errors(self) -> set[int]:",
-        1,
-    )
-
-if src == orig:
-    print("[lmcache-mp-engine] connector failure patch already applied or no anchor")
-else:
-    with open(path, "w") as f:
-        f.write(src)
-    print(f"[lmcache-mp-engine] patched connector failed_recving surface in {path}")
-compile(open(path).read(), path, "exec")
-print("[lmcache-mp-engine] connector compiles OK")
 PYEOF
 
 # --- 3. Fork patch: timeline-semaphore handle struct vs cuda-python bindings ---
