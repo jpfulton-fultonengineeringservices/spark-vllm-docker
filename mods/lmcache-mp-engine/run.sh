@@ -150,7 +150,13 @@ import re
 
 def _ensure_ctypes(src):
     if re.search(r"^import ctypes$", src, re.M) is None:
-        src = src.replace("import struct\n", "import struct\nimport ctypes\n", 1)
+        # Files differ: timeline_semaphore_event_ipc.py imports struct;
+        # ipc_wrapper.py imports only threading/torch. Insert after the
+        # module's first plain import so both are covered.
+        m = re.search(r"^(import \w+\n)", src, re.M)
+        if m is None:
+            m = re.search(r"^(from __future__ .*)\n", src, re.M)
+        src = src[: m.end()] + "import ctypes\n" + src[m.end():]
     return src
 
 for path in glob.glob(
