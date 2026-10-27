@@ -258,35 +258,35 @@ PYEOF
 # A speculative drafter builds its OWN KV during decode; LMCache must never
 # store or load it. Measured on qwen3.8-27b-coder390 (2x TP2, DFlash2,
 # num_speculative_tokens=7), identical 400-token generations:
-#   control, no LMCache           : mean accept len 3.32-4.10, pos0 76-83%
-#   with LMCache, L2 empty (fresh): mean accept len 4.32,      pos0 ~78%
-#   with LMCache, L2 populated    : mean accept len 2.6-3.4,   pos0 ~43%
-# i.e. acceptance is fine until L2 holds data, then collapses -- consistent
-# with the drafter's KV being served back from L2 and corrupting it. The
-# mooncake store-l2 path documents the same failure and already guards it
+#   control, no LMCache            : mean accept len 3.32-4.10, pos0 76-83%
+#   with LMCache, L2 empty (fresh) : mean accept len 4.32,      pos0 ~78%
+#   with LMCache, L2 populated     : mean accept len 2.6-3.4,   pos0 ~43%
+# Acceptance is fine until L2 holds data, then collapses -- consistent with the
+# drafter's KV being served back from L2. The mooncake store-l2 path documents
+# the same failure and already guards it
 # (mods/mooncake-worker/.../store/worker.py:_drafter_group_ids, "spec-decode
 # acceptance collapses to zero, live 2026-10-25"). The MP path had no guard:
-# the MP server log shows the drafter registered as its own kernel group
+# the MP server log shows the drafter as its own kernel group
 #   KernelGroupInfo(layers=5, indices=64-68, nh=4, hs=256, uint8)
-# alongside target groups (nh=2, hs=512, int8) and
+# beside target groups (nh=2, hs=512, int8) and
 #   "Registered KV cache for GPU ID ... with 69 layers"   # 64 target + 5 drafter
 #
-# DETECTION IS CONFIG-FREE ON PURPOSE. The obvious approach -- read
-# vllm_config.speculative_config -- does NOT work here: get_current_vllm_config()
-# raises "Current vLLM config is not set" at this point in startup, which an
-# earlier revision of this patch swallowed, making it silently inert (measured:
-# drafter still registered with 69 layers). Instead the boundary is derived
-# from the registered layer NAMES, which are disjoint by construction:
-#   target  ...language_model.model.layers.N   N in [0, 64)
-#   drafter ...model.layers.N                  N in [64, 69)
-# A vLLM group whose indices all sit at/above the largest "compact prefix"
-# boundary of the other group is the drafter's. Concretely: take the minimum
-# index over all groups that start at 0 (the target, always), and treat any
-# group whose indices are all >= that target's max+1 as the drafter.
+# DETECTION IS CONFIG-FREE AND NAME-FORMAT-FREE. Two earlier revisions failed:
+#   (a) reading vllm_config.speculative_config raised
+#       "Current vLLM config is not set" at group-construction time;
+#   (b) assuming layer names end in ".layers.<N>" and that the target group
+#       starts at index 0 -- live log said "no group starts at 0 - skipped".
+# So this revision derives the boundary from the DATA: group the registered
+# layer names by their prefix (everything before ".layers."), take the prefix
+# carrying the MOST layers as the target, and treat any vLLM group whose names
+# use a different prefix as the drafter's. That holds regardless of how the
+# names are actually spelled, and needs no vLLM config.
 #
-# Fail-safe: every failure path prints to STDOUT (not a logger that may be
-# unconfigured) and leaves grouping untouched, so a target group is never
-# dropped, and an inert patch is always visible in `docker logs vllm_node`.
+# Every path prints to STDOUT (not a logger that may be unconfigured), and the
+# first few real layer names are printed once, so an inert or misaimed patch is
+# always visible in `docker logs vllm_node`.
+# Fail-safe: on any failure grouping is left untouched, so a target group is
+# never dropped.
 python3 - <<'PYEOF'
 import glob
 
@@ -308,42 +308,45 @@ if MARK in src:
 anchor = "    return [\n        EngineGroupInfo(\n"
 if src.count(anchor) != 1:
     print(
-        "[lmcache-mp-engine] drafter exclusion: ANCHOR NOT UNIQUE (%d) - skipping, grouping unchanged"
+        "[lmcache-mp-engine] drafter exclusion: ANCHOR NOT UNIQUE (%d) - skipping"
         % src.count(anchor)
     )
     raise SystemExit(0)
 
 inject = (
     "    # --- lmcache-mp-engine: exclude speculative-drafter KV groups ---\n"
-    "    # Config-free by design: get_current_vllm_config() is NOT valid here.\n"
+    "    # Config-free and name-format-free: majority prefix == target.\n"
     "    if per_layer_group_idx is not None and vllm_groups:\n"
-    "        _gi = []\n"
+    "        def _pfx(_n):\n"
+    "            _s = str(_n)\n"
+    "            _i = _s.rfind('.layers.')\n"
+    "            return _s[:_i] if _i >= 0 else _s\n"
+    "        _by_pfx = {}\n"
     "        for _g in vllm_groups:\n"
-    "            _s = set()\n"
     "            for _ln in getattr(_g, 'layer_names', ()) or ():\n"
-    "                try:\n"
-    "                    _s.add(int(str(_ln).rsplit('.', 1)[-1]))\n"
-    "                except Exception:\n"
-    "                    pass\n"
-    "            _gi.append(_s)\n"
-    "        # The target group always starts at 0; its max index bounds the\n"
-    "        # target's layer range. Anything entirely above that is drafter.\n"
-    "        _starts_at_zero = [_s for _s in _gi if _s and 0 in _s]\n"
-    "        if _starts_at_zero:\n"
-    "            _boundary = max(max(_s) for _s in _starts_at_zero) + 1\n"
+    "                _by_pfx.setdefault(_pfx(_ln), 0)\n"
+    "                _by_pfx[_pfx(_ln)] += 1\n"
+    "        if len(_by_pfx) < 2:\n"
+    "            print(\n"
+    "                '[lmcache-mp-engine] drafter exclusion: only %d layer prefix(es) %r - no drafter, skipped'\n"
+    "                % (len(_by_pfx), sorted(_by_pfx))\n"
+    "            )\n"
+    "        else:\n"
+    "            _tgt = max(_by_pfx.items(), key=lambda kv: kv[1])[0]\n"
     "            _marked = 0\n"
-    "            for _s, _g in zip(_gi, vllm_groups):\n"
-    "                if _s and min(_s) >= _boundary:\n"
-    "                    for _ln in _g.layer_names:\n"
+    "            for _g in vllm_groups:\n"
+    "                _names = list(getattr(_g, 'layer_names', ()) or ())\n"
+    "                if _names and all(_pfx(_n) != _tgt for _n in _names):\n"
+    "                    for _ln in _names:\n"
     "                        if _ln in layer_to_idx:\n"
     "                            per_layer_group_idx[layer_to_idx[_ln]] = EXCLUDED_ENGINE_GROUP\n"
     "                            _marked += 1\n"
     "            print(\n"
-    "                '[lmcache-mp-engine] drafter exclusion: boundary=%d marked=%d layers'\n"
-    "                % (_boundary, _marked)\n"
+    "                '[lmcache-mp-engine] drafter exclusion: prefixes=%r target=%r marked=%d layers'\n"
+    "                % (sorted(_by_pfx), _tgt, _marked)\n"
     "            )\n"
-    "        else:\n"
-    "            print('[lmcache-mp-engine] drafter exclusion: no group starts at 0 - skipped')\n"
+    "            _sample = [str(_n) for _g in vllm_groups for _n in (getattr(_g, 'layer_names', ()) or ())]\n"
+    "            print('[lmcache-mp-engine] sample layer names: %r' % (_sample[:3],))\n"
     "    # --- end lmcache-mp-engine patch ---\n"
     "\n"
 )
