@@ -508,7 +508,28 @@ anchor_new = (
     "            return\n"
 )
 
-for name, a in (("init", anchor_init), ("start_load_kv", anchor_load), ("on_new_request", anchor_new)):
+# Anchor 4: get_num_new_matched_tokens signature. This is the load DECISION
+# path -- it submits the lookup (maybe_submit_lookup_request, ~line 902) and
+# reports the matched-token count back to vLLM, which is what actually drives
+# the WAITING_FOR_REMOTE_KVS state and the subsequent retrieve. Guarding only
+# start_load_kv/on_new_request left this path live (observed live 2026-10-27:
+# lookup_requests_total and prefetch_load_submitted_requests_total still
+# advanced with store_only=true). Returning (0, False) means "no external
+# tokens", so vLLM computes the prompt locally and never waits on a load.
+anchor_matched = (
+    "    def get_num_new_matched_tokens(\n"
+    "        self,\n"
+    '        request: "Request",\n'
+    "        num_computed_tokens: int,\n"
+    "    ) -> tuple[int | None, bool]:\n"
+)
+
+for name, a in (
+    ("init", anchor_init),
+    ("start_load_kv", anchor_load),
+    ("on_new_request", anchor_new),
+    ("get_num_new_matched_tokens", anchor_matched),
+):
     if src.count(a) != 1:
         print(
             "[lmcache-mp-engine] store-only: ANCHOR %s NOT UNIQUE (%d) - skipping"
@@ -550,10 +571,26 @@ inject_new = (
     "        # --- end lmcache-mp-engine store-only ---\n"
 )
 
+inject_matched = (
+    "    def get_num_new_matched_tokens(\n"
+    "        self,\n"
+    '        request: "Request",\n'
+    "        num_computed_tokens: int,\n"
+    "    ) -> tuple[int | None, bool]:\n"
+    "        # --- lmcache-mp-engine: store-only L2 (no external tokens) ---\n"
+    "        # Report zero matched tokens so vLLM computes locally and never\n"
+    "        # enters WAITING_FOR_REMOTE_KVS. This is the load-decision path;\n"
+    "        # guarding start_load_kv alone leaves the lookup/retrieve live.\n"
+    "        if getattr(self, '_lmcache_store_only', False):\n"
+    "            return 0, False\n"
+    "        # --- end lmcache-mp-engine store-only ---\n"
+)
+
 src = src.replace(anchor_init, anchor_init + inject_init, 1)
 # inject_load already repeats the signature line, so replace (not prepend).
 src = src.replace(anchor_load, inject_load, 1)
 src = src.replace(anchor_new, inject_new + anchor_new, 1)
+src = src.replace(anchor_matched, inject_matched, 1)
 
 with open(path, "w") as f:
     f.write(src)
