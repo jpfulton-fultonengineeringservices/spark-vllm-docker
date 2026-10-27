@@ -6,7 +6,7 @@
 # host-DRAM pool (1 GiB, cluster.env LMCACHE_L1_SIZE_GB) pushes L2
 # adapters (fs_native on shared NFS /cluster-shared/lmcache-l2, 100 GiB;
 # fs_native #2 on /nas-1/lmcache-l2, 1024 GiB; valkey on Dell
-# 10.10.10.53:6379, 8 GiB) per cluster.env's LMCACHE_L2_*
+# 10.10.10.53:6379, 24 GiB) per cluster.env's LMCACHE_L2_*
 # values. NO mooncake cohort: 24 GiB DRAM segment + 96 GiB NVMe offload
 # of the store-l2 sibling are REPLACED by 1 GiB L1 + shared NFS + Dell valkey.
 #
