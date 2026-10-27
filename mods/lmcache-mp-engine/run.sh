@@ -445,3 +445,118 @@ with open(path, "w") as f:
 compile(open(path).read(), path, "exec")
 print("[lmcache-mp-engine] register-drop: patched into", path)
 PYEOF
+
+# --- 4c. Store-only L2: keep saves, suppress loads/lookups --------------------
+# L2 restore corrupts this hybrid stack's speculative drafter: every load
+# collapses draft acceptance to ~0 (MAL 1.00, per-position 0.000 x7,
+# drafted>0/accepted=0) for the rest of the boot, starting in the same 10 s
+# window as the first retrieve. Measured live 2026-10-27 on
+# qwen3.8-27b-coder390-2x-lmcache-l2 with FS-NVMe + FS-NAS + valkey adapters
+# all healthy and registration already reconciled to 64 layers:
+#
+#   L2 off (L1-only)     -> MAL 3.96-5.43, draft acceptance 42-64%
+#   any single L2 restore -> MAL 1.00-1.30, draft acceptance  1-7%
+#   (--separate-object-groups did not help: 1648-slot attention chunks and
+#    16-slot GDN state still share an object group.)
+#
+# Same signature and same remedy the sibling Mooncake recipes took in
+# a87632d7a0 ("spec-decode acceptance collapses to zero for the rest of a
+# boot after the first store load"): keep the durable stores, turn the load
+# probe off. The MP corridor has no enable_lookup knob, so this patch adds the
+# equivalent as lmcache.mp.store_only in --kv-transfer-config.
+#
+# Default false: nothing changes unless a recipe opts in. Fail-safe: an
+# unparseable extra_config logs and leaves load suppression OFF, so loads are
+# never silently disabled by accident.
+python3 - <<'PYEOF'
+import glob
+
+target = "/usr/local/lib/python3.12/dist-packages/lmcache/integration/vllm/lmcache_mp_connector.py"
+paths = glob.glob(target)
+if not paths:
+    print("[lmcache-mp-engine] store-only: lmcache_mp_connector.py absent, skipping")
+    raise SystemExit(0)
+
+path = paths[0]
+with open(path) as f:
+    src = f.read()
+
+MARK = "lmcache-mp-engine: store-only L2"
+if MARK in src:
+    print("[lmcache-mp-engine] store-only: already applied")
+    raise SystemExit(0)
+
+# Anchor 1: the eager_prefetch parse in __init__ (sanctioned accessor).
+anchor_init = (
+    "        self._eager_prefetch: bool = bool(\n"
+    "            vllm_config.kv_transfer_config.get_from_extra_config(\n"
+    '                "lmcache.mp.eager_prefetch", False\n'
+    "            )\n"
+    "        )\n"
+)
+# Anchor 2: start_load_kv method signature. Deliberately the `def` line, not
+# the body: "metadata = self._get_connector_metadata()" +
+# "assert isinstance(metadata, LMCacheMPConnectorMetadata)" appears TWICE in
+# this wheel (start_load_kv:604 and wait_for_save:678), so a body anchor is
+# not unique and would make the whole patch skip.
+anchor_load = (
+    '    def start_load_kv(self, forward_context: "ForwardContext", **kwargs: Any) -> None:\n'
+)
+# Anchor 3: on_new_request body (eager lookup submission).
+anchor_new = (
+    "        if not self._eager_prefetch or request.resumable:\n"
+    "            return\n"
+)
+
+for name, a in (("init", anchor_init), ("start_load_kv", anchor_load), ("on_new_request", anchor_new)):
+    if src.count(a) != 1:
+        print(
+            "[lmcache-mp-engine] store-only: ANCHOR %s NOT UNIQUE (%d) - skipping"
+            % (name, src.count(a))
+        )
+        raise SystemExit(0)
+
+inject_init = (
+    "        # --- lmcache-mp-engine: store-only L2 ---\n"
+    "        # lmcache.mp.store_only=true keeps L2 saves (durable prompt-KV\n"
+    "        # recording) and suppresses every load/lookup, because an L2\n"
+    "        # restore corrupts this hybrid stack's speculative drafter.\n"
+    "        try:\n"
+    "            self._lmcache_store_only: bool = bool(\n"
+    "                vllm_config.kv_transfer_config.get_from_extra_config(\n"
+    '                    "lmcache.mp.store_only", False\n'
+    "                )\n"
+    "            )\n"
+    "        except Exception as _e:\n"
+    "            self._lmcache_store_only = False\n"
+    "            print('[lmcache-mp-engine] store-only: extra_config parse failed (%r) - loads stay ENABLED' % (_e,))\n"
+    "        if self._lmcache_store_only:\n"
+    "            print('[lmcache-mp-engine] store-only: L2 loads disabled, stores active (config-driven)')\n"
+    "        # --- end lmcache-mp-engine store-only ---\n"
+)
+
+inject_load = (
+    '    def start_load_kv(self, forward_context: "ForwardContext", **kwargs: Any) -> None:\n'
+    "        # --- lmcache-mp-engine: store-only L2 (suppress load) ---\n"
+    "        if getattr(self, '_lmcache_store_only', False):\n"
+    "            return\n"
+    "        # --- end lmcache-mp-engine store-only ---\n"
+)
+
+inject_new = (
+    "        # --- lmcache-mp-engine: store-only L2 (suppress eager lookup) ---\n"
+    "        if getattr(self, '_lmcache_store_only', False):\n"
+    "            return\n"
+    "        # --- end lmcache-mp-engine store-only ---\n"
+)
+
+src = src.replace(anchor_init, anchor_init + inject_init, 1)
+# inject_load already repeats the signature line, so replace (not prepend).
+src = src.replace(anchor_load, inject_load, 1)
+src = src.replace(anchor_new, inject_new + anchor_new, 1)
+
+with open(path, "w") as f:
+    f.write(src)
+compile(open(path).read(), path, "exec")
+print("[lmcache-mp-engine] store-only: patched into", path)
+PYEOF
