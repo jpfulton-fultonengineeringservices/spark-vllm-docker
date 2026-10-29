@@ -333,7 +333,7 @@ class MooncakeStoreConnector(KVConnectorBase_V1, SupportsHMA):
     def get_transfer_results(
         self, finished_req_ids: set[str]
     ) -> KVConnectorTransferResults:
-        """Load failures ride failed_recving (recompute policy), not block ids.
+        """Load failures are reported via failed_recving only.
 
         vLLM hard-rejects flat invalid_block_ids for multi-KV-group models
         (scheduler._handle_invalid_blocks); a failed async load must be
@@ -347,8 +347,8 @@ class MooncakeStoreConnector(KVConnectorBase_V1, SupportsHMA):
         )
         return KVConnectorTransferResults(
             finished_sending=set(done_sending or ()),
-            finished_recving=set(done_recving or ()),
-            failed_recving=set(failed or ()) & set(done_recving or ()),
+            finished_recving=set(done_recving or ()) - set(failed or ()),
+            failed_recving=set(failed or ()),
         )
 
     def get_kv_connector_kv_cache_events(

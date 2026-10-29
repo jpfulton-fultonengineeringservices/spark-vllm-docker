@@ -1343,9 +1343,10 @@ class KVCacheStoreRecvingThread(KVTransferThread):
         """Mark the request finished AND failed under one lock hold.
 
         The single lock hold is load-bearing: it makes "failed ⊆ finished"
-        an invariant of every drain snapshot (the scheduler promotes a
-        failed id from finished_recving; a torn marking would drop it or
-        hang the request in WAITING_FOR_REMOTE_KVS).
+        an invariant of every drain snapshot. The connector prunes failed
+        ids from finished_recving before returning to the scheduler, so
+        this worker-side set union is an implementation detail, not an
+        external contract.
         """
         with self.done_task_lock:
             self._failed_requests.add(req_id)
