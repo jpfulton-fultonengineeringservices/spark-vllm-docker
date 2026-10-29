@@ -28,6 +28,11 @@ MD5_STOCK_WORKER_CODER390_DERIVED = "8cc1f01a49aebec1ccda89d1545e445c"
 # Admitted stock bases for the store gate.
 MD5_STOCK_WORKERS = (MD5_STOCK_WORKER, MD5_STOCK_WORKER_CODER390_DERIVED)
 
+# Pre-change vendored branch-tip md5 (live on both nodes' running containers
+# as of 2026-10-29). The installer treats this as a safe base so an
+# in-place upgrade from the retired set passes the gate.
+MD5_MOD_WORKER_RETIRED = "5a969f9e9a7b923a1802542f266a8f8a"
+
 # The vendored branch tip
 # (Fulton-Engineering-Services/vllm @ cuda13.3-aarch64-gb10-glm5next-modular,
 #  4e79d6be6f, 2574 lines — carries the completed host-staging series).
@@ -43,9 +48,11 @@ MD5_STOCK_WORKERS = (MD5_STOCK_WORKER, MD5_STOCK_WORKER_CODER390_DERIVED)
 #   checkpoints, which made the previous name-based detector a no-op.
 # 2026-10-25: + synchronous H2D completion in the store get path (garbled
 #   decode after a store load, live). Diagnostic MKDBG build reverted.
+# 2026-10-29: load failures route to failed_recving for multi-group hybrids;
+#   block-level load-error reporting removed.
 # 2026-10-11: + LookupKeyClient SND/RCVTIMEO + rebuild-on-Again
 #   (2574→2619 lines, fix-prefill-lookup-livelock).
-MD5_MOD_WORKER = "5a969f9e9a7b923a1802542f266a8f8a"
+MD5_MOD_WORKER = "4dddb351fc243db220b84bc522396804"
 
 PACKAGE_FILES: tuple[str, ...] = (
     "__init__.py",

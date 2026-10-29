@@ -160,6 +160,9 @@ env:
   # Activate mods/mamba-spec-relocate-guard (mods cannot see recipe env, so
   # the launcher also injects this as a container -e).
   MAMBA_SPEC_RELOCATE_GUARD: "1"
+  # GC lease on batch_get offload buffers (ms); must outlive a NAS read of a
+  # full 2 GiB staged chunk (~9.5 s at ~225 MB/s).
+  MOONCAKE_OFFLOAD_CLIENT_BUFFER_GC_TTL_MS: "60000"
 
 # The draft's FP8 quantization is auto-detected from its own config.json's
 # quantization_config.quant_method ("fp8"); no --quantization flag is needed or
@@ -204,7 +207,7 @@ command: |
     --max-num-batched-tokens {max_num_batched_tokens} \
     --max-cudagraph-capture-size {max_cudagraph_capture_size} \
     --speculative-config '{{"method":"dflash","model":"/workspace/Qwen3.8-27B-Coder390-dflash","num_speculative_tokens":{num_speculative_tokens},"draft_tensor_parallel_size":{draft_tensor_parallel_size}}}' \
-    --kv-transfer-config '{{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both","kv_connector_extra_config":{{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048,"enable_lookup":true}}}}' \
+    --kv-transfer-config '{{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both","kv_load_failure_policy":"recompute","kv_connector_extra_config":{{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":2048,"enable_lookup":true}}}}' \
     --gdn-prefill-backend cutedsl \
     --linear-backend b12x \
     --mm-encoder-tp-mode data \

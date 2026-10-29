@@ -1324,9 +1324,6 @@ class KVCacheStoreRecvingThread(KVTransferThread):
         # Speculative-drafter groups: never loaded (see _drafter_group_ids).
         self._excluded_group_ids = excluded_group_ids
         self._host_staging = host_staging
-        # _invalid_block_ids can be access by both the Worker and RecvingThread
-        self._invalid_block_ids_lock = threading.Lock()
-        self._invalid_block_ids: set[int] = set()
         self.disk_offload_buffer_budget_bytes = disk_offload_buffer_budget_bytes
         self.usable_disk_offload_buffer_budget_bytes = (
             None
@@ -1338,16 +1335,29 @@ class KVCacheStoreRecvingThread(KVTransferThread):
         self.coord = coord
         self._get_pool = staging_get_pool
         self._last_get_slots: set[int] = set()
+        # Failed request IDs (atomic subset of finished: the scheduler
+        # requires a failed id to also appear in finished_recving).
+        self._failed_requests: set[str] = set()
 
-    def _add_load_error_block_ids(self, block_ids: list[int]) -> None:
-        with self._invalid_block_ids_lock:
-            self._invalid_block_ids.update(block_ids)
+    def set_finished_request_failed(self, req_id: str) -> None:
+        """Mark the request finished AND failed under one lock hold.
 
-    def get_and_clear_block_ids_with_load_errors(self) -> set[int]:
-        with self._invalid_block_ids_lock:
-            invalid_block_ids = self._invalid_block_ids.copy()
-            self._invalid_block_ids.clear()
-        return invalid_block_ids
+        The single lock hold is load-bearing: it makes "failed ⊆ finished"
+        an invariant of every drain snapshot (the scheduler promotes a
+        failed id from finished_recving; a torn marking would drop it or
+        hang the request in WAITING_FOR_REMOTE_KVS).
+        """
+        with self.done_task_lock:
+            self._failed_requests.add(req_id)
+            self.finished_requests.add(req_id)
+
+    def get_and_clear_finished_requests(self) -> tuple[set[str], set[str]]:
+        with self.done_task_lock:
+            finished = self.finished_requests.copy()
+            failed = self._failed_requests.copy()
+            self.finished_requests.clear()
+            self._failed_requests.clear()
+        return finished, failed
 
     def _staged_batch_get_into_multi_buffers(
         self, keys: list[str], addrs: list[list[int]], sizes: list[list[int]]
@@ -1542,7 +1552,6 @@ class KVCacheStoreRecvingThread(KVTransferThread):
                     # Mark every block: we skip the whole request, and the
                     # tp_rank rotation means oversized_key isn't necessarily
                     # the first block in the request's original order.
-                    self._add_load_error_block_ids(block_id_list_c)
                     oversized_key_bytes = _estimate_disk_offload_staging_bytes(
                         size_list_c[oversized_key_index]
                     )
@@ -1554,7 +1563,7 @@ class KVCacheStoreRecvingThread(KVTransferThread):
                         oversized_key_bytes,
                         self.disk_offload_buffer_budget_bytes,
                     )
-                    self.set_finished_request(req_id)
+                    self.set_finished_request_failed(req_id)
                     self.request_queue.task_done()
                     return
                 load_batches = []
@@ -1610,9 +1619,6 @@ class KVCacheStoreRecvingThread(KVTransferThread):
                     num_failed_keys=len(failed),
                 )
                 if failed:
-                    self._add_load_error_block_ids(
-                        [block_id for _, _, block_id in failed]
-                    )
                     logger.warning(
                         "Failed to get %d Mooncake keys from sub-batch "
                         "(batch_keys=%d, first_failures=%s)",
@@ -1620,9 +1626,9 @@ class KVCacheStoreRecvingThread(KVTransferThread):
                         len(batch_keys),
                         [(key, value) for key, value, _ in failed[:3]],
                     )
+                    self.set_finished_request_failed(req_id)
                     break
         except Exception as e:
-            self._add_load_error_block_ids(current_batch_block_ids)
             self._record_operation(
                 "load_get",
                 load_get_start,
@@ -1636,6 +1642,7 @@ class KVCacheStoreRecvingThread(KVTransferThread):
                 current_batch_keys[:3],
                 e,
             )
+            self.set_finished_request_failed(req_id)
 
         try:
             if self._host_staging and self._get_pool is not None:
@@ -1650,7 +1657,7 @@ class KVCacheStoreRecvingThread(KVTransferThread):
                 e,
                 len(block_id_list_c),
             )
-            self._add_load_error_block_ids(block_id_list_c)
+            self.set_finished_request_failed(req_id)
         finally:
             self.set_finished_request(req_id)
             self.request_queue.task_done()
@@ -2354,7 +2361,7 @@ class MooncakeStoreWorker:
         self,
         finished_req_ids: set[str],
         meta: MooncakeStoreConnectorMetadata,
-    ) -> tuple[set[str], set[str]]:
+    ) -> tuple[set[str], set[str], set[str]]:
         """Issue all I/O and get completed send/recv request IDs.
 
         All load and store I/O requests are issued here (after model
@@ -2362,7 +2369,7 @@ class MooncakeStoreWorker:
         compute-I/O overlap.
         """
         if self._capacity_only:
-            return set(), set()
+            return set(), set(), set()
 
         # Issue async loads
         for request in meta.requests:
@@ -2398,9 +2405,12 @@ class MooncakeStoreWorker:
         # on a `finished_sending` signal to get its blocks back.
         done_sending: set[str] = set()
         done_recving: set[str] = set()
+        failed_recving: set[str] = set()
         if self.load_async:
             for recv_thread in self.kv_recv_threads:
-                done_recving |= recv_thread.get_and_clear_finished_requests()
+                finished, failed = recv_thread.get_and_clear_finished_requests()
+                done_recving |= finished
+                failed_recving |= failed
 
         logger.debug(
             "Completed send: %d, recv: %d, tp_rank: %d",
@@ -2408,13 +2418,7 @@ class MooncakeStoreWorker:
             len(done_recving),
             self.tp_rank,
         )
-        return done_sending, done_recving
-
-    def get_block_ids_with_load_errors(self) -> set[int]:
-        block_ids: set[int] = set()
-        for recv_thread in self.kv_recv_threads:
-            block_ids |= recv_thread.get_and_clear_block_ids_with_load_errors()
-        return block_ids
+        return done_sending, done_recving, failed_recving
 
     def _record_kv_connector_operation(
         self,
