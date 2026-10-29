@@ -13,10 +13,28 @@ from mooncake_worker.offload_telemetry import (
 )
 
 MOUNTSTATS = """\
-/cluster-shared from 10.100.171.1:/export/cluster-shared fstype nfs4 (NFSv4.2) vers 4.2
-\tint realtime: normal read 1000
-\tbytes 1000 2000 0 0 500 600
-\tBYTES 2000 3000 0 0 500 600
+device sysfs mounted on /sys with fstype sysfs
+device nfsd mounted on /proc/fs/nfsd with fstype nfsd
+device systemd-1 mounted on /nas-1 with fstype autofs
+device /dev/nvme0n1p2 mounted on /cluster-shared with fstype ext4
+device 10.100.171.1:/export/cluster-shared mounted on /cluster-shared with fstype nfs4 statvers=1.1
+\topts:\trw,vers=4.2,proto=tcp
+\tage:\t100
+\tcaps:\tcaps=0xc003c0b7
+\tnfsv4:\tbm0=0xfdffafff,sessions
+\tsec:\tflavor=1,pseudoflavor=1
+\tevents:\t1 2 3 4 5 6 7 8 9 10
+\tbytes:\t1000 2000 0 0 500 600 7 8
+\tRPC iostats version: 1.1  p/v: 100003/4 (nfs)
+device 10.10.10.202:/volume1/fulton-infra mounted on /nas-1 with fstype nfs4 statvers=1.1
+\topts:\trw,vers=4.1,proto=tcp,nconnect=8
+\tage:\t200
+\tcaps:\tcaps=0xc003c0b7
+\tnfsv4:\tbm0=0xfdffafff,sessions
+\tsec:\tflavor=1,pseudoflavor=1
+\tevents:\t1 2 3 4 5 6 7 8 9 10
+\tbytes:\t3000 4000 0 0 700 800 9 10
+\tRPC iostats version: 1.1  p/v: 100003/4 (nfs)
 /nas-1 from 10.10.10.202:/volume1/fulton-infra fstype nfs4 (NFSv4.1) vers 4.1
 \tint realtime: normal read 3000
 \tbytes 3000 4000 0 0 700 800
