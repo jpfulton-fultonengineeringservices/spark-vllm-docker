@@ -124,3 +124,27 @@ PYTHONPATH=src python3 -m pytest -q      # 12 tests, torch-free
 python3 -m ruff check . && python3 -m ruff format --check .
 PYTHONPATH=src python3 -m mypy src/mooncake_worker
 ```
+
+## Offload telemetry exporter
+
+`src/mooncake_worker/offload_telemetry.py` is a **stdlib-only** host-side
+Prometheus exporter (port 9004) measuring the Mooncake offload tier — the
+shared NAS NFS mount at `/nas-1/mooncake-store` (default; follows
+`--root` / `MOONCAKE_OFFLOAD_DIR`):
+
+- `mooncake_offload_dir_bytes` / `mooncake_offload_dir_files` — apparent size
+  and file count of the offload tree.
+- `mooncake_offload_mount_total_bytes` / `mooncake_offload_mount_free_bytes` —
+  NAS volume capacity/free via statvfs on the matched NFS mountpoint.
+- `mooncake_offload_nfs_read_bytes_total` /
+  `mooncake_offload_nfs_write_bytes_total` — `/proc/self/mountstats` server
+  wire counters for the `/nas-1` mount. **Mount-wide**: they count ALL
+  `/nas-1` consumers on that node, not mooncake-only traffic.
+- `mooncake_offload_scrape_ok` — 1 when the last directory refresh succeeded.
+
+It runs as a plain `python3` script (no pip installs, no wheel) from the
+shared checkout on every GX10 node under host systemd
+`mooncake-offload-metrics.service`, provisioned by
+`infra/cluster-config scripts/setup-mooncake-offload-metrics.sh`, scraped by
+VictoriaMetrics job `gx10-mooncake-offload`, and visualized in the
+"Offload Tier" section of the `gx10-mooncake-specdecode` Grafana dashboard.
