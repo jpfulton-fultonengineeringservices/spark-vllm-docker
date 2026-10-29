@@ -51,33 +51,59 @@ class NfsMountStats:
 def parse_mountstats(text: str) -> dict[str, NfsMountStats]:
     """Parse /proc/self/mountstats content into per-mount NFS byte counters.
 
-    A mount section header starts with "/", contains " from " and " fstype ".
-    Only sections whose fstype token contains "nfs" (case-insensitive) and that
-    carry a "bytes" line with the full counter tuple are kept.
+    Two header shapes are accepted:
+
+    - kernel format: ``device <server> mounted on <mountpoint> with fstype
+      <fstype> ...`` (modern kernels; the bytes line is tab-separated as
+      ``bytes:\\t<int> <int> ...``).
+    - legacy format: ``<mountpoint> from <server> fstype <fstype> ...``.
+
+    Only sections whose fstype token contains "nfs" (case-insensitive) and
+    that carry a "bytes" line with the full counter tuple are kept. Within a
+    kept section the "bytes" line's integers map to NFSIOS_* counters;
+    SERVER_READ_IDX/SERVER_WRITE_IDX select server-read / server-written.
     """
     mounts: dict[str, NfsMountStats] = {}
     lines = text.splitlines()
     i = 0
     while i < len(lines):
         header = lines[i]
-        if not (header.startswith("/") and " from " in header and " fstype " in header):
+        is_kernel = header.startswith("device ") and " mounted on " in header and (
+            " with fstype " in header
+        )
+        is_legacy = header.startswith("/") and " from " in header and " fstype " in header
+        if not (is_kernel or is_legacy):
             i += 1
             continue
-        tokens = header.split()
-        mountpoint = tokens[0]
-        fstype_idx = tokens.index("fstype") + 1
-        fstype = tokens[fstype_idx] if fstype_idx < len(tokens) else ""
+        if is_kernel:
+            tokens = header.split()
+            mountpoint = tokens[tokens.index("on") + 1]
+            server = tokens[1]
+            fstype_idx = tokens.index("fstype") + 1
+            fstype = tokens[fstype_idx] if fstype_idx < len(tokens) else ""
+            section_first_token = "device"
+        else:
+            tokens = header.split()
+            mountpoint = tokens[0]
+            server = tokens[tokens.index("from") + 1]
+            fstype_idx = tokens.index("fstype") + 1
+            fstype = tokens[fstype_idx] if fstype_idx < len(tokens) else ""
+            section_first_token = "/"
         i += 1
         if "nfs" not in fstype.lower():
             continue
         byte_vals: list[int] | None = None
         while i < len(lines):
             section_line = lines[i]
-            if section_line.startswith("/") and " from " in section_line:
+            starts_next = section_line.startswith(section_first_token) and (
+                section_line != header
+            )
+            if starts_next:
                 break  # next mount section header; bytes line never appeared
-            if section_line.split()[:1] == ["bytes"]:
+            first = section_line.split()[0].rstrip(":") if section_line.split() else ""
+            if first == "bytes":
                 ints: list[int] = []
-                for tok in section_line.split()[1:]:
+                for tok in section_line.replace(":", " ").split()[1:]:
                     with contextlib.suppress(ValueError):
                         ints.append(int(tok))
                 if len(ints) >= 6:
@@ -86,10 +112,9 @@ def parse_mountstats(text: str) -> dict[str, NfsMountStats]:
             i += 1
         if byte_vals is None:
             continue
-        server_idx = tokens.index("from") + 1
         mounts[mountpoint] = NfsMountStats(
             mountpoint=mountpoint,
-            server=tokens[server_idx],
+            server=server,
             fstype=fstype,
             server_read_bytes=byte_vals[SERVER_READ_IDX],
             server_written_bytes=byte_vals[SERVER_WRITE_IDX],
