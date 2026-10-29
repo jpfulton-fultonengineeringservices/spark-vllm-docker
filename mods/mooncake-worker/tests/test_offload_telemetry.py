@@ -35,7 +35,7 @@ device 10.10.10.202:/volume1/fulton-infra mounted on /nas-1 with fstype nfs4 sta
 \tevents:\t1 2 3 4 5 6 7 8 9 10
 \tbytes:\t3000 4000 0 0 700 800 9 10
 \tRPC iostats version: 1.1  p/v: 100003/4 (nfs)
-/nas-1 from 10.10.10.202:/volume1/fulton-infra fstype nfs4 (NFSv4.1) vers 4.1
+/legacy-nfs from 10.10.10.202:/volume1/fulton-infra fstype nfs4 (NFSv4.1) vers 4.1
 \tint realtime: normal read 3000
 \tbytes 3000 4000 0 0 700 800
 /tmp type tmpfs (rw,relatime)
@@ -47,6 +47,7 @@ device 10.10.10.202:/volume1/fulton-infra mounted on /nas-1 with fstype nfs4 sta
 def test_parse_mountstats_selects_nfs_and_indices() -> None:
     mounts = parse_mountstats(MOUNTSTATS)
     assert "/tmp" not in mounts
+    assert "/legacy-nfs" in mounts  # legacy header form also parsed
     nas = mounts["/nas-1"]
     assert nas.server == "10.10.10.202:/volume1/fulton-infra"
     assert nas.fstype == "nfs4"
