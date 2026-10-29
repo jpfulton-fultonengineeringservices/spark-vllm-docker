@@ -23,7 +23,7 @@ BASE_IMAGE="${BASE_IMAGE:-eugr/spark-vllm:nightly-20261016}"
 # resolves to this keeps the recipe's vLLM version fixed; if eugr ever retags
 # this date, the build stops instead of silently shipping a different vLLM.
 EXPECTED_BASE_ID="${EXPECTED_BASE_ID:-sha256:a1fc4f18d3cb1671986feb92b05243ecd31a21957dd64e28da5c9e6125733aa0}"
-REGISTRY="${REGISTRY:-10.100.170.3:5000}"
+REGISTRY="${REGISTRY:-${LLM_REGISTRY_HOST:-10.100.170.3}:${LLM_REGISTRY_PORT:-5000}}"
 IMAGE_NAME="${IMAGE_NAME:-spark-vllm}"
 TAG="${TAG:-coder390-kr-$(date -u +%Y%m%d)}"
 LOCAL_TAG="${LOCAL_TAG:-vllm-node-b12x-kr}"
