@@ -75,7 +75,7 @@ model: local-inference-lab/Qwen3.8-27B-Coder390-DFlash2
 # passed the acceptance table.
 
 container: vllm-node-b12x
-# image_id: sha256:e9f6e32941ec5680a58edfbfefaad6997f0527e22344b5b505cf8267de4625f2
+image_id: sha256:e9f6e32941ec5680a58edfbfefaad6997f0527e22344b5b505cf8267de4625f2
 
 build_args:
   - --exp-b12x
