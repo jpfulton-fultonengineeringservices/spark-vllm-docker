@@ -79,7 +79,9 @@ def install(
     state = gates.classify_installed(paths.store_dir / "worker.py")
     if state == "already_ported":
         return f"already installed (worker md5={gates.MD5_MOD_WORKER})"
-    if state == "unknown":
+    if state in ("stock", "retired_ported"):
+        pass
+    elif state == "unknown":
         raise InstallError(
             f"installed worker md5 {pre_install_md5} is not a known base"
             f" (stock={','.join(gates.MD5_STOCK_WORKERS)},"

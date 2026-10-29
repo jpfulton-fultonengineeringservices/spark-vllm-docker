@@ -16,8 +16,6 @@ that sweeps the speculative drafter's KV.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from mooncake_worker import gates
 
 WORKER_SRC = (gates.vendor_dir() / "worker.py").read_text()
@@ -99,3 +97,32 @@ def test_worker_resolves_exclusion_before_coordinator() -> None:
     i_coord = WORKER_SRC.index("self.coord = MooncakeStoreCoordinator(")
     i_kwarg = WORKER_SRC.index("excluded_group_ids=self._excluded_group_ids,")
     assert i_excl < i_coord < i_kwarg
+
+
+def test_load_failures_route_to_failed_recving() -> None:
+    """Load failures must be reported per-request via failed_recving."""
+    assert "def set_finished_request_failed(" in WORKER_SRC
+    assert WORKER_SRC.count("self.set_finished_request_failed(req_id)") == 4
+    assert "def get_and_clear_finished_requests" in WORKER_SRC
+    assert "-> tuple[set[str], set[str]]:" in WORKER_SRC
+    assert WORKER_SRC.count("return done_sending, done_recving, failed_recving") == 1
+    assert "return set(), set(), set()" in WORKER_SRC
+
+
+def test_block_level_load_errors_removed() -> None:
+    """Flat invalid_block_ids must not appear anywhere in worker.py."""
+    assert "def _add_load_error_block_ids" not in WORKER_SRC
+    assert "get_and_clear_block_ids_with_load_errors" not in WORKER_SRC
+    assert "get_block_ids_with_load_errors" not in WORKER_SRC
+    assert "self._invalid_block_ids" not in WORKER_SRC
+
+
+CONNECTOR_SRC = (gates.vendor_dir() / "connector.py").read_text()
+
+
+def test_connector_transfer_results_override() -> None:
+    """The connector must surface failures via KVConnectorTransferResults."""
+    assert "def get_transfer_results" in CONNECTOR_SRC
+    assert "KVConnectorTransferResults" in CONNECTOR_SRC
+    assert "failed_recving=set(failed or ())" in CONNECTOR_SRC
+    assert "def get_block_ids_with_load_errors" not in CONNECTOR_SRC

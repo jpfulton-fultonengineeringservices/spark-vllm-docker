@@ -28,6 +28,7 @@ from vllm.distributed.kv_transfer.kv_connector.v1.base import (
     KVConnectorRole,
     KVConnectorWorkerMetadata,
     SupportsHMA,
+    KVConnectorTransferResults,
 )
 from vllm.distributed.kv_transfer.kv_connector.v1.metrics import (
     KVConnectorPromMetrics,
@@ -326,11 +327,29 @@ class MooncakeStoreConnector(KVConnectorBase_V1, SupportsHMA):
         assert self.connector_worker is not None
         metadata = self._get_connector_metadata()
         assert isinstance(metadata, MooncakeStoreConnectorMetadata)
-        return self.connector_worker.get_finished(finished_req_ids, metadata)
+        results = self.get_transfer_results(finished_req_ids)
+        return results.finished_sending, results.finished_recving
 
-    def get_block_ids_with_load_errors(self) -> set[int]:
+    def get_transfer_results(
+        self, finished_req_ids: set[str]
+    ) -> KVConnectorTransferResults:
+        """Load failures ride failed_recving (recompute policy), not block ids.
+
+        vLLM hard-rejects flat invalid_block_ids for multi-KV-group models
+        (scheduler._handle_invalid_blocks); a failed async load must be
+        reported per-request, finished_recving included, in the same step.
+        """
         assert self.connector_worker is not None
-        return self.connector_worker.get_block_ids_with_load_errors()
+        metadata = self._get_connector_metadata()
+        assert isinstance(metadata, MooncakeStoreConnectorMetadata)
+        done_sending, done_recving, failed = (
+            self.connector_worker.get_finished(finished_req_ids, metadata)
+        )
+        return KVConnectorTransferResults(
+            finished_sending=set(done_sending or ()),
+            finished_recving=set(done_recving or ()),
+            failed_recving=set(failed or ()) & set(done_recving or ()),
+        )
 
     def get_kv_connector_kv_cache_events(
         self,
