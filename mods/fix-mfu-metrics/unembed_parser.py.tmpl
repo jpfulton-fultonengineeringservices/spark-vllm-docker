@@ -1,0 +1,31 @@
+class UnembedQuantizationConfigParser(Parser):
+    """
+    Parses quantization configuration for unembed (lm_head) layers.
+    Overrides: weight_byte_size
+    """
+
+    def parse(self, args: ParsedArgs, vllm_config: VllmConfig) -> ParsedArgs:
+        """Override weight_byte_size for the unembedding (lm_head) layer."""
+        cfg = vllm_config.quant_config
+
+        if cfg is None:
+            return args
+
+        quant_method = cfg.get_name()
+        if quant_method == "modelopt_mixed":
+            component_sizes = _compute_modelopt_mixed_component_byte_sizes(
+                cfg, args.weight_byte_size
+            )
+            args.weight_byte_size = component_sizes.get(
+                "unembed", args.weight_byte_size
+            )
+        elif quant_method in _QUANT_WEIGHT_BYTE_SIZE:
+            args.weight_byte_size = _QUANT_WEIGHT_BYTE_SIZE[quant_method]
+        else:
+            # Fall back to dtype-based byte size
+            model_dtype = vllm_config.model_config.dtype
+            if isinstance(model_dtype, torch.dtype):
+                args.weight_byte_size = get_dtype_size(model_dtype)
+            else:
+                args.weight_byte_size = 2  # default bfloat16
+        return args

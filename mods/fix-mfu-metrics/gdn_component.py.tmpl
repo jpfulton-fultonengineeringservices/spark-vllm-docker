@@ -1,0 +1,213 @@
+#### GDN (Qwen3.5 GatedDeltaNet) ####
+
+
+class GdnDetectionParser(Parser):
+    """
+    Enables GdnMetrics only for hybrid models with linear_attention layers
+    (e.g. Qwen3.5). Other models skip this component entirely.
+    """
+
+    def parse(self, args: ParsedArgs, vllm_config: VllmConfig) -> ParsedArgs:
+        count = getattr(args, "num_linear_attention_layers", None)
+        if not count or count <= 0:
+            raise InvalidComponent("Model has no linear_attention layers")
+        return args
+
+
+class GdnConfigParser(Parser):
+    """
+    Parses Qwen3.5 GatedDeltaNet shapes from hf_text_config.
+
+    Field names match the checkpoint config (linear_num_key_heads,
+    linear_num_value_heads, linear_key_head_dim, linear_value_head_dim,
+    linear_conv_kernel_dim) as used by the fork's GDN layer implementation.
+    """
+
+    def parse(self, args: ParsedArgs, vllm_config: VllmConfig) -> ParsedArgs:
+        cfg = vllm_config.model_config.hf_text_config
+        if hasattr(cfg, "text_config") and cfg.text_config is not None:
+            cfg = cfg.text_config
+
+        args.num_gdn_layers = args.num_linear_attention_layers
+        args.hidden_size = get_required(cfg, "hidden_size")
+
+        args.num_k_heads = getattr(cfg, "linear_num_key_heads", None)
+        args.num_v_heads = getattr(cfg, "linear_num_value_heads", None)
+        args.key_head_dim = getattr(cfg, "linear_key_head_dim", None)
+        args.value_head_dim = getattr(cfg, "linear_value_head_dim", None)
+        if args.value_head_dim is None:
+            # Fallback: derive the attention head dimension from the text
+            # config already in scope. The GDN parser chain does not include
+            # BaseAttentionConfigParser, so there is no args.head_dim here.
+            args.value_head_dim = getattr(cfg, "head_dim", None)
+            if args.value_head_dim is None:
+                args.value_head_dim = cfg.hidden_size // cfg.num_attention_heads
+        args.conv_kernel = getattr(cfg, "linear_conv_kernel_dim", None)
+
+        missing = [
+            name
+            for name in ("num_k_heads", "num_v_heads", "key_head_dim", "conv_kernel")
+            if getattr(args, name) is None
+        ]
+        if missing:
+            raise InvalidComponent(
+                f"Missing GDN config fields: {', '.join(missing)}"
+            )
+        return args
+
+
+class GdnQuantizationConfigParser(Parser):
+    """
+    Parses quantization config for GDN layers. Reuses the shared
+    modelopt_mixed per-component helper (classification key "mamba").
+    """
+
+    def parse(self, args: ParsedArgs, vllm_config: VllmConfig) -> ParsedArgs:
+        cfg = vllm_config.quant_config
+        if cfg is None:
+            return args
+
+        quant_method = cfg.get_name()
+        if quant_method == "modelopt_mixed":
+            component_sizes = _compute_modelopt_mixed_component_byte_sizes(
+                cfg, args.weight_byte_size
+            )
+            args.weight_byte_size = component_sizes.get(
+                "mamba", args.weight_byte_size
+            )
+        elif quant_method in _QUANT_WEIGHT_BYTE_SIZE:
+            args.weight_byte_size = _QUANT_WEIGHT_BYTE_SIZE[quant_method]
+        # Unknown quant names keep the dtype-derived default.
+        return args
+
+
+class GdnMetrics(ComponentMetrics):
+    """
+    FLOPs/bytes for Qwen3.5 GatedDeltaNet (GDN) linear-attention layers.
+
+    Analytic estimate, same status as the fork's MambaMetrics. Shapes:
+    D = hidden_size, K key heads of dim dk, V value heads of dim dv,
+    conv_dim = 2*K*dk + 2*V*dv, kernel from linear_conv_kernel_dim.
+    Per-GPU: K and V are divided by tp (head-parallel); L by pp.
+    """
+
+    # From BaseConfigParser
+    hidden_size: int = Field(..., gt=0)
+    weight_byte_size: int | float = Field(..., gt=0)
+    activation_byte_size: int = Field(..., gt=0)
+    tp_size: int = Field(..., gt=0)
+    pp_size: int = Field(..., gt=0)
+
+    # From GdnConfigParser
+    num_gdn_layers: int = Field(..., gt=0)
+    num_k_heads: int = Field(..., gt=0)
+    num_v_heads: int = Field(..., gt=0)
+    key_head_dim: int = Field(..., gt=0)
+    value_head_dim: int = Field(..., gt=0)
+    conv_kernel: int = Field(..., gt=0)
+
+    @classmethod
+    def component_type(cls) -> str:
+        """Return the component registry key for GDN layers."""
+        return "mamba"
+
+    @classmethod
+    def get_parser(cls) -> ParserChain:
+        """Return the parser chain for GdnMetrics.
+
+        Parsers run in order: base model config, hybrid-layer detection,
+        GDN shape config, quantization weight-size override.
+        """
+        return ParserChain(
+            BaseConfigParser(),
+            GdnDetectionParser(),
+            GdnConfigParser(),
+            GdnQuantizationConfigParser(),
+        )
+
+    def get_num_flops_breakdown(
+        self, ctx: ExecutionContext, per_gpu: bool = True
+    ) -> dict[str, int]:
+        """Analytic FLOPs for GDN in_proj/out_proj/conv1d/delta_rule."""
+        D = int(self.hidden_size)
+        K = int(self.num_k_heads)
+        dk = int(self.key_head_dim)
+        V = int(self.num_v_heads)
+        dv = int(self.value_head_dim)
+        L = int(self.num_gdn_layers)
+        T = int(ctx.total_num_tokens())
+
+        conv_dim = 2 * K * dk + 2 * V * dv
+
+        if per_gpu:
+            K = max(1, K // self.tp_size)
+            V = max(1, V // self.tp_size)
+            conv_dim = 2 * K * dk + 2 * V * dv
+            L = max(1, L // self.pp_size)
+
+        # in_proj: D -> conv_dim [qkvz] and D -> 2*V [ba]; out_proj: V*dv -> D;
+        # conv1d over conv_dim channels with kernel conv_kernel; delta_rule is
+        # the gated-delta state update (4 ops per head element).
+        return {
+            "in_proj_qkvz": int(2 * T * D * conv_dim * L),
+            "in_proj_ba": int(2 * T * D * (2 * V) * L),
+            "out_proj": int(2 * T * (V * dv) * D * L),
+            "conv1d": int(2 * T * conv_dim * self.conv_kernel * L),
+            "delta_rule": int(4 * T * V * dk * dv * L),
+        }
+
+    def get_read_bytes_breakdown(
+        self, ctx: ExecutionContext, per_gpu: bool = True
+    ) -> dict[str, int]:
+        """Analytic read bytes for GDN weights/activations/state reads."""
+        D = int(self.hidden_size)
+        K = int(self.num_k_heads)
+        dk = int(self.key_head_dim)
+        V = int(self.num_v_heads)
+        dv = int(self.value_head_dim)
+        L = int(self.num_gdn_layers)
+        T = int(ctx.total_num_tokens())
+        wbs = self.weight_byte_size
+        abs_ = self.activation_byte_size
+
+        conv_dim = 2 * K * dk + 2 * V * dv
+
+        if per_gpu:
+            K = max(1, K // self.tp_size)
+            V = max(1, V // self.tp_size)
+            conv_dim = 2 * K * dk + 2 * V * dv
+            L = max(1, L // self.pp_size)
+
+        # State byte size: reuse the attention cache parser value when set;
+        # fp8 (1 byte) as the documented-estimate fallback.
+        cache_bs = getattr(self, "cache_byte_size", None) or 1
+
+        return {
+            "in_proj_qkvz_weight": int(D * conv_dim * wbs * L),
+            "in_proj_ba_weight": int(D * 2 * V * wbs * L),
+            "out_proj_weight": int((V * dv) * D * wbs * L),
+            "conv1d_weight": int(conv_dim * conv_kernel * wbs * L),
+            "in_proj_input": int(T * D * abs_ * L),
+            "out_proj_input": int(T * (V * dv) * abs_ * L),
+            "state_read": int(T * V * dk * dv * cache_bs * L),
+        }
+
+    def get_write_bytes_breakdown(
+        self, ctx: ExecutionContext, per_gpu: bool = True
+    ) -> dict[str, int]:
+        """Analytic write bytes for GDN state writes."""
+        V = int(self.num_v_heads)
+        dk = int(self.key_head_dim)
+        dv = int(self.value_head_dim)
+        L = int(self.num_gdn_layers)
+        T = int(ctx.total_num_tokens())
+
+        if per_gpu:
+            V = max(1, V // self.tp_size)
+            L = max(1, L // self.pp_size)
+
+        cache_bs = getattr(self, "cache_byte_size", None) or 1
+
+        return {
+            "state_write": int(T * V * dk * dv * cache_bs * L),
+        }

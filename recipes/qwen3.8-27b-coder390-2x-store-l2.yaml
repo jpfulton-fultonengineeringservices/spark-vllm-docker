@@ -97,6 +97,14 @@ mods:
   # Guard the Mamba-align speculative-block relocation against the hashed/
   # shared blocks a KV connector exposes on an external prefix hit.
   - mods/mamba-spec-relocate-guard
+  # Port the FES fork's perf.py MFU corrections into the installed vLLM tree:
+  # modelopt_mixed per-component weight byte sizes, hybrid
+  # full/linear-attention layer accounting, and a GatedDeltaNet (GDN) FLOPs
+  # component. Without it this hybrid model bills all 64 layers as attention
+  # and drops the attention/FFN components from MFU under modelopt_mixed.
+  # FIX_MFU_METRICS below is the activation flag (mods cannot read recipe
+  # env directly; the env block is written into the exec-script the mod sees).
+  - mods/fix-mfu-metrics
 
 # enable_lookup=true (see --kv-transfer-config below). History: the first
 # store loads of 2026-10-25 collapsed DFlash2 spec-decode acceptance to zero
@@ -190,6 +198,10 @@ env:
   # Activate mods/mamba-spec-relocate-guard (mods cannot see recipe env, so
   # the launcher also injects this as a container -e).
   MAMBA_SPEC_RELOCATE_GUARD: "1"
+  # Activate mods/fix-mfu-metrics: exported into the exec-script the mod
+  # reads at apply time (mods run before the exec-script, but this env block
+  # is rendered into that same script first).
+  FIX_MFU_METRICS: "1"
   # GC lease on batch_get offload buffers (ms); must outlive a NAS read of a
   # full 2 GiB staged chunk (~9.5 s at ~225 MB/s).
   MOONCAKE_OFFLOAD_CLIENT_BUFFER_GC_TTL_MS: "60000"
