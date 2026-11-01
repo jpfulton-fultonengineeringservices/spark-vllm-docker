@@ -33,3 +33,9 @@ type = "dependency"
 repo = "litellm-upstream"
 ref = "main"
 description = "eval tooling points at the dell litellm gateway (litellm-upstream registry entry)."
+
+[[refs]]
+type = "dependency"
+repo = "gilded-gnosis-vllm"
+ref = "dev/karmic-kraken"
+descritpion = "this is the exact b12x vllm verson used by the majority of live recipes in this project, this is MOST IMPORTANT dependency in the project"
