@@ -95,7 +95,8 @@ mods:
   # component. Without it this hybrid model bills all 64 layers as attention
   # and drops the attention/FFN components from MFU under modelopt_mixed.
   # FIX_MFU_METRICS below is the activation flag (mods cannot read recipe
-  # env directly; the env block is written into the exec-script the mod sees).
+  # env directly; the env block is written into /workspace/exec-script.sh,
+  # which the mod greps at apply time).
   - mods/fix-mfu-metrics
 
 # enable_lookup=true (see --kv-transfer-config below). Lookups were a disabled
@@ -177,9 +178,9 @@ env:
   # Activate mods/mamba-spec-relocate-guard (mods cannot see recipe env, so
   # the launcher also injects this as a container -e).
   MAMBA_SPEC_RELOCATE_GUARD: "1"
-  # Activate mods/fix-mfu-metrics: exported into the exec-script the mod
-  # reads at apply time (mods run before the exec-script, but this env block
-  # is rendered into that same script first).
+  # Activate mods/fix-mfu-metrics: run-recipe.py renders this into
+  # /workspace/exec-script.sh before launch-cluster.sh applies mods, and the
+  # mod greps that script to self-activate.
   FIX_MFU_METRICS: "1"
   # GC lease on batch_get offload buffers (ms); must outlive the NAS read of
   # a full 2 GiB staged chunk (~9.5 s at ~225 MB/s).
