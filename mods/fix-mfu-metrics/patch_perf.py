@@ -241,6 +241,19 @@ def build_edits() -> list[tuple[str, str, int, str]]:
         '            flops["shared_ffn"] = 2 * num_gemms * D * MI * S * T * Lm\n',
     )
     e(
+        "ffn-relu2-read-init",
+        '        read_bytes = {}\n'
+        "\n"
+        '        # Dense FFN layers (SwiGLU: up, gate, down projections + SiLU activation)\n'
+        '        if Ld:\n',
+        1,
+        '        read_bytes = {}\n'
+        "\n"
+        '        # Dense FFN layers (SwiGLU: up, gate, down projections + SiLU activation)\n'
+        '        num_gemms = 2 if self.mlp_hidden_act == "relu2" else 3\n'
+        "        if Ld:\n",
+    )
+    e(
         "ffn-relu2-read-weights",
         '            read_bytes["dense_up_gate_weights"] = int(\n'
         "                2 * D * DI * self.weight_byte_size * Ld\n"
