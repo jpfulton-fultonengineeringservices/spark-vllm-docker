@@ -134,7 +134,7 @@ defaults:
   # the window converges with the base's 1048576.
   max_model_len: 1048576
   max_num_seqs: 8
-  max_num_batched_tokens: 2048
+  max_num_batched_tokens: 4096
   # Same cudagraph tightening as the base recipe (45df67ae2b).
   max_cudagraph_capture_size: 256
   num_speculative_tokens: 7
@@ -181,7 +181,7 @@ env:
   # Activate mods/fix-mfu-metrics: run-recipe.py renders this into
   # /workspace/exec-script.sh before launch-cluster.sh applies mods, and the
   # mod greps that script to self-activate.
-  FIX_MFU_METRICS: "1"
+  # FIX_MFU_METRICS: "1"
   # GC lease on batch_get offload buffers (ms); must outlive the NAS read of
   # a full 2 GiB staged chunk (~9.5 s at ~225 MB/s).
   MOONCAKE_OFFLOAD_CLIENT_BUFFER_GC_TTL_MS: "60000"
