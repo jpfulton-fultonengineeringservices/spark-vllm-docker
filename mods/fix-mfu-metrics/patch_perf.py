@@ -355,6 +355,32 @@ def build_edits() -> list[tuple[str, str, int, str]]:
         "                )\n",
     )
 
+    # (i-bis) PerfStats construction must produce exact ints for the msgspec
+    # IPC schema. Component breakdowns can yield floats when
+    # weight_byte_size is fractional (modelopt_mixed); wrap each sum.
+    e(
+        "perf-stats-int-wrap",
+        "        num_flops_breakdown = self.get_num_flops_breakdown(ctx, True)\n"
+        "        read_bytes_breakdown = self.get_read_bytes_breakdown(ctx, True)\n"
+        "        write_bytes_breakdown = self.get_write_bytes_breakdown(ctx, True)\n"
+        "        perf_stats = PerfStats(\n"
+        "            sum(num_flops_breakdown.values()),\n"
+        "            sum(read_bytes_breakdown.values()),\n"
+        "            sum(write_bytes_breakdown.values()),\n"
+        "        )\n",
+        1,
+        "        num_flops_breakdown = self.get_num_flops_breakdown(ctx, True)\n"
+        "        read_bytes_breakdown = self.get_read_bytes_breakdown(ctx, True)\n"
+        "        write_bytes_breakdown = self.get_write_bytes_breakdown(ctx, True)\n"
+        "        # int(): component breakdowns may produce floats (modelopt_mixed\n"
+        "        # weight_byte_size); the msgspec IPC schema requires exact ints.\n"
+        "        perf_stats = PerfStats(\n"
+        "            int(sum(num_flops_breakdown.values())),\n"
+        "            int(sum(read_bytes_breakdown.values())),\n"
+        "            int(sum(write_bytes_breakdown.values())),\n"
+        "        )\n",
+    )
+
     # (i) GdnMetrics component (Qwen3.5 GatedDeltaNet). The b12x registry is
     # auto-populated via ComponentMetrics.__init_subclass__, so defining the
     # class registers the "mamba" key; ModelMetrics iterates the registry.
