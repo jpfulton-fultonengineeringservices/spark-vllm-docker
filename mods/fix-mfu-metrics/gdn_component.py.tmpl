@@ -186,7 +186,7 @@ class GdnMetrics(ComponentMetrics):
             "in_proj_qkvz_weight": int(D * conv_dim * wbs * L),
             "in_proj_ba_weight": int(D * 2 * V * wbs * L),
             "out_proj_weight": int((V * dv) * D * wbs * L),
-            "conv1d_weight": int(conv_dim * conv_kernel * wbs * L),
+            "conv1d_weight": int(conv_dim * self.conv_kernel * wbs * L),
             "in_proj_input": int(T * D * abs_ * L),
             "out_proj_input": int(T * (V * dv) * abs_ * L),
             "state_read": int(T * V * dk * dv * cache_bs * L),
