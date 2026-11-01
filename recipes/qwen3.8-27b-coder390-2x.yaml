@@ -131,6 +131,14 @@ mods:
   # this mod, so the env var alone does nothing (observed live 2026-10-15:
   # env set, worker still spun in _reclaim_programs).
   - mods/b12x-reclaim-gate
+  # Port the FES fork's perf.py MFU corrections into the installed vLLM tree:
+  # modelopt_mixed per-component weight byte sizes, hybrid
+  # full/linear-attention layer accounting, and a GatedDeltaNet (GDN) FLOPs
+  # component. Without it this hybrid model bills all 64 layers as attention
+  # and drops the attention/FFN components from MFU under modelopt_mixed.
+  # FIX_MFU_METRICS below is the activation flag (mods cannot read recipe
+  # env directly; the env block is written into the exec-script the mod sees).
+  - mods/fix-mfu-metrics
 
 defaults:
   port: 8000
@@ -171,6 +179,10 @@ env:
   TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
   # Long-context YaRN: permit --max-model-len above the 262144 native cap.
   VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
+  # Activate mods/fix-mfu-metrics: exported into the exec-script the mod
+  # reads at apply time (mods run before the exec-script, but this env block
+  # is rendered into that same script first).
+  FIX_MFU_METRICS: "1"
 
 # The draft's FP8 quantization is auto-detected from its own config.json's
 # quantization_config.quant_method ("fp8"); no --quantization flag is needed or

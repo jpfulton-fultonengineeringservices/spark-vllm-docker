@@ -1,0 +1,104 @@
+# Mapping from modelopt_mixed quant_algo names to effective weight byte size.
+# Used by _compute_modelopt_mixed_component_byte_sizes.
+_MODELOPT_MIXED_ALGO_BYTE_SIZE: dict[str, float] = {
+    "FP8": 1,
+    "MXFP8": 1,
+    "NVFP4": 0.5,
+    "W4A16_NVFP4": 0.5,
+    "W4A16": 0.5,
+    "AWQ": 0.5,
+    "GPTQ": 0.5,
+    "FP4": 0.5,
+    "INT4": 0.5,
+}
+
+
+def _get_modelopt_mixed_algo_byte_size(layer_info: object, default_byte_size: float) -> float:
+    """Return the effective byte size for a single quantized_layers entry."""
+    algo = getattr(layer_info, "quant_algo", None)
+    if algo is None:
+        algo = getattr(layer_info, "algo", None)
+
+    if algo is None:
+        logger.warning_once(
+            "modelopt_mixed parser: layer missing quant_algo, using dtype size"
+        )
+        return default_byte_size
+
+    byte_size = _MODELOPT_MIXED_ALGO_BYTE_SIZE.get(algo)
+    if byte_size is None:
+        logger.warning_once(
+            "modelopt_mixed parser: unknown quant_algo '%s', using dtype size", algo
+        )
+        return default_byte_size
+
+    return byte_size
+
+
+def _classify_quantized_layer(layer_name: str) -> str | None:
+    """Classify a quantized_layers key into a component type."""
+    layer_lower = layer_name.lower()
+
+    # Attention projections
+    if any(layer_lower.endswith(suffix) for suffix in ("q", "k", "v", "qkv", "o", "o_proj")):
+        return "attn"
+
+    # Unembed
+    if layer_lower == "lm_head":
+        return "unembed"
+
+    # Mamba projections / conv / ssm
+    if layer_lower in ("in_proj", "out_proj", "conv1d", "x_proj", "dt_proj", "ssm") \
+            or any(layer_lower.startswith(prefix) for prefix in ("in_proj.", "out_proj.", "conv1d.", "x_proj.", "dt_proj.", "ssm.")):
+        return "mamba"
+
+    # FFN / MoE projections
+    if any(keyword in layer_lower for keyword in ("up_proj", "down_proj", "gate_proj", "experts", "shared_experts")):
+        return "ffn"
+
+    return None
+
+
+def _compute_modelopt_mixed_component_byte_sizes(
+    quant_config: object, default_byte_size: float
+) -> dict[str, float]:
+    """
+    Parse a modelopt_mixed quantized_layers map and return the average
+    effective weight byte size for each component (attn, ffn, mamba, unembed).
+
+    Missing or unknown quant_algo values fall back to ``default_byte_size``.
+    If ``quantized_layers`` is empty, falls back to the coarse
+    ``_QUANT_WEIGHT_BYTE_SIZE["modelopt_mixed"]`` entry for every component.
+    """
+    quantized_layers = getattr(quant_config, "quantized_layers", None) or {}
+
+    if not quantized_layers:
+        coarse = _QUANT_WEIGHT_BYTE_SIZE.get("modelopt_mixed", default_byte_size)
+        return {"attn": coarse, "ffn": coarse, "mamba": coarse, "unembed": coarse}
+
+    component_entries: dict[str, list[float]] = {
+        "attn": [],
+        "ffn": [],
+        "mamba": [],
+        "unembed": [],
+    }
+
+    for layer_name, layer_info in quantized_layers.items():
+        component = _classify_quantized_layer(layer_name)
+        if component is None:
+            logger.warning_once(
+                "modelopt_mixed parser: unknown layer '%s', categorizing as ffn", layer_name
+            )
+            component = "ffn"
+
+        byte_size = _get_modelopt_mixed_algo_byte_size(layer_info, default_byte_size)
+        component_entries[component].append(byte_size)
+
+    component_sizes: dict[str, float] = {}
+    for component, entries in component_entries.items():
+        if entries:
+            component_sizes[component] = sum(entries) / len(entries)
+        else:
+            component_sizes[component] = default_byte_size
+
+    return component_sizes
