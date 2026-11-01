@@ -16,17 +16,19 @@
 # name); py_compile post-check runs on a temp copy and the installed file
 # is swapped in atomically, so it is never left partially patched.
 #
-# Opt-in: inert unless FIX_MFU_METRICS=1 or the exec-script references
-# FIX_MFU_METRICS. Mods run before the exec-script is written, so recipe
-# env cannot reach the mod; the launcher injects the flag as a container
-# -e instead (same pattern as mamba-spec-relocate-guard).
+# Opt-in: inert unless FIX_MFU_METRICS=1 is in the mod's calling env or the
+# recipe's exec-script references FIX_MFU_METRICS. apply_mod_to_container runs
+# with WORKSPACE_DIR=$PWD = the container WORKDIR (/workspace/vllm), NOT the
+# exec-script's location, so grep the canonical /workspace/exec-script.sh path
+# directly. run-recipe.py renders the recipe env block into that script
+# before launch-cluster.sh applies mods, so the flag is visible here.
 set -euo pipefail
 
 PREFIX="[fix-mfu-metrics]"
 fail() { echo "$PREFIX FAIL $*" >&2; return 1; }
 info() { echo "$PREFIX $*"; }
 
-EXEC_SCRIPT="${WORKSPACE_DIR:-/workspace}/exec-script.sh"
+EXEC_SCRIPT="/workspace/exec-script.sh"
 if [ "${FIX_MFU_METRICS:-0}" != "1" ] \
    && { [ ! -f "$EXEC_SCRIPT" ] || ! grep -q 'FIX_MFU_METRICS' "$EXEC_SCRIPT" 2>/dev/null; }; then
     echo "$PREFIX inert (set FIX_MFU_METRICS=1 to activate)"
