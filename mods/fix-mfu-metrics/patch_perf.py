@@ -244,12 +244,12 @@ def build_edits() -> list[tuple[str, str, int, str]]:
         "ffn-relu2-read-init",
         '        read_bytes = {}\n'
         "\n"
-        '        # Dense FFN layers (SwiGLU: up, gate, down projections + SiLU activation)\n'
+        '        # Dense FFN layers (3 GEMMs: up, gate, down projections + SiLU activation)\n'
         '        if Ld:\n',
         1,
         '        read_bytes = {}\n'
         "\n"
-        '        # Dense FFN layers (SwiGLU: up, gate, down projections + SiLU activation)\n'
+        '        # Dense FFN layers (3 GEMMs: up, gate, down projections + SiLU activation)\n'
         '        num_gemms = 2 if self.mlp_hidden_act == "relu2" else 3\n'
         "        if Ld:\n",
     )
