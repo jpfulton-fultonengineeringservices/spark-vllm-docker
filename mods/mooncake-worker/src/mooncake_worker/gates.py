@@ -52,7 +52,10 @@ MD5_MOD_WORKER_RETIRED = "5a969f9e9a7b923a1802542f266a8f8a"
 #   block-level load-error reporting removed.
 # 2026-10-11: + LookupKeyClient SND/RCVTIMEO + rebuild-on-Again
 #   (2574→2619 lines, fix-prefill-lookup-livelock).
-MD5_MOD_WORKER = "7888088f6b0976fe5d20f2752a734bbd"
+# 2026-11-01: + load-timer hoist (pre-try bind) + per-batch reset in the
+#   store get path (except-handler NameError masked real load errors);
+#   duplicate nested _repr_tensor removed.
+MD5_MOD_WORKER = "386f5c74c426824b254ff646644915a1"
 
 PACKAGE_FILES: tuple[str, ...] = (
     "__init__.py",

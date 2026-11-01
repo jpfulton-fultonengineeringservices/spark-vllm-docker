@@ -77,9 +77,12 @@ MOONCAKE_WORKER_P2P=skip bash "${MOONCAKE_WORKER_DIR}/run.sh" install \
 # --- 2. Install the transfer-engine + cupy runtime deps ----------------------
 # The connector imports `mooncake.store` in-process and _StagingSlotPool needs
 # cupy (pinned slot allocs). Neither ships in vllm-node-b12x. Block copied
-# verbatim from mods/pd-disagg/run.sh; the pin is load-bearing for GB10: 0.3.13's
-# rdma_context gates RNIC open on GPU-RDMA support (DMA-BUF / nvidia-peermem)
-# and GB10 has neither, so every RNIC is disabled and engine init fails.
+# verbatim from mods/pd-disagg/run.sh; the pin is load-bearing for GB10:
+# 0.3.13's rdma_context gates RNIC open on GPU-RDMA support (DMA-BUF /
+# nvidia-peermem) and GB10 has neither, so every RNIC is disabled and engine
+# init fails. Bump to 0.3.13.post1 only after proving RNIC init survives
+# on one node (see pd-disagg/run.sh); the SSD io_uring corruption is
+# mitigated by MOONCAKE_OFFLOAD_USE_URING=false in the daemon env instead.
 # libnuma1: the mooncake-transfer-engine wheel dlopens it (engine.so/store.so
 # DT_NEEDED); the derived coder390 image ships without it, so `import
 # mooncake.store` died with "libnuma.so.1: cannot open shared object file"
@@ -101,7 +104,7 @@ else
     info "libnuma.so.1 already present"
 fi
 : "${MOONCAKE_L2_INSTALL_DEPS:=1}"
-: "${MOONCAKE_L2_MOONCAKE_SPEC:=mooncake-transfer-engine-cuda13==0.3.13.post1}"
+: "${MOONCAKE_L2_MOONCAKE_SPEC:=mooncake-transfer-engine-cuda13==0.3.12.post1}"
 if ! python3 -c 'import mooncake' >/dev/null 2>&1; then
     if [ "${MOONCAKE_L2_INSTALL_DEPS}" = "1" ]; then
         info "mooncake module missing; installing '${MOONCAKE_L2_MOONCAKE_SPEC}'"
