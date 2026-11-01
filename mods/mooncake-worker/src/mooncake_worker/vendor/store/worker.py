@@ -1582,15 +1582,21 @@ class KVCacheStoreRecvingThread(KVTransferThread):
         current_batch_keys: list[str] = key_list_c
         current_batch_block_ids: list[int] = block_id_list_c
         batch_bytes = 0
+        # Bind the timer up front so the except-handler metric below always
+        # has a start time, even when a sub-batch fails before the in-loop
+        # reset (previously a NameError masked the real load error).
+        load_get_start = time.perf_counter()
         try:
             for batch_keys, batch_addrs, batch_sizes, batch_block_ids in load_batches:
                 current_batch_keys = batch_keys
                 current_batch_block_ids = batch_block_ids
                 batch_bytes = _sum_batch_bytes(batch_sizes)
+                # Reset after byte accounting but before the tier lookup so a
+                # lookup failure is still measured against a bound timer.
                 tiers_by_key: dict[str, str] | None = None
                 if envs.VLLM_MOONCAKE_STORE_TIER_LOG:
                     tiers_by_key = _get_replica_tiers_by_key(self.store, batch_keys)
-                # Reset so the recorded RPC duration excludes tier lookup.
+                # Reset so the recorded RPC duration excludes the tier lookup.
                 load_get_start = time.perf_counter()
                 if self._host_staging and self._get_pool is not None:
                     res = self._staged_batch_get_into_multi_buffers(
@@ -2142,11 +2148,6 @@ class MooncakeStoreWorker:
         # per-group addressing below still needs every group's descriptors.
         # (_excluded_group_ids is resolved in __init__ before the coordinator
         # is built; recomputing it here would desynchronize the two.)
-
-        def _repr_tensor(v: torch.Tensor | list[torch.Tensor]) -> torch.Tensor:
-            assert isinstance(v, torch.Tensor | list)
-            return v if isinstance(v, torch.Tensor) else v[0]
-
         # Per-group segment addressing.
         #
         # This stack registers ONE backing allocation holding every layer's

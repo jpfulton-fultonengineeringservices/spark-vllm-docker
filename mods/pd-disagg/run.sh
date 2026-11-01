@@ -70,20 +70,23 @@ if [ "${PD_KV_BACKEND:-mooncake}" = "mooncake" ]; then
 # does not ship the wheel; install it at boot if absent (mirrors the retired
 # NIXL install path). RDMA runtime deps (libmlx5/libibverbs) are already in
 # the image.
-# Pin to 0.3.12.post1 (NOT 0.3.13+): 0.3.12 is now load-bearing for the P2P
-# TransferEngine too. 0.3.13's rdma_context gates RNIC device
+# Pinned at 0.3.13.post1 (2026-11-01 lockstep bump with the mooncake-store
+# daemon image; brings the SSD io_uring read-path corruption fix #3066/
+# #3073). Residual gate risk: 0.3.13's rdma_context gates RNIC device
 # open on "GPU RDMA support present" (CU_DEVICE_ATTRIBUTE_DMA_BUF or
 # nvidia-peermem) and disables every RNIC when absent
 # (rdma_context.cpp:1328 "DMA BUF supported required for GPU RDMA without
 # nvidia-peermem" -> RdmaTransport: No available RNIC -> Transfer Engine
 # init failed -> engine dies at kv-transfer init). GB10 has neither: UMA
 # exposes no DMA-BUF attr, and the peermem probe EFAULTs (see
-# infra/cluster-config model-opts/mooncake/gpup2p-dead-end.txt). 0.3.12
-# opens the device unconditionally and registers only the connector's
-# host-pinned staging buffers — the exact shape the store path served KV
-# with. Re-test the gate after any driver bump via the 30s
-# CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED probe before re-attempting 0.3.13.
-: "${PD_MOONCAKE_SPEC:=mooncake-transfer-engine-cuda13==0.3.12.post1}"
+# infra/cluster-config model-opts/mooncake/gpup2p-dead-end.txt). The best-
+# effort nvidia_peermem modprobe below is an attempt at unlocking the gate,
+# NOT a guaranteed mitigation: gpup2p-dead-end.txt records the probe
+# EFAULTing on GB10, so expect the module NOT to load on UMA. If the engine
+# still dies at kv-transfer init, re-test the gate via
+# the 30s CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED probe and roll the pin
+# back to 0.3.12.post1 (which opens the device unconditionally).
+: "${PD_MOONCAKE_SPEC:=mooncake-transfer-engine-cuda13==0.3.13.post1}"
 if ! python3 -c 'import mooncake' >/dev/null 2>&1; then
     if [ "${PD_DISAGG_INSTALL_MOONCAKE:-1}" = "1" ]; then
         info "mooncake module missing; installing '${PD_MOONCAKE_SPEC}'"
@@ -105,16 +108,16 @@ fi
 # The staging arena is host-pinned by design (host_staging=true), so GPU-VA
 # registration never happens regardless — the var carries no signal.
 
-# peermem hardening (best-effort, NOT load-bearing on 0.3.12): load
-# nvidia_peermem if present so a future 0.3.13 wheel bump doesn't hit the
+# peermem hardening (best-effort; relevant to the 0.3.13.post1 RNIC gate and
+# expected NOT to load on GB10 UMA): load nvidia_peermem if present so the
 # "DMA BUF supported required for GPU RDMA without nvidia-peermem" RNIC
 # gate. Persistence across reboots is cluster-config's node-setup
 # responsibility (modules-load.d); this only covers the current boot.
 if ! lsmod 2>/dev/null | awk '{print $1}' | grep -qx nvidia_peermem; then
     if modprobe nvidia_peermem 2>/dev/null; then
-        info "nvidia_peermem loaded (0.3.13 RNIC-gate unlock, hardening only)"
+        info "nvidia_peermem loaded (unexpected on GB10 UMA per gpup2p-dead-end.txt; 0.3.13 RNIC gate armed)"
     else
-        info "nvidia_peermem not loadable (expected on GB10 UMA; 0.3.12 path unaffected)"
+        info "nvidia_peermem not loadable (expected on GB10 UMA; 0.3.13.post1 path unaffected unless the RNIC gate arms)"
     fi
 fi
 

@@ -317,7 +317,7 @@ content-hash lookup across an engine restart.
 
 The new `mods/mooncake-store-l2` installs the store connector set
 (`mods/mooncake-worker` with `MOONCAKE_WORKER_P2P=skip`), the
-`mooncake-transfer-engine-cuda13==0.3.12.post1` + `cupy-cuda13x` runtime deps,
+`mooncake-transfer-engine-cuda13==0.3.13.post1` + `cupy-cuda13x` runtime deps,
 and renders the `standalone-store` `MOONCAKE_CONFIG_PATH` JSON. It is activated
 by the launcher's `-e MOONCAKE_L2_ENABLED=1` (recipe `env:` cannot reach a mod,
 which runs before the exec-script).
