@@ -4,6 +4,15 @@ File: `docs/pd-router/research/mooncake-version-audit.md`
 Date: 2026-10-11  
 Auditing for: store-path wedge (`MooncakeStoreConnector`) → P2P (`MooncakeConnector` via `vllm-project/router`) pivot.
 
+**Implementation status (2026-11-01): BUMPED.** All 6 vLLM-PD-path pin sites
+updated to `mooncake-transfer-engine-cuda13==0.3.13.post1` (image tag
+`mooncake-store:v0.3.13.post1-1`); the SGLang path (#7/#8) and the LMCache
+wheel builder (#9) remain on 0.3.12.post1 by design. The io_uring SSD
+read-path corruption fixed upstream by [#3066](https://github.com/kvcache-ai/Mooncake/pull/3066) / [#3073](https://github.com/kvcache-ai/Mooncake/pull/3073) is additionally
+mitigated in config: `MOONCAKE_OFFLOAD_USE_URING=false` is now exported in
+`docker/mooncake-store/compose.yaml` (client env block) and
+`templates/mooncake-client.service.tmpl` + `mooncake-master.service.tmpl`.
+
 ---
 
 ## 1. Release topology
@@ -61,13 +70,13 @@ Categorisation by tag from the [v0.3.13 release body](https://github.com/kvcache
 | [#3077](https://github.com/kvcache-ai/Mooncake/pull/3077) | fix(store): propagate --allocation_strategy through HA supervisor config | Config propagation |
 | [#3196](https://github.com/kvcache-ai/Mooncake/pull/3196) | [Store] Support VRAM Segment and NVLink transport within single node | Intra-node NVLink |
 | [#3244](https://github.com/kvcache-ai/Mooncake/pull/3244) | [Store] Harden Put/Upsert completion against promotion lifecycle | Completion correctness |
-| [#3246](https://github.com/kvcache-ai/Mooncake/pull/3246) | [Bugfix][Store] Fix No rkey MR access on SSD offload read | SSD offload fix |
+| [#3246](https://github.com/kvcache-ai/Mooncake/pull/3246) | [Bugfix][Store] Fix No rkey MR access on SSD offload read | SSD offload fix (sister fix, in 0.3.13) |
 | [#3159](https://github.com/kvcache-ai/Mooncake/pull/3159) | [store] Avoid staging copy for same node tensor put | Node-local bypass |
 | [#3197](https://github.com/kvcache-ai/Mooncake/pull/3197) | [Store] Avoid staging for same-process GPU reads | Same-process bypass |
 | [#2909](https://github.com/kvcache-ai/Mooncake/pull/2909) | [Store] Add fixed soft pin lifecycle | Soft-pin lifecycle |
 | [#3165](https://github.com/kvcache-ai/Mooncake/pull/3165) | [Store] Validate durable oplog prefix at startup | Oplog validation |
-| [#2967](https://github.com/kvcache-ai/Mooncake/pull/2967) | [Bug]: [SSD] DSV4: OBJECT_ALREADY_EXISTS/persist failed/INVALID_KEY | SSD offload fix |
-| [#3066](https://github.com/kvcache-ai/Mooncake/pull/3066) / [#3073](https://github.com/kvcache-ai/Mooncake/pull/3073) | [Store] Fix silent data corruption in io_uring read path | Data corruption fix |
+| [#2967](https://github.com/kvcache-ai/Mooncake/pull/2967) | [Bug]: [SSD] DSV4: OBJECT_ALREADY_EXISTS/persist failed/INVALID_KEY | SSD offload fix (sister fix, in 0.3.13) |
+| [#3066](https://github.com/kvcache-ai/Mooncake/pull/3066) / [#3073](https://github.com/kvcache-ai/Mooncake/pull/3073) | [Store] Fix silent data corruption in io_uring read path | Data corruption fix — **fixed in 0.3.13; bumped 2026-11-01 with interim config mitigation `MOONCAKE_OFFLOAD_USE_URING=false`** |
 | [#3222](https://github.com/kvcache-ai/Mooncake/pull/3222) | [Store] Add Fast-Fail Impossible OffsetAllocator Requests | Allocator safety |
 | [#3004](https://github.com/kvcache-ai/Mooncake/pull/3004) | [Store] Make RPC client I/O threads configurable via MC_RPC_CLIENT_IO_THREADS | Configurability |
 | [#3318](https://github.com/kvcache-ai/Mooncake/pull/3318) | Allow configuring master admin/metrics HTTP bind address | Bind address |
@@ -75,7 +84,7 @@ Categorisation by tag from the [v0.3.13 release body](https://github.com/kvcache
 | [#3149](https://github.com/kvcache-ai/Mooncake/pull/3149) | [Store] Fix NoF heartbeat config silently ignored in HA mode | HA heartbeat |
 | [#2919](https://github.com/kvcache-ai/Mooncake/pull/2919) | [Dep] bind wildcard listen address without getaddrinfo | Wildcard bind |
 | [#3118](https://github.com/kvcache-ai/Mooncake/pull/3118) | [Store] Selectively materialize BatchEvict candidates timestamp filtering | Eviction efficiency |
-| [#3488](https://github.com/kvcache-ai/Mooncake/pull/3488) | perf(store): batch io_uring bucket reads | IO performance |
+| [#3488](https://github.com/kvcache-ai/Mooncake/pull/3488) | perf(store): batch io_uring bucket reads | IO performance (sister fix, in 0.3.13) |
 | [#3112](https://github.com/kvcache-ai/Mooncake/pull/3112) | [Wheel] Add native fast-copy PUT hot path | PUT performance |
 | [#3389](https://github.com/kvcache-ai/Mooncake/pull/3389) | [Store] Add dynamic hot replica fanout | Replication |
 | [#3326](https://github.com/kvcache-ai/Mooncake/pull/3326) | [Store] Add bounded standby snapshot capture | Standby safety |
@@ -211,7 +220,7 @@ From `docs/pd-router/pd-failure-evidence.md`:
 
 ### Current pins in repo
 
-All functional call sites of the `0.3.12.post1` mooncake pin, verified via repo-wide grep (`0\.3\.12\.post1`) on 2026-10-11. A version bump must touch **every** vLLM-PD-path site to keep the store daemon and the engine-side `mooncake.store` import in lockstep (same C++ wire protocol, same `VERSION` field).
+All functional call sites of the mooncake pin, verified via repo-wide grep (`0\.3\.12\.post1`) on 2026-10-11 (values below are the pre-bump audit state; see the implementation-status note above for the 2026-11-01 bump). A version bump must touch **every** vLLM-PD-path site to keep the store daemon and the engine-side `mooncake.store` import in lockstep (same C++ wire protocol, same `VERSION` field).
 
 **vLLM PD path (the path we are fixing):**
 

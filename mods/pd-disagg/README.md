@@ -205,7 +205,7 @@ unset) to re-enable L2 adapters once the upstream fixes land.
    --daemon` (add `--kv-backend lmcache` for the MP path) — serve.sh starts
    mooncake-master (rank-0 host) and
    mooncake-client (every host) as sibling containers from the
-   `mooncake-store:v0.3.12.post1-1` image BEFORE launching the engines,
+   `mooncake-store:v0.3.13.post1-1` image BEFORE launching the engines,
    then derives `MOONCAKE_MASTER_SERVER_ADDRESS` and the decode-subgroup
    `-e` vars from `--rank-order` + `NODE_RAILB_IPS` (same pattern as
    `PD_DECODE_MASTER_ADDR`).
@@ -226,8 +226,10 @@ unset) to re-enable L2 adapters once the upstream fixes land.
   (spill-only semantics).
 - **`PYTHONHASHSEED=0` everywhere** — deterministic across roles; the store
   connector (lmcache twin's L2) still requires it for hash dedup.
-- `MOONCAKE_OFFLOAD_USE_URING=false` (GB10 io_uring + DirectIO alignment);
-  only set if SSD restore surfaces alignment faults.
+- `MOONCAKE_OFFLOAD_USE_URING=false` — GB10 io_uring + DirectIO alignment,
+  plus the 0.3.12 wheel's io_uring SSD read-path corruption (upstream
+  #3066/#3073, fixed in 0.3.13.post1). Now exported by default config
+  (cluster-config compose.yaml client env block + service templates).
 - **`VLLM_MOONCAKE_BOOTSTRAP_PORT` (8998) REQUIRED** for the P2P backend —
   injected into `vllm/envs.py` by mods/mooncake-worker's envs shim
   (`install-p2p`); the bootstrap server binds it on prefill rank 0 and the
@@ -238,9 +240,12 @@ unset) to re-enable L2 adapters once the upstream fixes land.
   `RdmaTransport: No available RNIC` → engine init rc=-1; verified
   in-container 2026-10-12). The staging arena registers host-pinned buffers
   only (`host_staging=true`), so GPU-VA registration never occurs regardless.
-- **Wheel pin `0.3.12.post1`** — 0.3.13's `rdma_context` gates RNIC device
-  open on GPU-RDMA support (DMA-BUF attr or nvidia-peermem) and kills GB10
-  (model-opts/mooncake/gpup2p-dead-end.txt).
+- **Wheel pin `0.3.13.post1`** (lockstep with the mooncake-store image,
+  bumped 2026-11-01). Residual risk: 0.3.13's `rdma_context` gates RNIC
+  device open on GPU-RDMA support (DMA-BUF attr or nvidia-peermem) and can
+  kill GB10 (model-opts/mooncake/gpup2p-dead-end.txt); run.sh best-effort
+  modprobes nvidia_peermem as mitigation. Roll back to 0.3.12.post1 if the
+  engine dies at kv-transfer init after a driver bump.
 
 ## Provenance
 
