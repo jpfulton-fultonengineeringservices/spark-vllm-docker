@@ -388,11 +388,11 @@ same concept, added to the P2P path by the fork.
 | Discovery | Bootstrap server (`POST /register` + `GET /query`, :8998) | Mooncake master server (`MOONCAKE_MASTER_SERVER_ADDRESS:50051`, `metadata_server: P2PHANDSHAKE`) (`eco:kv-backends-l2.md:112-113`) |
 | Prefix dedup | **No** — each request transfers KV directly | **Yes** — hash-based dedup with prefix caching (`fork:store/connector.py:8-9`) |
 | Host-staging | `_PinnedStagingArena` (`fork:staging.py`) — fork-specific to P2P path | `_StagingSlotPool` (`fork:store/worker.py`; `eco:mods/mooncake-worker/README.md:27-31`) — separately implemented |
-| Transfer-engine wheel | **Yes** — imports `mooncake.engine.TransferEngine` (`fork:worker.py`, `from mooncake.engine import TransferEngine`) | **Yes** — `MooncakeDistributedStore` wraps `TransferEngine`; same wheel `mooncake-transfer-engine-cuda13==0.3.13.post1` (`eco:kv-backends-l2.md:575`) |
+| Transfer-engine wheel | **Yes** — imports `mooncake.engine.TransferEngine` (`fork:worker.py`, `from mooncake.engine import TransferEngine`) | **Yes** — `MooncakeDistributedStore` wraps `TransferEngine`; same wheel `mooncake-transfer-engine-cuda13==0.3.12.post1` (`eco:kv-backends-l2.md:575`) |
 | `cupy-cuda13x` dep | **Yes** — `_PinnedStagingArena` uses cupy for D2H/H2D (`fork:staging.py`) | **Yes** — `_StagingSlotPool` uses cupy for D2H/H2D (`eco:kv-backends-l2.md:575`; `eco:mods/mooncake-worker/README.md:27-31`) |
 | Config keys | `host_staging`, `staging_send_mib`, `staging_recv_mib`, `num_workers` | `host_staging=true, staging_num_slots=2, staging_slot_size_mb=2048` (`eco:kv-backends-l2.md:573`) |
 | Ports | Bootstrap :8998 (`VLLM_MOONCAKE_BOOTSTRAP_PORT`) + ephemeral ZMQ side-channel | Master :50051 + client :50053 (RoCE) (`eco:kv-backends-l2.md:574`) |
-| Standalone store image | **Not needed** | `mooncake-store:v0.3.13.post1-1` (`eco:kv-backends-l2.md:284-285`) |
+| Standalone store image | **Not needed** | `mooncake-store:v0.3.12.post1-1` (`eco:kv-backends-l2.md:284-285`) |
 
 ### 4.2 Does P2P avoid the store cohort entirely?
 

@@ -72,7 +72,7 @@ The backend branch:
 
 ### 2.2 What the mooncake branch sets up
 
-- Installs `mooncake-transfer-engine-cuda13==0.3.13.post1` in-process (the connector imports
+- Installs `mooncake-transfer-engine-cuda13==0.3.12.post1` in-process (the connector imports
   `mooncake.store` in vLLM; `run.sh:68-73`), version pinned to the same version the
   `mooncake-store` sibling image runs (`run.sh:72-73`).
 - Installs `cupy-cuda13x<14.1.0`, "required [by the] host-staged `_StagingSlotPool`"
@@ -201,7 +201,7 @@ fork branch `cuda13.3-aarch64-gb10-glm5next-modular` (tip `4e79d6be6f`)"
   `VLLM_PREFIX_CACHE_RETENTION_INTERVAL` (FES default `None`), anchor-count-gated,
   AST-validated, idempotent (`README.md:58-61`).
 - Runtime deps shipped elsewhere (i.e. by `mods/pd-disagg/run.sh`, not this mod):
-  `mooncake-transfer-engine-cuda13==0.3.13.post1` and `cupy-cuda13x<14.1.0`
+  `mooncake-transfer-engine-cuda13==0.3.12.post1` and `cupy-cuda13x<14.1.0`
   (`README.md:65-68`).
 - Config consumed (set by `mods/pd-disagg/dispatch.sh`):
   `kv_connector_extra_config` = `{"host_staging": true, "staging_num_slots": 2,
@@ -272,7 +272,7 @@ constraint), opentelemetry/prometheus client ranges, `pyzmq>=25.0.0`, `redis`, `
   libstdc++6 tini`; `engine.so`/`store.so` `DT_NEEDED libmlx5.so.1` (IBGDA) — this is the
   reason the vLLM ranks need no UCX (`Dockerfile:32-45`; cross-ref
   `mods/pd-disagg/mooncake-env.sh:14-16`).
-- Wheel: `mooncake-transfer-engine-cuda13==${MOONCAKE_VERSION}` (default `0.3.13.post1`,
+- Wheel: `mooncake-transfer-engine-cuda13==${MOONCAKE_VERSION}` (default `0.3.12.post1`,
   `scripts/build-mooncake-store-image.sh:49`), with `ep_*.so`/`pg_*.so` Torch EP/PG
   extensions removed and package owned by uid 65532 (`Dockerfile:52-57`); stub
   `libcuda.so.1` + `libcudart.so.13` copied from the CUDA devel image and ldconfig'd
@@ -281,7 +281,7 @@ constraint), opentelemetry/prometheus client ranges, `pyzmq>=25.0.0`, `redis`, `
   "Flags from") + pushed as `${LLM_REGISTRY_HOST}:${LLM_REGISTRY_PORT}/
   ${MOONCAKE_STORE_IMAGE_NAME}:${MOONCAKE_STORE_IMAGE_TAG}` with a `-<git-sha>` sha tag alias
   (`scripts/build-mooncake-store-image.sh:43-47`, `:56-85`, `:92-94`).
-- Registry example: `MOONCAKE_STORE_IMAGE=10.100.170.3:5000/mooncake-store:v0.3.13.post1-1`
+- Registry example: `MOONCAKE_STORE_IMAGE=10.100.170.3:5000/mooncake-store:v0.3.12.post1-1`
   (`docker/mooncake-store/compose.env.example:18-19`).
 
 ### 5.2 The compose cohort (`docker/mooncake-store/compose.yaml`)
@@ -597,14 +597,15 @@ Documented GB10 constraints (each with its citation):
    (`mods/pd-disagg/mooncake-env.sh:18-20`, `README.md:74`, `:172`;
    `lmcache-server-entrypoint.sh:94-97`).
 8. **Mooncake offload flags on GB10**: `MOONCAKE_OFFLOAD_USE_URING=false` (GB10 io_uring +
-   DirectIO alignment). **Now exported by default config (2026-11-01)** in
-   `docker/mooncake-store/compose.yaml` (client env block) and
+   DirectIO alignment). **Exported by default config (2026-11-01)** in
+   `docker/mooncake-store/compose.yaml` (master + client env blocks) and
    `templates/mooncake-client.service.tmpl` + `mooncake-master.service.tmpl`:
    the 0.3.12 wheel's io_uring SSD read path silently corrupts data
-   (upstream [#3066](https://github.com/kvcache-ai/Mooncake/pull/3066)/[#3073](https://github.com/kvcache-ai/Mooncake/pull/3073), fixed in 0.3.13), so the
-   knob is set fleet-wide pending the daemon+engine lockstep bump;
-   historically it was only set ad hoc when SSD restore surfaced alignment
-   faults (`mods/pd-disagg/README.md:173-174`). SSD tier write-once/immutable
+   (upstream [#3066](https://github.com/kvcache-ai/Mooncake/pull/3066)/[#3073](https://github.com/kvcache-ai/Mooncake/pull/3073), fixed in 0.3.13 but the
+   image bump is blocked by the GB10 RNIC gate — see
+   `mods/pd-disagg/README.md` Constraints), so the knob ships fleet-wide as
+   the mitigation. Historically it was set ad hoc when SSD restore surfaced
+   alignment faults (`mods/pd-disagg/README.md:173-174`). SSD tier write-once/immutable
    bucket backend, `--offload_on_evict` stays false (spill-only)
    (`README.md:169-171`; `templates/mooncake-master.service.tmpl:12-14`).
 9. **RDMA devices**: RoCE `roceP2p1s0f1` with uverbs1/uverbs3 + rdma_cm and
@@ -632,8 +633,8 @@ mandated workaround. No file states this reconciliation explicitly.
 |---|---|---|---|
 | vLLM connector | `MooncakeStoreConnector` `kv_producer`/`kv_consumer` | `LMCacheMPConnector` + `--disable-hybrid-kv-cache-manager` | `LMCacheConnectorV1` in-process |
 | extra_config | `host_staging=true, staging_num_slots=2, staging_slot_size_mb=2048` | `lmcache.mp.host=tcp://127.0.0.1, lmcache.mp.port=5555, mp_transfer_mode=engine_driven` | config YAML `/tmp/lmcache-config.yaml` |
-| Sidecar containers | `mooncake-master` (rank-0, :50051 TCP, profile `rank0`) + `mooncake-client` (every node, :50053, RoCE, profile `client`), image `mooncake-store:v0.3.13.post1-1` | `mooncake-master` ONLY (rank 0, :50051) + `lmcache-server-<node>` per node (`lmcache server`, :5555 ZMQ, :8080/:8082 HTTP), image `lmcache-server` (vllm-gb10 overlay) | none |
-| Boot-time pip installs (engine container) | `mooncake-transfer-engine-cuda13==0.3.13.post1`, `cupy-cuda13x<14.1.0`, `xxhash` | `lmcache` wheel (dgx-spark-wheels, `--no-deps`) + filtered requirements + `xxhash` | same lmcache wheel + requirements + `valkey-glide-sync` |
+| Sidecar containers | `mooncake-master` (rank-0, :50051 TCP, profile `rank0`) + `mooncake-client` (every node, :50053, RoCE, profile `client`), image `mooncake-store:v0.3.12.post1-1` | `mooncake-master` ONLY (rank 0, :50051) + `lmcache-server-<node>` per node (`lmcache server`, :5555 ZMQ, :8080/:8082 HTTP), image `lmcache-server` (vllm-gb10 overlay) | none |
+| Boot-time pip installs (engine container) | `mooncake-transfer-engine-cuda13==0.3.12.post1`, `cupy-cuda13x<14.1.0`, `xxhash` | `lmcache` wheel (dgx-spark-wheels, `--no-deps`) + filtered requirements + `xxhash` | same lmcache wheel + requirements + `valkey-glide-sync` |
 | Key env (vLLM ranks) | `MOONCAKE_CONFIG_PATH=/tmp/pd-disagg/mooncake-store.json`, `MOONCAKE_PREFERRED_SEGMENT=<ip>:50053`, `MOONCAKE_REQUESTER_LOCAL_HOSTNAME=<ip>`, master addr/port, `PYTHONHASHSEED=0` | `LMCACHE_MP_HOST=tcp://127.0.0.1`, `LMCACHE_MP_PORT=5555`, master addr/port, `PYTHONHASHSEED=0` | `LMCACHE_CONFIG_FILE`, `LMCACHE_LOCAL_CPU_GIB=8`, `LMCACHE_LOCAL_DISK_GIB=50` |
 | Key env (daemons) | client: `MOONCAKE_SEGMENT_SIZE_GIB=24`, `MOONCAKE_OFFLOAD_MAX_GIB=96`, offload bucket env (4 GiB staging buffer `4294967296`, 96 GiB NVMe cap `103079215104`), cgroup 32 GiB / 40 GiB | server: `LMCACHE_MOONCAKE_MASTER_ADDR`, `LMCACHE_MOONCAKE_GLOBAL_SEGMENT_BYTES` (=recipe segment), `LMCACHE_SUPPORTED_TRANSFER_MODE=engine_driven`, `LMCACHE_L1_SIZE_GB=1` | — |
 | L2 tiers | client DRAM segment (24 GiB) + NVMe SSD offload (`/nvme/mooncake_offload`, 96 GiB bucket) | `mooncake_store` (RDMA, 16 GiB default seg / 4 GiB buffer), `fs_native` (NFS), `valkey` (Dell), optional P2P (:6767) | `fs_native` per-node NFS + `valkey://10.10.10.53:6379` |

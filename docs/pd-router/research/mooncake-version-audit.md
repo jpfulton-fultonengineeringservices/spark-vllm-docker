@@ -4,14 +4,20 @@ File: `docs/pd-router/research/mooncake-version-audit.md`
 Date: 2026-10-11  
 Auditing for: store-path wedge (`MooncakeStoreConnector`) → P2P (`MooncakeConnector` via `vllm-project/router`) pivot.
 
-**Implementation status (2026-11-01): BUMPED.** All 6 vLLM-PD-path pin sites
-updated to `mooncake-transfer-engine-cuda13==0.3.13.post1` (image tag
-`mooncake-store:v0.3.13.post1-1`); the SGLang path (#7/#8) and the LMCache
-wheel builder (#9) remain on 0.3.12.post1 by design. The io_uring SSD
-read-path corruption fixed upstream by [#3066](https://github.com/kvcache-ai/Mooncake/pull/3066) / [#3073](https://github.com/kvcache-ai/Mooncake/pull/3073) is additionally
-mitigated in config: `MOONCAKE_OFFLOAD_USE_URING=false` is now exported in
-`docker/mooncake-store/compose.yaml` (client env block) and
-`templates/mooncake-client.service.tmpl` + `mooncake-master.service.tmpl`.
+**Implementation status (2026-11-01): PIN RETAINED, mitigation shipped.**
+The bump was attempted and REVERTED: 0.3.13's `rdma_context` gates RNIC
+device open on GPU-RDMA support (DMA-BUF attr or nvidia-peermem); GB10
+provides neither (UMA exposes no DMA-BUF attr, peermem probe EFAULTs —
+`model-opts/mooncake/gpup2p-dead-end.txt`), so every RNIC is disabled and
+the engine dies at kv-transfer init. All pins remain
+`0.3.12.post1` (image `mooncake-store:v0.3.12.post1-1`), SGLang path and
+LMCache wheel builder included. The io_uring SSD read-path corruption is
+mitigated in config instead: `MOONCAKE_OFFLOAD_USE_URING=false` is now
+exported by default in `docker/mooncake-store/compose.yaml` (master +
+client env blocks) and `templates/mooncake-client.service.tmpl` +
+`mooncake-master.service.tmpl`, forcing the legacy POSIX read path on the
+affected code. A future bump requires proving daemon+engine RNIC init
+survives on one node first.
 
 ---
 
@@ -70,13 +76,13 @@ Categorisation by tag from the [v0.3.13 release body](https://github.com/kvcache
 | [#3077](https://github.com/kvcache-ai/Mooncake/pull/3077) | fix(store): propagate --allocation_strategy through HA supervisor config | Config propagation |
 | [#3196](https://github.com/kvcache-ai/Mooncake/pull/3196) | [Store] Support VRAM Segment and NVLink transport within single node | Intra-node NVLink |
 | [#3244](https://github.com/kvcache-ai/Mooncake/pull/3244) | [Store] Harden Put/Upsert completion against promotion lifecycle | Completion correctness |
-| [#3246](https://github.com/kvcache-ai/Mooncake/pull/3246) | [Bugfix][Store] Fix No rkey MR access on SSD offload read | SSD offload fix (sister fix, in 0.3.13) |
+| [#3246](https://github.com/kvcache-ai/Mooncake/pull/3246) | [Bugfix][Store] Fix No rkey MR access on SSD offload read | SSD offload fix (in 0.3.13) |
 | [#3159](https://github.com/kvcache-ai/Mooncake/pull/3159) | [store] Avoid staging copy for same node tensor put | Node-local bypass |
 | [#3197](https://github.com/kvcache-ai/Mooncake/pull/3197) | [Store] Avoid staging for same-process GPU reads | Same-process bypass |
 | [#2909](https://github.com/kvcache-ai/Mooncake/pull/2909) | [Store] Add fixed soft pin lifecycle | Soft-pin lifecycle |
 | [#3165](https://github.com/kvcache-ai/Mooncake/pull/3165) | [Store] Validate durable oplog prefix at startup | Oplog validation |
-| [#2967](https://github.com/kvcache-ai/Mooncake/pull/2967) | [Bug]: [SSD] DSV4: OBJECT_ALREADY_EXISTS/persist failed/INVALID_KEY | SSD offload fix (sister fix, in 0.3.13) |
-| [#3066](https://github.com/kvcache-ai/Mooncake/pull/3066) / [#3073](https://github.com/kvcache-ai/Mooncake/pull/3073) | [Store] Fix silent data corruption in io_uring read path | Data corruption fix — **fixed in 0.3.13; bumped 2026-11-01 with interim config mitigation `MOONCAKE_OFFLOAD_USE_URING=false`** |
+| [#2967](https://github.com/kvcache-ai/Mooncake/pull/2967) | [Bug]: [SSD] DSV4: OBJECT_ALREADY_EXISTS/persist failed/INVALID_KEY | SSD offload fix (in 0.3.13) |
+| [#3066](https://github.com/kvcache-ai/Mooncake/pull/3066) / [#3073](https://github.com/kvcache-ai/Mooncake/pull/3073) | [Store] Fix silent data corruption in io_uring read path | Data corruption fix (in 0.3.13) — **not yet shipped; mitigated by config `MOONCAKE_OFFLOAD_USE_URING=false` (2026-11-01)** |
 | [#3222](https://github.com/kvcache-ai/Mooncake/pull/3222) | [Store] Add Fast-Fail Impossible OffsetAllocator Requests | Allocator safety |
 | [#3004](https://github.com/kvcache-ai/Mooncake/pull/3004) | [Store] Make RPC client I/O threads configurable via MC_RPC_CLIENT_IO_THREADS | Configurability |
 | [#3318](https://github.com/kvcache-ai/Mooncake/pull/3318) | Allow configuring master admin/metrics HTTP bind address | Bind address |
@@ -84,7 +90,7 @@ Categorisation by tag from the [v0.3.13 release body](https://github.com/kvcache
 | [#3149](https://github.com/kvcache-ai/Mooncake/pull/3149) | [Store] Fix NoF heartbeat config silently ignored in HA mode | HA heartbeat |
 | [#2919](https://github.com/kvcache-ai/Mooncake/pull/2919) | [Dep] bind wildcard listen address without getaddrinfo | Wildcard bind |
 | [#3118](https://github.com/kvcache-ai/Mooncake/pull/3118) | [Store] Selectively materialize BatchEvict candidates timestamp filtering | Eviction efficiency |
-| [#3488](https://github.com/kvcache-ai/Mooncake/pull/3488) | perf(store): batch io_uring bucket reads | IO performance (sister fix, in 0.3.13) |
+| [#3488](https://github.com/kvcache-ai/Mooncake/pull/3488) | perf(store): batch io_uring bucket reads | IO performance (in 0.3.13) |
 | [#3112](https://github.com/kvcache-ai/Mooncake/pull/3112) | [Wheel] Add native fast-copy PUT hot path | PUT performance |
 | [#3389](https://github.com/kvcache-ai/Mooncake/pull/3389) | [Store] Add dynamic hot replica fanout | Replication |
 | [#3326](https://github.com/kvcache-ai/Mooncake/pull/3326) | [Store] Add bounded standby snapshot capture | Standby safety |
@@ -264,6 +270,15 @@ Verified via [PyPI simple index](https://pypi.org/simple/mooncake-transfer-engin
 
 The mooncake-store daemon and the engine-side `mooncake.store` import **must** run the same wheel version because the C++ wire protocol carries a `VERSION` field that is checked at handshake. A partial bump (image only, or engine only) will cause a version-mismatch rejection at boot.
 
+**2026-11-01: bump attempted per this playbook and REVERTED — blocked by the
+GB10 RNIC gate.** 0.3.13's `rdma_context` gates RNIC device open on GPU-RDMA
+support (DMA-BUF attr or nvidia-peermem); GB10 provides neither, so engine
+init dies at kv-transfer init. The playbook below remains accurate for a
+future re-attempt; run the daemon+engine RNIC-init proof on one node first.
+Until then, the io_uring corruption is mitigated by config
+(`MOONCAKE_OFFLOAD_USE_URING=false`, exported by default since 2026-11-01 —
+see the implementation-status note at the top).
+
 **For a vLLM PD path bump to `v0.3.13.post1`:**
 
 | # | File | Change |
@@ -280,7 +295,21 @@ The mooncake-store daemon and the engine-side `mooncake.store` import **must** r
 
 ## 5. Recommendation (one-line)
 
-> **Bump to `mooncake-transfer-engine-cuda13==0.3.13.post1`** (image tag `mooncake-store:v0.3.13.post1-1`) across all 6 vLLM-PD-path call sites listed in §4 — but for the P2P router pivot, consider using the **latest HEAD** (`v0.3.14-rc1`) instead, because it contains the TENT/RDMA corner-case fixes ([#4515](https://github.com/kvcache-ai/Mooncake/pull/4515), [#4542](https://github.com/kvcache-ai/Mooncake/pull/4542), [#4333](https://github.com/kvcache-ai/Mooncake/pull/4333)) needed for the `MooncakeConnector` path. Either way, set `WITH_NVIDIA_PEERMEM=0` in the mooncake-store daemon's environment (and/or the engine's `kv_connector_extra_config`) — that single env var, not a version bump, is the fix for the `register_buffer Bad address (-600)` boot error on GB10.
+> **Original recommendation (2026-10-11, superseded 2026-11-01):** Bump to
+> `mooncake-transfer-engine-cuda13==0.3.13.post1` (image tag
+> `mooncake-store:v0.3.13.post1-1`) across all 6 vLLM-PD-path call sites
+> listed in §4 — but for the P2P router pivot, consider using the **latest
+> HEAD** (`v0.3.14-rc1`) instead, because it contains the TENT/RDMA
+> corner-case fixes ([#4515](https://github.com/kvcache-ai/Mooncake/pull/4515), [#4542](https://github.com/kvcache-ai/Mooncake/pull/4542), [#4333](https://github.com/kvcache-ai/Mooncake/pull/4333)) needed for the
+> `MooncakeConnector` path. Either way, set `WITH_NVIDIA_PEERMEM=0` in the
+> mooncake-store daemon's environment (and/or the engine's
+> `kv_connector_extra_config`) — that single env var, not a version bump, is
+> the fix for the `register_buffer Bad address (-600)` boot error on GB10.
+>
+> **Superseding decision (2026-11-01):** retain `0.3.12.post1` — the bump
+> trips the 0.3.13 RNIC gate on GB10 (see the note in §4). Ship the
+> io_uring-off mitigation (`MOONCAKE_OFFLOAD_USE_URING=false`) instead; it
+> closes the SSD read-corruption exposure without a version change.
 
 ---
 
