@@ -104,7 +104,7 @@ else
     info "libnuma.so.1 already present"
 fi
 : "${MOONCAKE_L2_INSTALL_DEPS:=1}"
-: "${MOONCAKE_L2_MOONCAKE_SPEC:=mooncake-transfer-engine-cuda13==0.3.12.post1}"
+: "${MOONCAKE_L2_MOONCAKE_SPEC:=mooncake-transfer-engine-cuda13==0.3.13.post1}"
 if ! python3 -c 'import mooncake' >/dev/null 2>&1; then
     if [ "${MOONCAKE_L2_INSTALL_DEPS}" = "1" ]; then
         info "mooncake module missing; installing '${MOONCAKE_L2_MOONCAKE_SPEC}'"
