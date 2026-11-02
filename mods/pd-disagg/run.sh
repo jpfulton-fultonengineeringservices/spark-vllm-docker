@@ -80,9 +80,8 @@ if [ "${PD_KV_BACKEND:-mooncake}" = "mooncake" ]; then
 # the peermem probe EFAULTs (infra/cluster-config
 # model-opts/mooncake/gpup2p-dead-end.txt). Bumping to 0.3.13.post1
 # (for the SSD io_uring read-path corruption fix #3066/#3073) requires
-# proving daemon+engine RNIC init survives on one node first; the
-# corruption is instead mitigated by MOONCAKE_OFFLOAD_USE_URING=false in
-# the daemon env (cluster-config compose.yaml + service templates).
+# proving daemon+engine RNIC init survives on one node first. The separate
+# standalone-store daemon cohort uses v0.3.13.post1 with uring enabled.
 : "${PD_MOONCAKE_SPEC:=mooncake-transfer-engine-cuda13==0.3.12.post1}"
 if ! python3 -c 'import mooncake' >/dev/null 2>&1; then
     if [ "${PD_DISAGG_INSTALL_MOONCAKE:-1}" = "1" ]; then
