@@ -1,9 +1,20 @@
-# Qwen3.8-27B-Coder390-DFlash2: reasoning-channel degeneration under greedy decoding
+# Qwen3.8-27B-Coder390-DFlash2: empty content from reasoning-budget starvation
 
-Status: **mitigated** in `recipes/qwen3.8-27b-coder390-4x-store-l2.yaml`
-(commit `87c40e8fbd`). Root cause is a sampler/degeneration defect in the
-target model, **not** KV-cache corruption. Pending live confirmation on the
-redeployed serve.
+Status: **partially root-caused; the reported loop itself is still
+unreproduced.** Two distinct things were conflated during this investigation
+and must be kept separate:
+
+1. **Empty `content` at `finish_reason: length`** — fully explained and
+   reproduced. It is reasoning-budget starvation: the thinking phase consumes
+   the whole `max_tokens` budget, so no answer is emitted. Fix: a larger
+   output budget (or thinking off). See §2.
+2. **The verbatim `ductductduct` repetition** — **not reproduced** in any
+   probe (single, 8-concurrent, prefix-cache-hit, streaming, long-context,
+   with and without a repetition penalty). It remains an open observation.
+   See §2.2.
+
+The `repetition_penalty` floor added in commit `87c40e8fbd` was **reverted**
+(commit `088c5a9b47`): it has a real quality cost and no demonstrated benefit.
 
 Applies to image `vllm-node-b12x` as pinned by the recipe
 (`sha256:e9f6e32941ec5680a58edfbfefaad6997f0527e22344b5b505cf8267de4625f2`),
@@ -15,8 +26,7 @@ Applies to image `vllm-node-b12x` as pinned by the recipe
 Live agent sessions served by `cluster/qwen3.8-27b-coder390` produced
 **transient degenerate output**: a single token repeated verbatim in the
 reasoning channel — reported as a repeating `ductductduct` run. Intermittent,
-not steady-state; correlated with long agent contexts rather than with any
-particular prompt.
+not steady-state; correlated with long agent contexts.
 
 Three observable properties, all confirmed live:
 
@@ -26,150 +36,133 @@ Three observable properties, all confirmed live:
 3. `finish_reason` is `length`, not an error — so nothing looks broken in the
    response envelope, and callers see a truncated or empty answer.
 
-## 2. Root cause
+## 2. Root cause of the empty-content outcome: reasoning-budget starvation
 
-The checkpoint ships a `generation_config.json` with **no repetition penalty**:
+The model is a reasoning model. On a long prompt it needs roughly **400-500
+tokens of thinking** before it emits an answer. When `max_tokens` is at or
+below that requirement, the entire budget is spent inside the thinking block,
+the block never closes, and `content` is empty.
 
-```json
-{
-  "bos_token_id": 248044,
-  "do_sample": true,
-  "eos_token_id": [248046, 248044],
-  "pad_token_id": 248044,
-  "temperature": 1.0,
-  "top_k": 20,
-  "top_p": 0.95,
-  "transformers_version": "5.9.0"
-}
-```
+The decisive experiment — same ~36k-token prompt, same serve, only
+`max_tokens` varied:
 
-`do_sample: true` with `temperature: 1.0` is stochastic and self-correcting.
-But agent and tool-calling clients send **`temperature: 0`** (greedy). Under
-greedy decoding with no repetition penalty, once the model enters a repeated
-token trajectory it cannot leave it: every step re-selects the argmax of a
-distribution the repetition has already flattened. The control is
-`repetition_penalty`, and it was absent.
-
-This is a classic degenerate-repetition mode, not a hardware or transport
-fault. It requires *long* context to manifest: every request under ~60 tokens
-was clean across dozens of trials.
-
-## 3. Empirical validation
-
-All measurements against the live 4x store-l2 serve on `gx10-node1`
-(`http://localhost:8000/v1/chat/completions`), `temperature: 0`,
-`max_tokens: 600-900`, single request, deterministic prompt.
-
-### 3.1 The discriminator (decisive)
-
-Same ~36k-token prompt (a synthetic agent-session log), four variants:
-
-| Variant | `finish` | `content` chars | `reasoning_tokens` |
+| `max_tokens` | `finish` | `content` chars | `reasoning_tokens` |
 |---|---|---|---|
-| baseline (greedy, no penalty) | `length` | **0** | 900 (entire budget) |
-| `repetition_penalty: 1.10` | `length` | **549** | — |
-| `repetition_penalty: 1.15` | `length` | **732** | 418 |
-| `enable_thinking: false` | `length` | **2256** | 0 |
+| 600 | `length` | **0** | 600 (entire budget) |
+| 1500 | `stop` | **2928** | 410 |
+| 3000 | `stop` | **4970** | 401 |
+| 6000 | `stop` | **4408** | 514 |
 
-Two independent levers each break the loop. That is the signature of a
-sampler-level degeneration, not data corruption: a corrupted KV cache would
-not be repaired by a rep-penalty.
+At 600 the model never reaches its answer. At 1500+ it finishes cleanly with
+~400-500 reasoning tokens and thousands of characters of coherent content.
 
-A tighter sweep on the same prompt:
+**The threshold is not fixed.** The reasoning requirement varies run to run on
+the *same* prompt: 600, 410, 401, 514 tokens in the sweep above, and later
+378 and 256 on re-runs of the same prompt — where `max_tokens=600` then
+**succeeded** (`content=713`, `finish=stop`). So 600 is not a hard cliff; it
+sits close enough to the typical requirement that it fails intermittently.
+That variance is the mechanism behind the reported transience.
 
-| Setting | `content` chars |
-|---|---|
-| `repetition_penalty: 1.05`, `temp: 0` | 76 |
-| `repetition_penalty: 1.10`, `temp: 0` | 549 |
-| no penalty, `temp: 1.0` (model default) | 566 |
+A budget of 1500+ is a safe margin, not a measured minimum.
 
-1.05 is insufficient; 1.10 restores content. The model's own shipped
-`temperature: 1.0` sampling also avoids the loop — greedy is the trigger.
+This also explains the **transience**: whether a request degenerates depends
+on how much thinking that particular prompt needs versus the budget the caller
+supplied. Short prompts need little thinking and always succeed; long agent
+contexts need more and fall off the cliff.
 
-### 3.2 Negative controls (short prompts)
+### 2.1 Why budget starvation can *look* like repetition
 
-Ruled out as *insufficient to reproduce*, which is why smoke tests miss this:
+Once the budget is exhausted mid-thought, the tail of the reasoning stream is
+whatever the model was doing when it ran out. In a long repetitive context (an
+agent session log full of near-identical tool entries) that tail can be a
+repeated token. This is a **plausible** mechanism for the reported
+`ductductduct` run, but it is **not confirmed** — see §2.2.
+
+### 2.2 The `ductductduct` loop is still unreproduced
+
+Every probe in this investigation failed to reproduce a verbatim token loop:
 
 | Probe | Result |
 |---|---|
-| single ~60-token prompt | clean, no repeats |
-| 8 concurrent distinct-prefix requests | all clean, `finish=stop` or `length`, no repeats |
+| single ~60-token prompt | clean |
+| 8 concurrent distinct-prefix requests | clean |
 | 4 identical prompts (prefix-cache hit path) | clean |
 | streaming path | clean |
+| ~36k-token prompt, `max_tokens` 600-6000 | clean (empty content at 600, coherent at 1500+) |
+| same, with `repetition_penalty` 1.0 / 1.10 / 1.15 | clean |
 
-### 3.3 What was ruled out, with evidence
+The character-level periodic-run detector (see §5) found no repeated
+substring in any response. So the loop is either (a) a rarer condition than
+the probes reached, (b) specific to a prompt shape not exercised here, or
+(c) an artifact of how the reporting session rendered truncated reasoning.
 
-The investigation initially pursued Mooncake store corruption. That hypothesis
-is **disproven**:
+**Do not treat budget starvation as a confirmed explanation of the loop.**
+It explains the empty-content symptom, which is real and reproducible; the
+loop needs its own reproduction before it can be called root-caused.
 
-| Claim | Measurement | Verdict |
+## 3. What was ruled out, with evidence
+
+The investigation initially pursued Mooncake store corruption, then a
+sampling-penalty fix. Both are **disproven**:
+
+| Hypothesis | Measurement | Verdict |
 |---|---|---|
 | Store read failures | `load_get_failed_keys=0`, `load_get_error_count=0` | no failures |
-| External cache hits correlate with failure | External prefix cache hit rate flat **23.1%** across the entire failure window | no correlation |
+| External cache hits correlate with failure | External prefix cache hit rate flat **23.1%** across the failure window | no correlation |
 | Stale pre-boot KV being served | 500 pre-boot buckets, `atime == mtime == 06:03` — never read since written | disproven |
 | Cross-node bucket collision | per-node dirs distinct: `gx10-cb11`, `gx10-f1d8`, `gx10-becc`, `gx10-9273` | isolated correctly |
-| Spec-decode collapse as the trigger | MAL 1.00 / 0.000 per-position windows occur **after** logits degrade | consequence, not cause |
+| Spec-decode collapse as the trigger | MAL 2.6-3.3, acceptance 22-32% on the *successful* long runs | healthy; no collapse |
+| `mamba-spec-relocate-guard` free-vs-move | guard patch applied (6 MARK lines); no correlation with the failure | not implicated |
+| Repetition penalty is the fix | warm-prefix sweep: floor 1.10 gave 225 then 0 chars on identical config | **not reliable** |
 
-The spec-decode acceptance collapse to `0.000` is downstream: once the target
-model's distribution is degenerate, every draft token is rejected. Treating it
-as the cause sends you into the connector and the
-`mamba-spec-relocate-guard` mod, both innocent here.
+### 3.1 The repetition-penalty false positive
+
+An early A/B appeared to show `repetition_penalty: 1.10` fixing the problem
+(0 → 549 chars). That was **confounded by prefix-cache warmth**: the first run
+was cold (341 s) and the second warm (25 s). Re-running with the prefix warmed
+first, varying only the penalty:
+
+| Run | Penalty | `content` chars |
+|---|---|---|
+| A | floor 1.10 | 225 |
+| B | explicit 1.0 | 0 |
+| C | explicit 1.10 | 0 |
+| D | floor 1.10 (same as A) | 0 |
+
+Identical configuration produced 225 then 0. The penalty is not the
+discriminator; the budget is. **Lesson: warm the prefix before A/B-ing
+sampling parameters, or the cache state dominates the result.**
 
 ## 4. The fix
 
-Engine-side sampling floor, set once in the recipe rather than per-caller:
+Raise the output budget for agent traffic. The reasoning requirement is
+~400-500 tokens, so any budget comfortably above that (1500+) lets the model
+finish. Two options:
 
-```yaml
-defaults:
-  # ...
-  repetition_penalty: "1.10"
-```
+1. **Caller-side (preferred):** set `max_tokens >= 1500` on agent requests.
+   This is a client contract, not a server change, and it preserves the
+   reasoning channel.
+2. **Server-side:** disable thinking for workloads that do not consume
+   reasoning:
 
-```yaml
-command: |
-  b12x-kcache exec vllm serve local-inference-lab/Qwen3.8-27B-Coder390-DFlash2 \
-    # ...
-    --override-generation-config '{"repetition_penalty":1.10}' \
-```
+   ```yaml
+   --default-chat-template-kwargs '{"enable_thinking": false}'
+   ```
 
-`repetition_penalty` is declared as the **string** `"1.10"` because
-`run-recipe.py` renders the command with `str.format`; a YAML float `1.1`
-would render as bare `1.1`, losing the readable precision. Both produce a
-valid float in the final JSON, but `"1.10"` documents intent. The recipe's
-inner JSON braces are doubled (`{{` / `}}`) so `str.format` leaves them
-literal — the same convention every other JSON argument in this command uses.
+   Verified: `enable_thinking: false` returns content with
+   `reasoning_tokens: 0`, eliminating the failure mode entirely.
 
-### 4.1 Why this reaches requests the caller did not annotate
+### 4.1 The `repetition_penalty` floor was tried and reverted
 
-`--override-generation-config` is **not** per-request. It merges into the
-model's default sampling parameters at startup:
+Commit `87c40e8fbd` added `--override-generation-config
+'{"repetition_penalty":1.10}'` to the recipe. It loaded correctly (startup
+log: `Default vLLM sampling parameters have been overridden ...
+{'repetition_penalty': 1.1, ...}`) but **did not fix the empty-content
+outcome** — a warm-prefix sweep gave 225 then 0 chars on identical config.
 
-```
-vllm/config/model.py
-  ModelConfig.get_diff_sampling_param()
-      config.update(self.override_generation_config)      # :1867
-```
-
-and every chat completion applies that dict:
-
-```
-vllm/entrypoints/openai/chat_completion/serving.py
-  self.default_sampling_params = self.model_config.get_diff_sampling_param()   # :178
-  sampling_params = request.to_sampling_params(max_tokens,
-                                               self.default_sampling_params)   # :365
-```
-
-`repetition_penalty` is in that function's `available_params` allow-list. A
-caller that omits the penalty inherits `1.10`; a caller that sets one still
-wins (request values take precedence). This is a *floor*, not an override.
-
-### 4.2 Why 1.10 and not 1.15
-
-1.15 clears the loop more aggressively (732 vs 549 chars) but measurably
-shortens natural prose — it penalises legitimate token reuse in technical
-writing. 1.10 is the smallest value that clears the loop with content intact
-on the reproducer. Repetition penalty is an *interpretation* below 1.0, so
-1.10 is a mild, bounded correction.
+It was **reverted** in commit `088c5a9b47`. A global 1.10 penalty is a real
+quality cost (it penalises legitimate token reuse in technical prose) with no
+demonstrated benefit here. The budget is the actual lever.
 
 ## 5. Reproduction
 
@@ -177,13 +170,14 @@ Requires the live serve. Run from any node that can reach the engine API.
 
 ```bash
 # On gx10-node1 (or any host that can reach localhost:8000 there).
-cat > /tmp/degeneration_repro.py <<'PYEOF'
+cat > /tmp/budget_repro.py <<'PYEOF'
 import json, time, urllib.request
 
 MODEL = "local-inference-lab/Qwen3.8-27B-Coder390-DFlash2"
 URL = "http://localhost:8000/v1/chat/completions"
 
-# ~36k-token synthetic agent-session log. Short prompts do NOT reproduce.
+# ~36k-token synthetic agent-session log. Short prompts do NOT reproduce:
+# they need little thinking, so they never exhaust the budget.
 filler = "\n".join(
     f"## Entry {i:05d}\nTimestamp: 2026-11-03T09:{i % 60:02d}:00Z\n"
     f"tool result: read /nas-1/models/cfg/{i}.json -> 4096 bytes, keys=[a,b,c,d,e]\n"
@@ -196,38 +190,12 @@ PROMPT = (
 )
 
 
-def periodic(text, min_period=2, max_period=30, min_reps=4):
-    """Find substrings repeated back-to-back, character level.
-
-    Character-level on purpose: 'ductductduct' has no word separator, so a
-    word-boundary scrape sees ONE token, not a repetition. A word-level
-    detector silently reports "no repeats" on exactly this symptom.
-    """
-    hits = []
-    n = len(text)
-    for period in range(min_period, max_period + 1):
-        i = 0
-        while i + period <= n:
-            unit = text[i:i + period]
-            reps, j = 1, i + period
-            while j + period <= n and text[j:j + period] == unit:
-                reps += 1
-                j += period
-            if reps >= min_reps:
-                hits.append((unit, reps))
-                i = j
-            else:
-                i += 1
-    hits.sort(key=lambda h: -h[1])
-    return hits[:5]
-
-
-def ask(repetition_penalty=None, temperature=0.0, max_tokens=600):
+def ask(max_tokens, repetition_penalty=None):
     payload = {
         "model": MODEL,
         "messages": [{"role": "user", "content": PROMPT}],
         "max_tokens": max_tokens,
-        "temperature": temperature,
+        "temperature": 0,
     }
     if repetition_penalty is not None:
         payload["repetition_penalty"] = repetition_penalty
@@ -237,78 +205,71 @@ def ask(repetition_penalty=None, temperature=0.0, max_tokens=600):
         headers={"Content-Type": "application/json"},
     )
     started = time.time()
-    body = json.loads(urllib.request.urlopen(req, timeout=1800).read().decode())
+    body = json.loads(urllib.request.urlopen(req, timeout=2400).read().decode())
     choice = body["choices"][0]
     msg = choice["message"]
     detail = (body.get("usage") or {}).get("completion_tokens_details") or {}
-    text = (msg.get("content") or "") + (msg.get("reasoning_content") or "")
     return {
+        "max_tokens": max_tokens,
         "finish": choice.get("finish_reason"),
         "content_chars": len(msg.get("content") or ""),
-        "reasoning_chars": len(msg.get("reasoning_content") or ""),
         "reasoning_tokens": detail.get("reasoning_tokens", 0),
-        "periodic_runs": periodic(text),
         "secs": round(time.time() - started, 1),
     }
 
 
 if __name__ == "__main__":
-    print("BEFORE (greedy, no penalty):")
-    print(json.dumps(ask(None), indent=2))
-    print("\nAFTER (repetition_penalty=1.10):")
-    print(json.dumps(ask(1.10), indent=2))
+    # Warm the prefix first: a cold run is 3-5x slower and confounds timing.
+    ask(600)
+    for budget in (600, 1500, 3000):
+        print(json.dumps(ask(budget)))
 PYEOF
-python3 /tmp/degeneration_repro.py
+python3 /tmp/budget_repro.py
 ```
 
-Expected with the defect present: `content_chars: 0`, `reasoning_tokens`
-equal to `max_tokens`, and `periodic_runs` non-empty. Expected with the fix
-live: `content_chars` in the hundreds and `periodic_runs` empty.
+Expected: `max_tokens: 600` → `content_chars: 0`, `finish: length`,
+`reasoning_tokens: 600`. `max_tokens: 1500` and above → `finish: stop`,
+`content_chars` in the thousands, `reasoning_tokens` ~400-500.
 
-### 5.1 Streaming variant (shows the reasoning channel directly)
+### 5.1 Observing the reasoning channel directly
 
 Non-streaming responses can suppress `reasoning_content` while still billing
-`reasoning_tokens`, which is why the loop is easiest to see on the stream. The
-reasoning text lands in `delta.reasoning`:
+`reasoning_tokens`, so the truncated thought is easiest to see on the stream.
+The reasoning text lands in `delta.reasoning`. Use the **long** prompt — a
+short one will not exhaust the budget and will not show the truncation:
 
 ```bash
 curl -sN http://localhost:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"local-inference-lab/Qwen3.8-27B-Coder390-DFlash2",
-       "messages":[{"role":"user","content":"Explain the CAP theorem."}],
-       "max_tokens":400,"temperature":0,"stream":true}' \
-  | grep -o '"reasoning":"[^"]*"' | head -40
+  -d "$(python3 - <<'PY'
+import json
+filler = "\n".join(
+    f"## Entry {i:05d}\ntool result: read /nas-1/models/cfg/{i}.json -> 4096 bytes"
+    for i in range(400)
+)
+print(json.dumps({
+    "model": "local-inference-lab/Qwen3.8-27B-Coder390-DFlash2",
+    "messages": [{"role": "user", "content": "Summarize this log.\n\n" + filler}],
+    "max_tokens": 600, "temperature": 0, "stream": True,
+}))
+PY
+)" | grep -o '"reasoning":"[^"]*"' | tail -20
 ```
 
 ## 6. Code change summary
 
-Single file: `recipes/qwen3.8-27b-coder390-4x-store-l2.yaml`
-(commit `87c40e8fbd`, 27 insertions).
+**No recipe change is retained.** The `repetition_penalty` floor
+(`87c40e8fbd`) was reverted in `088c5a9b47`; the recipe is back to its
+pre-investigation state.
 
-```diff
-@@ defaults:
-   max_cudagraph_capture_size: 256
-   num_speculative_tokens: 7
-   draft_tensor_parallel_size: 4
-+  # ... 21-line rationale comment: the shipped generation_config has no
-+  # repetition penalty; greedy decoding degenerates into an unbounded
-+  # reasoning-channel loop; measurements for 1.10 / 1.15 / thinking-off.
-+  repetition_penalty: "1.10"
+Validation performed on the reverted tree:
 
-@@ command: |
-     --speculative-config '{"method":"dflash",...}' \
-+    --override-generation-config '{"repetition_penalty":1.10}' \
-     --kv-transfer-config '{"kv_connector":"MooncakeStoreConnector",...}' \
-```
-
-Validation performed:
-
-- `yaml.safe_load` parses the recipe; `repetition_penalty` resolves to `1.10`.
-- The rendered flag is valid JSON: `{"repetition_penalty":1.10}` →
-  `json.loads` → `{'repetition_penalty': 1.1}` (float, as vLLM expects).
-- No unresolved `str.format` placeholders; a missing key would raise
-  `KeyError` and abort the launch.
+- `yaml.safe_load` parses the recipe.
+- No `repetition_penalty` / `override-generation-config` remains in the file.
 - `tests/test_recipes.sh`: **68 passed, 0 failed**.
+
+The fix for the empty-content bug is a **caller-side budget** (§4), which is
+not a recipe change.
 
 ## 7. Deployment note
 
@@ -320,25 +281,27 @@ full relaunch is required:
 spark-vllm-docker-serve launch --recreate
 ```
 
-Confirm the flag is live before re-testing:
+Confirm the flag is live:
 
 ```bash
-docker inspect vllm_node --format '{{join .Config.Cmd " "}}' | tr ' ' '\n' \
-  | grep -A1 override-generation-config
+docker exec vllm_node ps aux | grep -o -- '--override-generation-config [^ ]*'
 ```
 
 ## 8. Open items
 
-1. **Live confirmation pending.** The mitigation is validated at the sampler
-   level (A/B on the live engine) but has not yet been observed end to end on
-   a redeployed serve.
-2. **No repetition guard in the harness.** Nothing detects an all-reasoning
-   response (`reasoning_tokens == max_tokens` with empty `content`). A cheap
-   tripwire in the gateway or eval harness would catch future regressions
-   before operators notice degraded agent output.
-3. **Callers that pin `repetition_penalty: 1.0`** explicitly will override the
-   floor and can still degenerate. Nothing enforces the minimum.
-4. **Thinking-off is the stronger mitigation** (2256 chars vs 549) at the cost
-   of the reasoning channel. If agent workloads do not consume reasoning,
-   `--default-chat-template-kwargs '{"enable_thinking":false}'` is worth
-   evaluating as a follow-up.
+1. **Caller budgets are the real fix and are not yet enforced.** Nothing
+   guarantees agent clients request `max_tokens >= 1500`. A gateway-side floor
+   (or a warning when `max_tokens` is below the observed reasoning
+   requirement) would prevent recurrence.
+2. **No tripwire for the failure shape.** Nothing detects
+   `reasoning_tokens == max_tokens` with empty `content`. A cheap check in the
+   gateway or eval harness would surface this before operators notice degraded
+   agent output.
+3. **Reasoning requirement is prompt-dependent.** ~400-500 tokens was measured
+   on one 36k-token prompt. Longer or more complex contexts may need more; the
+   safe floor should be measured across the real agent workload, not assumed.
+4. **The `ductductduct` loop is unreproduced.** Budget starvation explains the
+   empty-content symptom but has not been shown to produce a verbatim token
+   loop. Reproducing it needs a prompt shape not yet exercised — capture the
+   exact failing request (prompt, `max_tokens`, sampling params, route) from a
+   live occurrence before theorising further.
