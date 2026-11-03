@@ -84,6 +84,7 @@ RELATED FILES:
 """
 
 import argparse
+import hashlib
 import os
 import re
 import subprocess
@@ -162,6 +163,69 @@ def strip_distributed_executor_backend(command: str) -> str:
     lines = command.split("\n")
     filtered_lines = [line for line in lines if line.strip() not in ("", "\\")]
     return "\n".join(filtered_lines)
+
+
+def derive_cache_lineage_prefix(recipe: dict[str, Any]) -> str:
+    """Derive a stable KV-cache namespace prefix from the recipe's identity.
+
+    Mooncake store keys are ``{cache_prefix}@{model}@tp_rank:N@...@{token_hash}``.
+    The token hash covers tokens only — it does NOT encode quantization,
+    rope/YaRN scaling, kv-cache dtype, block size, or the image the KV was
+    computed under. Two deployments with different numerics but the same model
+    name would therefore alias onto each other's buckets, and a prefix-cache
+    hit would hand the engine KV computed under a different config lineage.
+    That produces coherent-then-degenerate output: silent KV corruption.
+
+    The fix is a namespace prefix derived from everything that determines KV
+    numerics:
+
+    - ``model`` (checkpoint identity — a re-quantized checkpoint changes KV)
+    - ``container`` (image identity — vLLM version / kernels change numerics)
+    - ``image_id`` (exact image content pin, when present)
+    - the sampling/KV-relevant slice of ``defaults`` (kv-cache dtype, block
+      size, quantization, rope overrides, max_model_len, speculative config)
+    - the full ``command`` (any flag that touches numerics is caught here,
+      including the kv-transfer config itself)
+
+    Deliberately EXCLUDED (rank/topology-varying, must not enter the prefix
+    because all ranks share one namespace):
+
+    - ``tensor_parallel`` / ``draft_tensor_parallel_size`` (the key already
+      encodes tp_rank per shard)
+    - ``gpu_memory_utilization`` / ``max_num_seqs`` / ``max_num_batched_tokens``
+      / ``max_cudagraph_capture_size`` (scheduling knobs; they change how much
+      KV is stored, not the values stored)
+
+    Usage: recipes reference ``{cache_lineage_prefix}`` in the kv-transfer
+    config's ``cache_prefix`` field. Empty/absent ``image_id`` is fine — the
+    digest degrades gracefully to model+container+config.
+    """
+    parts: list[str] = [
+        str(recipe.get("model", "")),
+        str(recipe.get("container", "")),
+        str(recipe.get("image_id", "")),
+    ]
+
+    # Sampling/KV-relevant defaults: these change what the stored KV VALUES
+    # mean. Sorted for a stable digest.
+    kv_defaults = (
+        "kv_cache_dtype",
+        "block_size",
+        "quantization",
+        "max_model_len",
+        "num_speculative_tokens",
+    )
+    defaults = recipe.get("defaults", {}) or {}
+    parts.extend(f"{k}={defaults[k]}" for k in sorted(kv_defaults) if k in defaults)
+
+    # The command is the catch-all: any flag that alters numerics — rope
+    # overrides, attention backends, speculative method — shows up here even
+    # if it is not in the curated list above. Include it so a future recipe
+    # edit that changes numerics can never be forgotten.
+    parts.append(str(recipe.get("command", "")))
+
+    digest = hashlib.sha256("\n".join(parts).encode()).hexdigest()[:12]
+    return f"{recipe.get('name', 'recipe').split(' ')[0].lower()}-{digest}"
 
 
 def ensure_ray_backend(command: str) -> str:
@@ -615,6 +679,10 @@ def generate_launch_script(
     """
     # Merge defaults with overrides
     params = {**recipe.get("defaults", {}), **overrides}
+
+    # Derived, not hand-maintained: a namespace that changes whenever anything
+    # affecting KV numerics changes. See derive_cache_lineage_prefix.
+    params.setdefault("cache_lineage_prefix", derive_cache_lineage_prefix(recipe))
 
     # Build the script
     lines = ["#!/bin/bash", f"# Generated from recipe: {recipe['name']}", ""]

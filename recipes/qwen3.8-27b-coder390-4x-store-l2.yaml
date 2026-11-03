@@ -224,6 +224,28 @@ env:
 # cannot make the model attend to KV that does not match its context. Do not
 # cite -200 as the cause of degenerate output.
 
+# cache_prefix = {cache_lineage_prefix} (derived by run-recipe.py, 2026-11-03).
+#
+# Mooncake keys are `{cache_prefix}@{model}@tp_rank:N@pcp0@dcp0@pp_rank:0@
+# @group:G@{token_hash}`. The token hash covers TOKENS ONLY — it encodes no
+# quantization, rope/YaRN factor, kv-cache dtype, block size, or image
+# version. With an empty prefix, a bucket written by an earlier deployment
+# (different numerics, same model name) is indistinguishable from a current
+# one: the lookup hits, load_get succeeds, and the engine attends to KV
+# computed under a different config lineage. That is silent KV corruption and
+# presents as coherent output that degrades into a repetition loop.
+#
+# The prefix is a sha256 over model + container + image_id + the KV-relevant
+# defaults + the full command, so it changes automatically whenever anything
+# that determines KV numerics changes. Rank/topology knobs (tensor_parallel,
+# gpu_memory_utilization, max_num_seqs) are deliberately excluded: all ranks
+# share one namespace and the key already carries tp_rank per shard.
+#
+# Consequence: a config change orphans the previous lineage's buckets rather
+# than aliasing onto them. Old buckets are unreachable, not corrupting; they
+# age out via the bucket LRU. Wiping the offload dir is safe but no longer
+# required for correctness.
+
 # The draft's FP8 quantization is auto-detected from its own config.json's
 # quantization_config.quant_method ("fp8"); no --quantization flag is needed
 # or wanted (SpeculativeConfig.quantization stays None, and the fp8 path
@@ -267,7 +289,7 @@ command: |
     --max-num-batched-tokens {max_num_batched_tokens} \
     --max-cudagraph-capture-size {max_cudagraph_capture_size} \
     --speculative-config '{{"method":"dflash","model":"/workspace/Qwen3.8-27B-Coder390-dflash","num_speculative_tokens":{num_speculative_tokens},"draft_tensor_parallel_size":{draft_tensor_parallel_size}}}' \
-    --kv-transfer-config '{{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both","kv_load_failure_policy":"recompute","kv_connector_extra_config":{{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":1024,"enable_lookup":true}}}}' \
+    --kv-transfer-config '{{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both","kv_load_failure_policy":"recompute","kv_connector_extra_config":{{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":1024,"enable_lookup":true,"cache_prefix":"{cache_lineage_prefix}"}}}}' \
     --gdn-prefill-backend cutedsl \
     --linear-backend b12x \
     --mm-encoder-tp-mode data \
