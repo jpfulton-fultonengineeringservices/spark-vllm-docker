@@ -133,7 +133,21 @@ defaults:
   # permits the override. The store-L2's durability is for LONG prefixes, so
   # the window converges with the base's 1048576.
   max_model_len: 1048576
-  max_num_seqs: 8
+  # 6, not 8 (2026-11-03): at 8 concurrent sequences with DISTINCT prefixes
+  # the master rejected batch_put with NO_AVAILABLE_HANDLE (-200) for
+  # 412/412 keys (batch_bytes=1.47 GiB). The root cause is the MASTER's
+  # segment allocation, not this recipe's buffer sizes: with 4 segments at
+  # 85-87% used and "random" allocation, a large batch can land on a segment
+  # without enough free space even when a sibling has room (the same second
+  # the master logged "insufficient space" for 412 keys). Distinct prefixes
+  # defeat prefix-cache dedup, which is what drives concurrent batch volume
+  # up to the pool limit in the first place. 6 sequences plus the master-side
+  # fixes (--allocation_strategy=free_ratio_first, --eviction_ratio=0.10 in
+  # infra/cluster-config/docker/mooncake-store/compose.yaml) are the fix;
+  # the local buffer stays 4 GiB (cluster.env MOONCAKE_LOCAL_BUFFER_GIB).
+  # Note -200 is the master's segment rejection; staging-slot exhaustion
+  # returns -1 (worker.py:1002).
+  max_num_seqs: 6
   max_num_batched_tokens: 2048
   # Same cudagraph tightening as the base recipe (45df67ae2b).
   max_cudagraph_capture_size: 256
