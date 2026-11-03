@@ -299,4 +299,5 @@ command: |
     --enable-mfu-metrics \
     --kv-cache-metrics \
     --kv-cache-metrics-sample 1.0 \
-    --gpu-memory-utilization {gpu_memory_utilization}
+    --gpu-memory-utilization {gpu_memory_utilization} \
+    --override-generation-config '{{"presence_penalty":0.0}}'
