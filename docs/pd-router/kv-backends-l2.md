@@ -291,7 +291,7 @@ engine stays with launch-cluster.sh" (`compose.yaml:1-7`).
 
 | Service | Profile | Where | Command | Ports/devices |
 |---|---|---|---|---|
-| `mooncake-master` | `rank0` | rank-0 node only | `mooncake_master --port 50051 --enable_offload=true --promotion_on_hit=true --promotion_admission_threshold=0` (`compose.yaml:49-55`) | TCP :50051, `network_mode: host`, no GPUs/uverbs (`:44-47`; healthcheck TCP on 50051 `:56-61`) |
+| `mooncake-master` | `rank0` | rank-0 node only | `mooncake_master --port 50051 --enable_offload=true --promotion_on_hit=true --promotion_admission_threshold=0 --allocation_strategy=free_ratio_first --eviction_ratio=0.10` (`compose.yaml:49-59`; the last two added 2026-11-03 after the -200 segment-allocation incident — see `infra/cluster-config/env.d/45-mooncake-sglang.env` comments) | TCP :50051, `network_mode: host`, no GPUs/uverbs (`:44-47`; healthcheck TCP on 50051 `:56-61`) |
 | `mooncake-client` | `client` | every node | `mooncake_client --global_segment_size ${MOONCAKE_SEGMENT_SIZE_GIB:-24}GB --master_server_address <rank0>:50051 --metadata_server P2PHANDSHAKE --protocol rdma --device_names roceP2p1s0f1 --host <host-ip>:50053 --enable_offload=true` (`compose.yaml:102-116`) | host net; `/dev/infiniband/uverbs1,uverbs3,rdma_cm`; `ulimits.memlock=-1`; NVMe bind-mount `/nvme/mooncake_offload:/mooncake-offload` (`:79-86`); env `MOONCAKE_OFFLOAD_FILE_STORAGE_PATH=/mooncake-offload`, `…_STORAGE_BACKEND_DESCRIPTOR=bucket_storage_backend`, `…_BUCKET_EVICTION_POLICY=lru`, `…_BUCKET_MAX_PHYSICAL_BYTES=${MOONCAKE_OFFLOAD_BUCKET_MAX_PHYSICAL_BYTES:?computed from MOONCAKE_OFFLOAD_MAX_GIB}`, `…_LOCAL_BUFFER_SIZE_BYTES=${MOONCAKE_OFFLOAD_LOCAL_BUFFER_SIZE_BYTES:-4294967296}` — 4 GiB, "one value across the template, this compose file and the docs" (`:87-95`) |
 
 Profile gating is the lmcache-mode contract: "EVERY node in the default 'mooncake' KV
@@ -490,7 +490,8 @@ drop-ins) [for] one placement instance. Idempotent" (`scripts/setup-mooncake-pd.
   (`setup-mooncake-pd.sh:334-357`).
 - Units: `mooncake-master.service` — `docker run --rm --name mooncake-master --network host
   mooncake_master --port ${MOONCAKE_MASTER_PORT} --enable_offload=true
-  --promotion_on_hit=true --promotion_admission_threshold=0`, `Restart=on-failure`,
+  --promotion_on_hit=true --promotion_admission_threshold=0
+  --allocation_strategy=free_ratio_first --eviction_ratio=0.10`, `Restart=on-failure`,
   `MemoryMax=${MOONCAKE_MASTER_OOM_MAX_GIB}G`, "metadata-only TCP (no RDMA)"
   (`templates/mooncake-master.service.tmpl:29-47`). `mooncake-client.service` —
   `docker run --rm --name mooncake-client --network host --device uverbs1/uverbs3/rdma_cm
