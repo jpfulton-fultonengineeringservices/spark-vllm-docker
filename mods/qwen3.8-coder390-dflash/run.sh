@@ -177,5 +177,84 @@ with open(dst, "w") as fh:
 print(f"[qwen3.8-coder390-dflash] ignored layers: {len(original)} -> {len(rebuilt)}")
 PY
 
+# --- Force publisher sampling envelope at the sampling-param layer ---
+# This checkpoint ships generation_config.json with do_sample=true,
+# temperature=1.0, top_p=0.95, top_k=20 and NO repetition penalty.
+# Agent/tool-calling clients send temperature=0 (greedy), which is out of the
+# validated envelope and triggers the "fails to stop" reasoning degeneracy
+# documented in docs/qwen38-coder390-degenerate-repetition.md.
+#
+# Force the publisher's envelope at the sampling-param layer
+# (to_sampling_params) so it applies to ALL callers - LiteLLM, direct :8000,
+# internal tool calls - always, regardless of client inputs. The sampling-param
+# layer is the single point where client request fields meet server defaults
+# before the Sampler sees them; clamping at the business/tool-call layer is
+# partial and leaves other entry paths unprotected.
+#
+# Idempotent: re-running on an already-patched wheel is a no-op (MARK check).
+python3 - <<'PY'
+import importlib.util
+import sys
+
+MARK = "[qwen3.8-coder390-dflash] Force publisher sampling envelope"
+ANCHOR = (
+    "            for name, default in self._DEFAULT_SAMPLING_PARAMS.items()\n"
+    "        }\n"
+    "\n"
+    "        # Merge server-default stop_token_ids"
+)
+INJECT = (
+    "            for name, default in self._DEFAULT_SAMPLING_PARAMS.items()\n"
+    "        }\n"
+    "\n"
+    "        # [qwen3.8-coder390-dflash] Force publisher sampling envelope:\n"
+    "        # temperature=1.0, top_p=0.95, top_k=20 always, regardless of\n"
+    "        # client inputs. The checkpoint ships do_sample=true with no\n"
+    "        # repetition penalty; greedy (temperature=0) from agent/tool-calling\n"
+    "        # clients is outside the validated envelope and triggers the\n"
+    "        # 'fails to stop' reasoning degeneracy\n"
+    "        # (docs/qwen38-coder390-degenerate-repetition.md).\n"
+    '        sampling_params["temperature"] = 1.0\n'
+    '        sampling_params["top_p"] = 0.95\n'
+    '        sampling_params["top_k"] = 20\n'
+    "\n"
+    "        # Merge server-default stop_token_ids"
+)
+
+targets = []
+for modname in (
+    "vllm.entrypoints.openai.chat_completion.protocol",
+    "vllm.entrypoints.openai.completion.protocol",
+):
+    spec = importlib.util.find_spec(modname)
+    if spec is not None and spec.origin is not None:
+        targets.append(spec.origin)
+
+if not targets:
+    print(
+        "[qwen3.8-coder390-dflash] sampling-envelope: cannot locate protocol files",
+        file=sys.stderr,
+    )
+    sys.exit(0)
+
+for path in targets:
+    with open(path) as f:
+        src = f.read()
+    if MARK in src:
+        print(f"[qwen3.8-coder390-dflash] sampling envelope already forced: {path}")
+        continue
+    count = src.count(ANCHOR)
+    if count != 1:
+        print(
+            f"[qwen3.8-coder390-dflash] sampling-envelope: anchor count={count} != 1 in {path}; skipping",
+            file=sys.stderr,
+        )
+        continue
+    src = src.replace(ANCHOR, INJECT, 1)
+    with open(path, "w") as f:
+        f.write(src)
+    print(f"[qwen3.8-coder390-dflash] sampling envelope forced: {path}")
+PY
+
 echo "$PREFIX staged drafter at $DEST (from $SRC)"
 echo "=== OK ==="
