@@ -315,6 +315,14 @@ env:
 # (speculative.py:1086-1089), so the top-level pin keeps MTP depth
 # resolution independent of engine vintage -- and survives the
 # text_config-scoped rope override in the same flag.
+#
+# method "mtp": no model path (the head ships inside the main checkpoint),
+# no draft_tensor_parallel_size (draft runs at target TP), no
+# disable_eagle_block_drop (EAGLE/EAGLE3/MTP REQUIRE the trailing-block drop,
+# per upstream #54163). NOTE: comments must stay OUT of the command body --
+# a comment between line-continuations truncates the rendered exec-script
+# (observed live: "--speculative-config: command not found", engine booted
+# arg-less and died on world-size validation).
 command: |
   # The store connector host-stages KV through pinned slots, and vLLM
   # hard-rejects any KV connector with expandable_segments
@@ -340,9 +348,6 @@ command: |
     --max-num-seqs {max_num_seqs} \
     --max-num-batched-tokens {max_num_batched_tokens} \
     --max-cudagraph-capture-size {max_cudagraph_capture_size} \
-  # method "mtp": no model path (the head ships inside the main checkpoint),
-  # no draft_tensor_parallel_size (draft runs at target TP), no
-  # disable_eagle_block_drop (see the note above command:).
     --speculative-config '{{"method":"mtp","num_speculative_tokens":{num_speculative_tokens}}}' \
     --kv-transfer-config '{{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both","kv_load_failure_policy":"recompute","kv_connector_extra_config":{{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":1024,"enable_lookup":true,"cache_prefix":"{cache_lineage_prefix}"}}}}' \
     --gdn-prefill-backend cutedsl \
