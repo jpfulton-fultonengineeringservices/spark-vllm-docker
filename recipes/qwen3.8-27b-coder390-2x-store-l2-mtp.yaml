@@ -265,7 +265,7 @@ command: |
     --block-size 16 \
     --quantization modelopt_mixed \
     --load-format instanttensor \
-    --hf-overrides '{{"text_config":{{"rope_parameters":{{"mrope_interleaved":true,"mrope_section":[11,11,10],"partial_rotary_factor":0.25,"rope_theta":10000000,"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":262144}}}},"mtp_num_hidden_layers":1,"vocab_size":248320}}' \
+    --hf-overrides '{{"text_config":{{"rope_parameters":{{"mrope_interleaved":true,"mrope_section":[11,11,10],"partial_rotary_factor":0.25,"rope_theta":10000000,"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":262144}}}},"mtp_num_hidden_layers":1}}' \
     --max-model-len {max_model_len} \
     --max-num-seqs {max_num_seqs} \
     --max-num-batched-tokens {max_num_batched_tokens} \

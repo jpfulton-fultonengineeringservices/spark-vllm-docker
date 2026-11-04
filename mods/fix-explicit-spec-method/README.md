@@ -2,49 +2,89 @@
 
 **Last updated:** 2026-11-04
 
-Runtime-only mod that makes an explicitly configured `--speculative-config`
-`method` win over the draft-model-name auto-detect in
-`vllm/config/speculative.py` (`SpeculativeConfig.__post_init__`).
+Runtime-only mod that preserves an explicitly configured
+`--speculative-config method="mtp"` when the draft model name would otherwise
+match the DFlash auto-detection branch.
 
 ## Defect (observed live 2026-11-04)
 
-Serving the Qwen3.8-27B-Coder390 checkpoint with
+Serving Qwen3.8-27B-Coder390 with
 `--speculative-config '{"method":"mtp","num_speculative_tokens":3}'`
-crashed inside `SpeculativeConfig` -> `EAGLEConfig.__init__` with
+crashed in `EAGLEConfig.__init__` with
 `AttributeError: 'Qwen3_5Config' object has no attribute 'vocab_size'`.
 
-Chain: explicit `method="mtp"` with no `model` resolves the draft from the
-target id; the auto-detect gate only skips detection for
-`("eagle", "eagle3", "dflash", "dspark")` -- `mtp` is NOT in that set, so
-detection re-runs and the draft id containing `DFlash2` rewrites the method
-to `dflash`; the dflash path then wraps the draft config in `EAGLEConfig`,
-whose `__init__` reads `self.model.vocab_size` on a `Qwen3_5Config` that
-only declares `text_config.vocab_size`. Explicit `method="mtp"` never
-reached the MTP path at all.
-
-This matches upstream vLLM's documented contract for the `method` parameter:
-"A configured method is never changed based on the draft checkpoint" --
-detection is for UNCONFIGURED methods.
+With no explicit draft model, MTP resolves the draft id from the target id.
+The installed `SpeculativeConfig` auto-detect gate trusted only
+`("eagle", "eagle3", "dflash", "dspark")`. The resulting draft id containing
+`DFlash2` rewrote explicit `mtp` to `dflash`; `EAGLEConfig` then read
+top-level `self.model.vocab_size`, while `Qwen3_5Config` declares only
+`text_config.vocab_size`.
 
 ## Fix
 
-One-line guard: auto-detect runs only when `method is None` (or is one of
-the already-handled explicit methods, which are no-ops there).
+Add only `"mtp"` to the trusted tuple:
 
-## Relation to the vocab_size recipe pin
+```python
+if self.method in ("eagle", "eagle3", "dflash", "dspark", "mtp"):
+    pass
+```
 
-`recipes/qwen3.8-27b-coder390-4x-store-l2-mtp.yaml` also pins
-top-level `"vocab_size":248320` in `--hf-overrides`. That pin is still
-correct and load-bearing: proven in-container, `EAGLEConfig` on this build
-reads `self.model.vocab_size` before any method dispatch, so ANY method
-wrap over a nested `text_config.vocab` config needs it. With this mod
-applied, the MTP recipe stops reaching `EAGLEConfig` entirely -- but the
-pin keeps the dflash sibling robust if it is ever relaunched on a build
-whose eagle.py reads vocab unconditionally.
+The inferred `None` -> `draft_model` default, `MTPModelTypes` inference,
+DeepSeek V4.1 rejection, depth warning, and MTP validation branches are
+unchanged. The earlier `self.method is None or ...` revision was a no-op for
+explicit `mtp`; `run.sh` detects that exact old line and migrates it to the
+fixed tuple. Any other anchor drift is a hard failure. Re-running on the
+fixed tree is a no-op.
 
-## Interaction with other mods
+## Why the vocab_size pin was removed
 
-Unrelated to `mods/fix-eagle-fine-prefix` (scheduler/KV-cache prefix
-granularity for EAGLE/MTP on hybrid models). Both may be applied together;
-that mod remains recommended for MTP serving quality on Qwen3.5 hybrids
-per its README.
+The top-level `vocab_size:248320` in both MTP recipes was not a valid
+workaround. On this image, `compose_draft_hf_overrides` returns
+`SpeculativeConfig.hf_config_override` when target overrides are a dictionary:
+dictionary overrides are target-only and are not applied to the draft config.
+The unused `_apply_mtp_dict_hf_override` is not called by this path. MTP does
+not wrap the draft in `EAGLEConfig`; the observed failure occurred only after
+the method was incorrectly rewritten to `dflash`. The real vocabulary remains
+at `text_config.vocab_size`.
+
+## Verification (image and exact dependency)
+
+Verified in a throwaway CPU configuration-only container, with no GPU worker
+or serve process:
+
+- image tag: `vllm-node-b12x:latest`
+- image ID: `sha256:e9f6e32941ec5680a58edfbfefaad6997f0527e22344b5b505cf8267de4625f2`
+- registry digest:
+  `10.100.170.3:5000/spark-vllm@sha256:7bb070b92ab20cfbcfde07e7eb2e8913a0aaf4544db41701e726f7499e085377`
+- installed vLLM: `0.32.0rc1.dev301+g1ac942555.d20261016`
+- installed file: `/usr/local/lib/python3.12/dist-packages/vllm/config/speculative.py`
+- codekeeper: `gilded-gnosis-vllm`, `dev/karmic-kraken`, revision
+  `41d700e9-6b9a-4bce-ae22-db30d741576b`, commit
+  `8244d1c44348ae8a5bbfc9f1b607021652283ed4`.
+
+The live model mount and the same Hugging Face, vLLM, FlashInfer, B12X,
+Triton, B12X-kcache, and TileLang cache mounts as the live container were
+used. `run.sh` was applied, its import/AST checks passed, and a second apply
+reported `Patch is already applied; skipping.` Observed `SpeculativeConfig`
+outputs:
+
+```text
+EXPLICIT_NEUTRAL mtp 3 qwen3_5_mtp ['Qwen3_5MTP']
+EXPLICIT_DFLASH2 mtp 3 qwen3_5_mtp ['Qwen3_5MTP'] top_vocab False text_vocab 248320
+INFERRED None mtp 3 qwen3_5_mtp ['Qwen3_5MTP']
+INFERRED 'draft_model' mtp 3 qwen3_5_mtp ['Qwen3_5MTP']
+IMPORT_OK
+```
+
+The explicit DFlash2 case used a local path ending in
+`local-inference-lab/Qwen3.8-27B-Coder390-DFlash2`, with the live checkpoint
+config but no weight loading. Both inferred cases used `/tmp/NeutralDraft`,
+avoiding the unrelated DFlash2 name inference. All cases used
+`num_speculative_tokens=3` and the target's `mtp_num_hidden_layers=1`
+override.
+
+The checked-in `git apply` patch also applied in the installed
+`dist-packages` root, passed `PATCH_AST_IMPORT_OK` and `PATCH_IMPORT_OK`, and
+reverse-applied. A subsequent migration test from the exact old `None`-guard
+line reported `Migrating ineffective 2026-11-04 None-guard revision.` and
+then passed the same idempotency check.
