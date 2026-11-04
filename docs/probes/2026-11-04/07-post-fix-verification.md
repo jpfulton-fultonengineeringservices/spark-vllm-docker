@@ -70,6 +70,12 @@ math runs 4-7 finish=stop reason_chars 256-375 content_chars 141-221 onset=None 
 **8/8 clean** under the exact production trigger geometry — mixed prompts
 sharing long prefixes, concurrent admission, streaming.
 
+Note on replay runs 2–3 (`content_chars=0`, `finish=stop`): that is the
+previously documented **budget-starvation** shape (the model closes thinking
+at the cap and emits no visible content), *not* the loop defect — no cycle
+was present in the reasoning channel, and generation stopped naturally.
+Readers should not misread an empty content field as residual defect.
+
 ### (b) Gateway 4-way storm
 
 Via dell LiteLLM `cluster/qwen3.8-27b-coder390` (the OMP production route),
