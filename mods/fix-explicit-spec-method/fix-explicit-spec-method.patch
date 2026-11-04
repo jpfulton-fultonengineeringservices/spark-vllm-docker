@@ -1,0 +1,13 @@
+diff --git a/vllm/config/speculative.py b/vllm/config/speculative.py
+index 20fbb4e..c988b8e 100644
+--- a/vllm/config/speculative.py
++++ b/vllm/config/speculative.py
+@@ -1354,7 +1354,7 @@ class SpeculativeConfig:
+                 )
+ 
+                 # Automatically detect the method
+-                if self.method in ("eagle", "eagle3", "dflash", "dspark"):
++                if self.method is None or self.method in ("eagle", "eagle3", "dflash", "dspark"):
+                     pass
+                 # examples:
+                 # yuhuili/EAGLE-LLaMA3-Instruct-8B
