@@ -111,8 +111,10 @@ def test_render_emits_series_and_degrades() -> None:
     body = collector.render()
     assert "mooncake_offload_scrape_ok 0" in body
     assert 'mooncake_offload_dir_bytes{tier="staging"} 0' in body
-    assert 'mooncake_offload_mount_total_bytes{mount="/nas-1"}' in body
-    assert 'mooncake_offload_mount_free_bytes{mount="/nas-1"}' in body
+    # Capacity gauges/statvfs only render on a host with real /nas-1; the
+    # deterministic fixture signals are the mount-derived wire counters.
+    assert "# HELP mooncake_offload_mount_total_bytes" in body
+    assert "# HELP mooncake_offload_mount_free_bytes" in body
     assert 'mooncake_offload_nfs_read_bytes_total{mount="/nas-1",server=' in body
     assert 'mooncake_offload_nfs_write_bytes_total{mount="/nas-1",server=' in body
 
@@ -136,6 +138,9 @@ def test_two_root_tiers_keep_primary_unambiguous() -> None:
         (staging / "bucket-a" / "x.bin").write_bytes(b"q" * 100)
         (drain / "old").mkdir(parents=True)
         (drain / "old" / "y.bin").write_bytes(b"z" * 50)
+
+        # Scenario 1: neither root is NFS-backed -> no mount gauges/counters
+        # at all (statvfs of the node fs must never leak into these panels).
         collector = OffloadCollector(
             str(staging),
             extra_roots=[str(drain)],
@@ -154,14 +159,32 @@ def test_two_root_tiers_keep_primary_unambiguous() -> None:
         # Staging cap gauge present with the compose-contract value.
         assert "mooncake_offload_staging_max_bytes" in body
         assert "274877906944" in body
-        # Drain root resolves the /nas-1 NFS mount: wire counters always
-        # present from the fixture; capacity gauges depend on the host having
-        # a real /nas-1, so only assert the families' presence shape.
+        assert "mooncake_offload_mount_total_bytes" not in body
+        assert "mooncake_offload_mount_free_bytes" not in body
+        assert "mooncake_offload_nfs_read_bytes_total" not in body
+        assert "mooncake_offload_nfs_write_bytes_total" not in body
+        assert "mooncake_offload_scrape_ok 1" in body
+
+        # Scenario 2: production shape -- drain root under /nas-1 resolves the
+        # fixture's /nas-1 NFS mount, so the drain root (not the staging
+        # parent) drives the mount gauges' HELP lines and the NFS wire
+        # counters. The staging parent contributes nothing NFS-shaped. The
+        # drain walk degrades to zeroed gauges where /nas-1 is absent (dev
+        # hosts); wire counters come from mountstats either way.
+        collector = OffloadCollector(
+            str(staging),
+            extra_roots=["/nas-1/mooncake-store"],
+            read_mountstats=_read_fixture,
+            staging_max_bytes=274_877_906_944,
+        )
+        collector.refresh()
+        body = collector.render()
         assert "# HELP mooncake_offload_mount_total_bytes" in body
         assert "# HELP mooncake_offload_mount_free_bytes" in body
         assert 'mooncake_offload_nfs_read_bytes_total{mount="/nas-1",server=' in body
         assert 'mooncake_offload_nfs_write_bytes_total{mount="/nas-1",server=' in body
-        assert "mooncake_offload_scrape_ok 1" in body
+        # Primary family STILL only the staging sample.
+        assert body.count("mooncake_offload_dir_bytes{") == 1
 
 
 def test_http_endpoint_serves_metrics() -> None:
@@ -186,7 +209,7 @@ def test_http_endpoint_serves_metrics() -> None:
                 f"http://127.0.0.1:{server.server_address[1]}/metrics", timeout=5
             ) as resp:
                 body = resp.read().decode()
-            assert "mooncake_offload_mount_free_bytes" in body
+            assert 'mooncake_offload_dir_bytes{tier="staging"}' in body
         finally:
             server.shutdown()
             server.server_close()
