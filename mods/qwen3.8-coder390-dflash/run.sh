@@ -230,13 +230,18 @@ INJECT = (
     "        # reasoning, 25% reserved for output; a default budget of 32768\n"
     "        # applies when the caller sends no generation cap. Never below\n"
     "        # max_gen - 256 so output always retains at least 256 tokens.\n"
-    '        _gen_budget = sampling_params.get("max_tokens")\n'
-    '        if _gen_budget is None:\n'
-    '            sampling_params["thinking_token_budget"] = 32768\n'
+    "        # NOTE: assigned on `self`, NOT into sampling_params -- the return\n"
+    "        # statement passes thinking_token_budget=self.thinking_token_budget\n"
+    "        # explicitly, so a dict entry would raise 'multiple values for\n"
+    "        # keyword argument'. `max_tokens` is the method parameter (the\n"
+    "        # effective generation budget), not a sampling_params key.\n"
+    "        _gen_budget = max_tokens\n"
+    "        if _gen_budget is None:\n"
+    "            self.thinking_token_budget = 32768\n"
     "        elif _gen_budget <= 340:\n"
-    '            sampling_params["thinking_token_budget"] = 0\n'
+    "            self.thinking_token_budget = 0\n"
     "        else:\n"
-    '            sampling_params["thinking_token_budget"] = min(32768, max(int(_gen_budget) * 75 // 100, int(_gen_budget) - 256))\n'
+    "            self.thinking_token_budget = min(32768, max(int(_gen_budget) * 75 // 100, int(_gen_budget) - 256))\n"
     "\n"
     "        # Merge server-default stop_token_ids"
 )
