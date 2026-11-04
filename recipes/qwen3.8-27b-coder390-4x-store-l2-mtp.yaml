@@ -191,7 +191,8 @@ defaults:
   # Note -200 is the master's segment rejection; staging-slot exhaustion
   # returns -1 (worker.py:1002).
   max_num_seqs: 8
-  max_num_batched_tokens: 4096
+  # 2048 - 4096 - 8192 - 16384 - 32768 - 65536 - 131072 - 262144 - 524288 - 1048576
+  max_num_batched_tokens: 16384
   # Same cudagraph tightening as the base recipe (45df67ae2b).
   max_cudagraph_capture_size: 256
   # 3 per the model card's vLLM MTP prescription. Depth is a throughput/
