@@ -157,7 +157,7 @@ defaults:
   # Note -200 is the master's segment rejection; staging-slot exhaustion
   # returns -1 (worker.py:1002).
   max_num_seqs: 8
-  max_num_batched_tokens: 2048
+  max_num_batched_tokens: 4096
   # Same cudagraph tightening as the base recipe (45df67ae2b).
   max_cudagraph_capture_size: 256
   num_speculative_tokens: 7
