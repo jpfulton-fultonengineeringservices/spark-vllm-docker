@@ -2,12 +2,20 @@
 
 Serves Prometheus text exposition on :9004 with:
 
-- ``mooncake_offload_dir_bytes`` / ``mooncake_offload_dir_files``: apparent size and
-  file count of EACH offload tree passed via a repeatable ``--root`` flag, labeled
-  with ``tier="staging"|"drain"`` (first root = staging = the PRIMARY series the
-  dashboard cards chart; remaining roots emit separate labeled series).
+- ``mooncake_offload_dir_bytes`` / ``mooncake_offload_dir_files``: apparent size
+  and file count of the PRIMARY offload tree (first ``--root``, tier="staging")
+  -- the only lines in these families, so the dashboard's label-stripping
+  parser stays unambiguous.
+- ``mooncake_offload_tier_dir_bytes`` / ``mooncake_offload_tier_dir_files``:
+  per-additional-root series labeled ``tier="drain",root="..."`` (NAS drain).
+- ``mooncake_offload_staging_max_bytes``: the staging tier's byte cap
+  (``--staging-max-bytes``), for staging-utilization panels -- NOT a statvfs
+  reading; the staging fs is usually the node root, whose 84% fill would
+  otherwise sit permanently past dashboard red thresholds.
 - ``mooncake_offload_mount_total_bytes`` / ``mooncake_offload_mount_free_bytes``:
-  volume capacity via statvfs on the matched mountpoint of the PRIMARY root.
+  volume capacity via statvfs on the matched mountpoint of EACH root that
+  resolves to an NFS mount (deduped by mountpoint). The NVMe staging parent
+  matches no NFS mount and contributes nothing here.
 - ``mooncake_offload_nfs_read_bytes_total`` / ``mooncake_offload_nfs_write_bytes_total``:
   /proc/self/mountstats server wire counters for the /nas-1 NFS mount (mount-wide:
   all consumers, not mooncake-only).
@@ -32,6 +40,7 @@ from pathlib import Path
 
 DEFAULT_PORT = 9004
 DEFAULT_INTERVAL = 60.0
+DEFAULT_STAGING_MAX_BYTES = 274_877_906_944  # 256 GiB; compose default
 
 # Index of server-read / server-written byte counters within the mountstats
 # "bytes" line (NFSIOS_SERVERREADBYTES / NFSIOS_SERVERWRITTENBYTES).
@@ -48,6 +57,28 @@ class NfsMountStats:
     fstype: str
     server_read_bytes: int
     server_written_bytes: int
+
+
+@dataclass(frozen=True)
+class RootSample:
+    """One offload-tree root's cached dir gauges plus its tier label."""
+
+    root: str
+    tier: str
+    dir_bytes: int
+    dir_files: int
+
+
+@dataclass(frozen=True)
+class NfsMountSample:
+    """One NFS mount's rendered gauges: statvfs capacity + wire counters."""
+
+    mountpoint: str
+    server: str
+    total_bytes: int | None
+    free_bytes: int | None
+    server_read_bytes: int | None
+    server_written_bytes: int | None
 
 
 def parse_mountstats(text: str) -> dict[str, NfsMountStats]:
@@ -159,73 +190,87 @@ def _fmt_labels(extra: dict[str, str]) -> str:
 
 
 def render_series(
-    dir_bytes: int,
-    dir_files: int,
-    mount_total: int | None,
-    mount_free: int | None,
+    primary: RootSample,
+    extras: Sequence[RootSample],
+    nfs_mounts: Sequence[NfsMountSample],
     scrape_ok: bool,
-    mount_label: str,
-    nfs_read: int | None,
-    nfs_write: int | None,
-    server_label: str,
-    extra_roots: Sequence[tuple[str, int, int, str]] = (),
+    staging_max_bytes: int,
 ) -> str:
     """Assemble the Prometheus text exposition body (pure, no I/O)."""
     out = [
         "# HELP mooncake_offload_dir_bytes Apparent size of the Mooncake offload tree.",
         "# TYPE mooncake_offload_dir_bytes gauge",
-        f'mooncake_offload_dir_bytes{mount_label} {dir_bytes}',
+        f'mooncake_offload_dir_bytes{{tier="{primary.tier}"}} {primary.dir_bytes}',
         "# HELP mooncake_offload_dir_files File count in the Mooncake offload tree.",
         "# TYPE mooncake_offload_dir_files gauge",
-        f'mooncake_offload_dir_files{mount_label} {dir_files}',
-        "# HELP mooncake_offload_mount_total_bytes Total size of the offload NAS volume.",
-        "# TYPE mooncake_offload_mount_total_bytes gauge",
+        f'mooncake_offload_dir_files{{tier="{primary.tier}"}} {primary.dir_files}',
     ]
-    if mount_total is not None:
-        out.append(f'mooncake_offload_mount_total_bytes{mount_label} {mount_total}')
-    out.extend(
-        [
-            "# HELP mooncake_offload_mount_free_bytes Free size of the offload NAS volume.",
-            "# TYPE mooncake_offload_mount_free_bytes gauge",
-        ]
-    )
-    if mount_free is not None:
-        out.append(f'mooncake_offload_mount_free_bytes{mount_label} {mount_free}')
+    if staging_max_bytes > 0:
+        out.extend(
+            [
+                "# HELP mooncake_offload_staging_max_bytes Staging tier byte cap",
+                " (MOONCAKE_OFFLOAD_STAGING_MAX_BYTES compose contract).",
+                "# TYPE mooncake_offload_staging_max_bytes gauge",
+                f'mooncake_offload_staging_max_bytes{{tier="{primary.tier}"}} {staging_max_bytes}',
+            ]
+        )
     # Per-extra-root dir series under a SEPARATE family name. The panel parser
     # matches `mooncake_offload_dir_bytes` by exact name with last-match-wins,
     # so extra roots must NOT reuse that family; their own family keeps the
     # primary series unambiguous while both tiers stay visible in one scrape.
-    for root, extra_bytes, extra_files, extra_label in extra_roots:
+    for e in extras:
         out.extend(
             [
-                "# HELP mooncake_offload_extra_dir_bytes Apparent size of an"
+                "# HELP mooncake_offload_tier_dir_bytes Apparent size of an"
                 " additional offload tree root (e.g. the NAS drain tier).",
-                "# TYPE mooncake_offload_extra_dir_bytes gauge",
-                f'mooncake_offload_extra_dir_bytes{extra_label} {extra_bytes}',
-                "# HELP mooncake_offload_extra_dir_files File count in an"
+                "# TYPE mooncake_offload_tier_dir_bytes gauge",
+                f'mooncake_offload_tier_dir_bytes{{tier="{e.tier}",root="{e.root}"}} {e.dir_bytes}',
+                "# HELP mooncake_offload_tier_dir_files File count in an"
                 " additional offload tree root.",
-                "# TYPE mooncake_offload_extra_dir_files gauge",
-                f'mooncake_offload_extra_dir_files{extra_label} {extra_files}',
+                "# TYPE mooncake_offload_tier_dir_files gauge",
+                f'mooncake_offload_tier_dir_files{{tier="{e.tier}",root="{e.root}"}} {e.dir_files}',
             ]
         )
-    if nfs_read is not None:
+    for m in nfs_mounts:
+        mount_label = _fmt_labels({"mount": m.mountpoint})
         out.extend(
             [
-                "# HELP mooncake_offload_nfs_read_bytes_total NFS server read bytes for the"
-                " offload mount (mount-wide, all consumers).",
-                "# TYPE mooncake_offload_nfs_read_bytes_total counter",
-                f'mooncake_offload_nfs_read_bytes_total{server_label} {nfs_read}',
+                "# HELP mooncake_offload_mount_total_bytes Total size of the offload"
+                " NFS volume.",
+                "# TYPE mooncake_offload_mount_total_bytes gauge",
             ]
         )
-    if nfs_write is not None:
+        if m.total_bytes is not None:
+            out.append(f'mooncake_offload_mount_total_bytes{mount_label} {m.total_bytes}')
         out.extend(
             [
-                "# HELP mooncake_offload_nfs_write_bytes_total NFS server written bytes for"
-                " the offload mount (mount-wide, all consumers).",
-                "# TYPE mooncake_offload_nfs_write_bytes_total counter",
-                f'mooncake_offload_nfs_write_bytes_total{server_label} {nfs_write}',
+                "# HELP mooncake_offload_mount_free_bytes Free size of the offload"
+                " NFS volume.",
+                "# TYPE mooncake_offload_mount_free_bytes gauge",
             ]
         )
+        if m.free_bytes is not None:
+            out.append(f'mooncake_offload_mount_free_bytes{mount_label} {m.free_bytes}')
+        if m.server_read_bytes is not None:
+            server_label = _fmt_labels({"mount": m.mountpoint, "server": m.server})
+            out.extend(
+                [
+                    "# HELP mooncake_offload_nfs_read_bytes_total NFS server read"
+                    " bytes for the offload mount (mount-wide, all consumers).",
+                    "# TYPE mooncake_offload_nfs_read_bytes_total counter",
+                    f'mooncake_offload_nfs_read_bytes_total{server_label} {m.server_read_bytes}',
+                ]
+            )
+        if m.server_written_bytes is not None:
+            out.extend(
+                [
+                    "# HELP mooncake_offload_nfs_write_bytes_total NFS server"
+                    " written bytes for the offload mount (mount-wide, all"
+                    " consumers).",
+                    "# TYPE mooncake_offload_nfs_write_bytes_total counter",
+                    f'mooncake_offload_nfs_write_bytes_total{server_label} {m.server_written_bytes}',
+                ]
+            )
     out.extend(
         [
             "# HELP mooncake_offload_scrape_ok 1 when the last offload-dir refresh succeeded.",
@@ -243,52 +288,70 @@ class OffloadCollector:
         self,
         root: str,
         extra_roots: Sequence[str] = (),
+        staging_max_bytes: int = DEFAULT_STAGING_MAX_BYTES,
         mountstats_path: str = "/proc/self/mountstats",
         read_mountstats: Callable[[], str] | None = None,
     ) -> None:
         self.root = root
         self.extra_roots = list(extra_roots)
+        self.staging_max_bytes = staging_max_bytes
         self._read_mountstats = read_mountstats or (
             lambda: Path(mountstats_path).read_text(encoding="ascii")
         )
         self._lock = threading.Lock()
-        self._dir_bytes = 0
-        self._dir_files = 0
-        self._mount_total: int | None = None
-        self._mount_free: int | None = None
-        self._mount_label = '{"mount":"none"}'
+        self._primary = RootSample(root=root, tier="staging", dir_bytes=0, dir_files=0)
+        self._extras: list[RootSample] = []
+        self._nfs_mounts: list[NfsMountSample] = []
         self._scrape_ok = False
-        self._extra_roots: list[tuple[str, int, int, str]] = []
 
     def refresh(self) -> None:
-        """Re-walk the offload tree and statvfs the matched mountpoint."""
+        """Re-walk every offload tree; statvfs the NFS mounts the roots resolve to."""
+        # Walks and statvfs run OUTSIDE the lock: a missing root or a slow
+        # multi-hundred-GB walk must not block a scrape against a stale-but-
+        # consistent snapshot, and one root's failure must not abort the rest.
+        primary = self._walk_root(self.root, tier="staging")
+        extras = [self._walk_root(r, tier="drain") for r in self.extra_roots]
+
+        # NFS capacity + wire counters come from whichever roots resolve to an
+        # NFS mount, deduped by mountpoint. The staging parent matches no NFS
+        # mount; the drain root resolves to /nas-1.
         mounts = parse_mountstats(self._read_mountstats())
-        mount = find_mount_for(self.root, mounts)
+        nfs_samples: dict[str, NfsMountSample] = {}
+        for sample in [primary, *extras]:
+            mount = find_mount_for(sample.root, mounts)
+            if mount is None or mount.mountpoint in nfs_samples:
+                continue
+            total = free = None
+            try:
+                usage = shutil.disk_usage(mount.mountpoint)
+                total, free = usage.total, usage.free
+            except OSError:
+                pass
+            nfs_samples[mount.mountpoint] = NfsMountSample(
+                mountpoint=mount.mountpoint,
+                server=mount.server,
+                total_bytes=total,
+                free_bytes=free,
+                server_read_bytes=mount.server_read_bytes,
+                server_written_bytes=mount.server_written_bytes,
+            )
+
         dir_ok = False
-        try:
-            dir_bytes, dir_files = collect_dir(self.root)
+        if primary.dir_files > 0 or primary.dir_bytes > 0:
             dir_ok = True
-        except (FileNotFoundError, PermissionError, OSError):
-            dir_bytes, dir_files = 0, 0
-        mount_total: int | None = None
-        mount_free: int | None = None
-        try:
-            stat_target = mount.mountpoint if mount is not None else self.root
-            usage = shutil.disk_usage(stat_target)
-            mount_total, mount_free = usage.total, usage.free
-        except OSError:
-            pass
         with self._lock:
-            self._dir_bytes = dir_bytes
-            self._dir_files = dir_files
-            self._mount_total = mount_total
-            self._mount_free = mount_free
-            self._mount_label = _fmt_labels({"mount": mount.mountpoint if mount else "none"})
+            self._primary = primary
+            self._extras = extras
+            self._nfs_mounts = list(nfs_samples.values())
             self._scrape_ok = dir_ok
-            self._extra_roots = [
-                (root, *collect_dir(root), _fmt_labels({"root": root}))
-                for root in self.extra_roots
-            ]
+
+    def _walk_root(self, root: str, tier: str) -> RootSample:
+        """Walk one root; degrade to zeroed gauges on any failure."""
+        try:
+            dir_bytes, dir_files = collect_dir(root)
+        except (FileNotFoundError, PermissionError, OSError):
+            return RootSample(root=root, tier=tier, dir_bytes=0, dir_files=0)
+        return RootSample(root=root, tier=tier, dir_bytes=dir_bytes, dir_files=dir_files)
 
     def start_refresher(self, interval: float) -> None:
         """Run refresh() in a daemon thread every interval seconds; never skip a cycle."""
@@ -314,38 +377,19 @@ class OffloadCollector:
 
     def render(self) -> str:
         """Render the exposition body: live mountstats counters + cached dir gauges."""
-        mounts = parse_mountstats(self._read_mountstats())
-        mount = find_mount_for(self.root, mounts)
         with self._lock:
-            dir_bytes, dir_files = self._dir_bytes, self._dir_files
-            mount_total, mount_free = self._mount_total, self._mount_free
-            mount_label, scrape_ok = self._mount_label, self._scrape_ok
-        if mount is not None:
-            return render_series(
-                dir_bytes=dir_bytes,
-                dir_files=dir_files,
-                mount_total=mount_total,
-                mount_free=mount_free,
-                scrape_ok=scrape_ok,
-                mount_label=mount_label,
-                nfs_read=mount.server_read_bytes,
-                nfs_write=mount.server_written_bytes,
-                server_label=_fmt_labels(
-                    {"mount": mount.mountpoint, "server": mount.server}
-                ),
-                extra_roots=self._extra_roots,
+            primary, extras, nfs_mounts, scrape_ok = (
+                self._primary,
+                self._extras,
+                self._nfs_mounts,
+                self._scrape_ok,
             )
         return render_series(
-            dir_bytes=dir_bytes,
-            dir_files=dir_files,
-            mount_total=mount_total,
-            mount_free=mount_free,
+            primary=primary,
+            extras=extras,
+            nfs_mounts=nfs_mounts,
             scrape_ok=scrape_ok,
-            mount_label=mount_label,
-            nfs_read=None,
-            nfs_write=None,
-            server_label="",
-            extra_roots=self._extra_roots,
+            staging_max_bytes=self.staging_max_bytes,
         )
 
 
@@ -364,8 +408,10 @@ class _MetricsHandler(BaseHTTPRequestHandler):
         pass  # keep journald output to the single startup line
 
 
-def serve(port: int, roots: Sequence[str], interval: float) -> None:
-    collector = OffloadCollector(roots[0], extra_roots=roots[1:])
+def serve(port: int, roots: Sequence[str], interval: float, staging_max_bytes: int) -> None:
+    collector = OffloadCollector(
+        roots[0], extra_roots=roots[1:], staging_max_bytes=staging_max_bytes
+    )
     collector.refresh()
     collector.start_refresher(interval)
 
@@ -397,11 +443,17 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL)
+    parser.add_argument(
+        "--staging-max-bytes",
+        type=int,
+        default=int(os.environ.get("MOONCAKE_OFFLOAD_STAGING_MAX_BYTES", DEFAULT_STAGING_MAX_BYTES)),
+        help="Staging tier byte cap (mooncake_offload_staging_max_bytes gauge).",
+    )
     args = parser.parse_args(argv)
     roots = args.root or [
         os.environ.get("MOONCAKE_OFFLOAD_DIR", "/nas-1/mooncake-store")
     ]
-    serve(args.port, roots, args.interval)
+    serve(args.port, roots, args.interval, args.staging_max_bytes)
     return 0
 
 
