@@ -217,6 +217,26 @@ INJECT = (
     '        sampling_params["temperature"] = 1.0\n'
     '        sampling_params["top_p"] = 0.95\n'
     '        sampling_params["top_k"] = 20\n'
+    "        # [qwen3.8-coder390-dflash] Reasoning-budget gate: this checkpoint's\n"
+    "        # reasoning channel degenerates into unbounded repetition on\n"
+    "        # near-duplicate context (repeated file reads, license headers,\n"
+    "        # similar tool results) -- content=0 with the entire generation\n"
+    "        # budget billed as reasoning_tokens. thinking_token_budget forces\n"
+    "        # the </think> close when the budget exhausts, converting every\n"
+    "        # loop into a completed answer (verified live 2026-11-04: baseline\n"
+    "        # looped 512/512 reasoning with content=0; budget=64 produced\n"
+    "        # finish=stop with 1041 chars of content).\n"
+    "        # Ratio: reasoning-heavy -- 75% of the generation budget goes to\n"
+    "        # reasoning, 25% reserved for output; a default budget of 32768\n"
+    "        # applies when the caller sends no generation cap. Never below\n"
+    "        # max_gen - 256 so output always retains at least 256 tokens.\n"
+    '        _gen_budget = sampling_params.get("max_tokens")\n'
+    '        if _gen_budget is None:\n'
+    '            sampling_params["thinking_token_budget"] = 32768\n'
+    "        elif _gen_budget <= 340:\n"
+    '            sampling_params["thinking_token_budget"] = 0\n'
+    "        else:\n"
+    '            sampling_params["thinking_token_budget"] = min(32768, max(int(_gen_budget) * 75 // 100, int(_gen_budget) - 256))\n'
     "\n"
     "        # Merge server-default stop_token_ids"
 )
