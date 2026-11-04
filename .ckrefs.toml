@@ -38,4 +38,4 @@ description = "eval tooling points at the dell litellm gateway (litellm-upstream
 type = "dependency"
 repo = "gilded-gnosis-vllm"
 ref = "dev/karmic-kraken"
-descritpion = "this is the exact b12x vllm verson used by the majority of live recipes in this project, this is MOST IMPORTANT dependency in the project"
+descritpion = "this is the exact b12x vllm version used by the majority of live recipes in this project, this is MOST IMPORTANT dependency in the project"
