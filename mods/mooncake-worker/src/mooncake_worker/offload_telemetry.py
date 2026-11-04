@@ -208,7 +208,7 @@ def render_series(
     if staging_max_bytes > 0:
         out.extend(
             [
-                "# HELP mooncake_offload_staging_max_bytes Staging tier byte cap",
+                "# HELP mooncake_offload_staging_max_bytes Staging tier byte cap"
                 " (MOONCAKE_OFFLOAD_STAGING_MAX_BYTES compose contract).",
                 "# TYPE mooncake_offload_staging_max_bytes gauge",
                 f'mooncake_offload_staging_max_bytes{{tier="{primary.tier}"}} {staging_max_bytes}',
