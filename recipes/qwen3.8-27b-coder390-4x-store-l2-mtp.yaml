@@ -324,17 +324,12 @@ env:
 # resolution independent of engine vintage -- and survives the
 # text_config-scoped rope override in the same flag.
 #
-# vocab_size:248320 is pinned top-level for the same reason. The
-# qwen3_5 checkpoint declares vocab only under text_config
-# (text_config.vocab_size, no top-level key), but the MTP path wraps the
-# draft/target config in EAGLEConfig, whose __init__ reads
-# self.model.vocab_size unconditionally
-# (transformers_utils/configs/eagle.py:37) and dies with AttributeError on
-# Qwen3_5Config (observed live 2026-11-04). The dict-override path
-# (_apply_mtp_dict_hf_override) setattr's every non-arch/model_type key
-# onto the draft config, so a top-level vocab_size satisfies the read
-# with the true value. DFlash2 never hits this: its drafter is a separate
-# tree with its own complete config.
+# No top-level vocab_size override is needed or effective here. The
+# checkpoint declares it only under text_config; the draft ModelConfig
+# receives only SpeculativeConfig.hf_config_override because
+# compose_draft_hf_overrides drops target dictionary overrides. Explicit
+# method "mtp" avoids EAGLEConfig (which reads top-level vocab_size) via
+# mods/fix-explicit-spec-method; the MTP path reads text_config.vocab_size.
 #
 # method "mtp": no model path (the head ships inside the main checkpoint),
 # no draft_tensor_parallel_size (draft runs at target TP), no
@@ -363,7 +358,7 @@ command: |
     --block-size 16 \
     --quantization modelopt_mixed \
     --load-format instanttensor \
-    --hf-overrides '{{"text_config":{{"rope_parameters":{{"mrope_interleaved":true,"mrope_section":[11,11,10],"partial_rotary_factor":0.25,"rope_theta":10000000,"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":262144}}}},"mtp_num_hidden_layers":1,"vocab_size":248320}}' \
+    --hf-overrides '{{"text_config":{{"rope_parameters":{{"mrope_interleaved":true,"mrope_section":[11,11,10],"partial_rotary_factor":0.25,"rope_theta":10000000,"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":262144}}}},"mtp_num_hidden_layers":1}}' \
     --max-model-len {max_model_len} \
     --max-num-seqs {max_num_seqs} \
     --max-num-batched-tokens {max_num_batched_tokens} \
