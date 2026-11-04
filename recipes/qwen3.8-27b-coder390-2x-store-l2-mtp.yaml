@@ -97,6 +97,10 @@ model: local-inference-lab/Qwen3.8-27B-Coder390-DFlash2
 container: vllm-node-b12x
 image_id: sha256:e9f6e32941ec5680a58edfbfefaad6997f0527e22344b5b505cf8267de4625f2
 
+# TP=2 needs both cluster nodes, so this recipe has no solo form; the CI
+# recipe test exercises the multi-node dry-run path instead of --solo.
+cluster_only: true
+
 build_args:
   - --exp-b12x
 
@@ -181,6 +185,29 @@ defaults:
   # the window converges with the base's 1048576; the KV budget below just
   # holds fewer full-window requests (~1.8x) than the native window did (~7x).
   max_model_len: 1048576
+  # 8 as of 2026-11-04 (raised from 6): at 6 sequences the master ran clean
+  # for 2h+ — zero master_put_start_alloc_failures_total / failed batch
+  # items and zero "insufficient space" logs with free_ratio_first +
+  # eviction_high_watermark_ratio=0.80; segments hold ~74% fill across all
+  # 4 master segments. That clears the failure evidence that forced the
+  # 2026-11-03 downgrade: at 8 concurrent sequences with DISTINCT prefixes
+  # the master rejected batch_put with NO_AVAILABLE_HANDLE (-200) for
+  # 412/412 keys (batch_bytes=1.47 GiB). The root cause is the MASTER's
+  # segment allocation, not this recipe's buffer sizes: with 4 segments at
+  # 85-87% used and "random" allocation, a large batch can land on a segment
+  # without enough free space even when a sibling has room (the same second
+  # the master logged "insufficient space" for 412 keys). Distinct prefixes
+  # defeat prefix-cache dedup, which is what drives concurrent batch volume
+  # up to the pool limit in the first place. 8 sequences plus the master-side
+  # fixes (--allocation_strategy=free_ratio_first, --eviction_ratio=0.10 in
+  # infra/cluster-config/docker/mooncake-store/compose.yaml) already in
+  # place. The local buffer stays 4 GiB (cluster.env
+  # MOONCAKE_LOCAL_BUFFER_GIB). TRIPWIRE: if
+  # master_put_start_alloc_failures_total or
+  # master_batch_put_*_failed_items_total climbs on the gx10-mooncake
+  # dashboard at 8, revert to 6.
+  # Note -200 is the master's segment rejection; staging-slot exhaustion
+  # returns -1 (worker.py:1002).
   max_num_seqs: 8
   # 2048 -> 16384: MTP spec decode runs 3 autoregressive iterations per decode
   # step (num_speculative_tokens=3), so a wider batched-tokens window lets the
@@ -243,11 +270,92 @@ env:
   # full 2 GiB staged chunk (~9.5 s at ~225 MB/s).
   MOONCAKE_OFFLOAD_CLIENT_BUFFER_GC_TTL_MS: "60000"
 
-# The MTP head is NOT a separate drafter: it ships as mtp.* tensors inside
-# the main checkpoint. No model path or draft_tensor_parallel_size is needed
-# (SpeculativeConfig.hf_config_override rewrites model_type to qwen3_5_mtp).
-# --hf-overrides carries mtp_num_hidden_layers=1 so the override triggers at
-# model load time.
+# Staging slot size 1024 MiB, not 2048 (2026-11-03). `_pack_staging_chunks`
+# bounds each store RPC by `slot_size`, and `staging_num_slots` chunks can be
+# in flight at once — so the connector's peak store demand is
+# num_slots * slot_size = 2 GiB, not the whole batch. At 2048 that peak was
+# 4 GiB against ~3.4 GiB free per 24 GiB segment, and the master rejected
+# allocations with NO_AVAILABLE_HANDLE (-200):
+#
+#   W client_service.cpp:3097 BatchPut failed for 509 keys due to
+#     insufficient space
+#   W worker.py:1249 batch_put failed: 527/963 keys failed (codes={-200},
+#     batch_bytes=3713458176)
+#
+# Observed batch sizes reached 4.25 GiB, so a single chunk could also exceed
+# one segment's free space outright. 1024 halves peak in-flight demand to
+# 2 GiB (comfortably under 3.4 GiB free) and halves the pinned host memory
+# the pool registers — which matters here: the ranks run at 7-11 GiB free of
+# 120 GiB, so the previous 2x2048 MiB pin was a real co-tenancy cost.
+#
+# This is a CAPACITY fix only. A failed put is not a correctness bug: store
+# keys are content-addressed and lookup returns the longest CONTIGUOUS
+# prefix hit, so a rejected batch yields a shorter hit and recompute — it
+# cannot make the model attend to KV that does not match its context. Do not
+# cite -200 as the cause of degenerate output.
+
+# cache_prefix = {cache_lineage_prefix} (derived by run-recipe.py, 2026-11-03).
+#
+# Mooncake keys are `{cache_prefix}@{model}@tp_rank:N@pcp0@dcp0@pp_rank:0@
+# @group:G@{token_hash}`. The token hash covers TOKENS ONLY — it encodes no
+# quantization, rope/YaRN factor, kv-cache dtype, block size, or image
+# version. With an empty prefix, a bucket written by an earlier deployment
+# (different numerics, same model name) is indistinguishable from a current
+# one: the lookup hits, load_get succeeds, and the engine attends to KV
+# computed under a different config lineage. That is silent KV corruption and
+# presents as coherent output that degrades into a repetition loop.
+#
+# The prefix is a sha256 over model + container + image_id + the KV-relevant
+# defaults + the full command, so it changes automatically whenever anything
+# that determines KV numerics changes. Rank/topology knobs (tensor_parallel,
+# gpu_memory_utilization, max_num_seqs) are deliberately excluded: all ranks
+# share one namespace and the key already carries tp_rank per shard.
+#
+# Consequence: a config change orphans the previous lineage's buckets rather
+# than aliasing onto them. Old buckets are unreachable, not corrupting; they
+# age out via the bucket LRU. Wiping the offload dir is safe but no longer
+# required for correctness.
+
+# The MTP head's BF16 tensors must stay BF16 under modelopt_mixed. The
+# checkpoint already exempts them twice: hf_quant_config.json (the file
+# vLLM's ModelOpt configs read, per get_config_filenames) carries
+# quantization.exclude_modules ["mtp*","mtp.layers.0*"] -- ModelOpt exclude
+# lists are wildcards, matched with fnmatch in
+# ModelOptQuantConfigBase.is_layer_excluded -- and no mtp.* prefix appears
+# in quantized_layers (ModelOptMixedPrecisionConfig leaves any prefix absent
+# from that map unquantized). mods/qwen3.8-coder390-mtp VERIFIES both at
+# boot and injects the wildcard entries into the served copy if a future
+# re-quantization ever drops them.
+#
+# NO disable_eagle_block_drop here -- and that is deliberate. Upstream
+# #54163's analysis: only EAGLE/EAGLE3/MTP actually REQUIRE the trailing
+# prefix-cache block drop, because MTP builds draft KV from the hidden
+# state AND the next token (DFlash builds it from hidden state alone, which
+# is why the DFlash2 sibling opts out). The drop must stay ENABLED for MTP:
+# the field defaults to false, so it is simply absent below.
+#
+# mtp_num_hidden_layers:1 is pinned top-level in --hf-overrides below. The
+# checkpoint declares the field under text_config only; SpeculativeConfig
+# reads it top-level first and treats text_config as a fallback
+# (speculative.py:1086-1089), so the top-level pin keeps MTP depth
+# resolution independent of engine vintage -- and survives the
+# text_config-scoped rope override in the same flag.
+#
+# No top-level vocab_size override is needed or effective here. The
+# checkpoint declares it only under text_config; the draft ModelConfig
+# receives only SpeculativeConfig.hf_config_override because
+# compose_draft_hf_overrides drops target dictionary overrides. Explicit
+# method "mtp" avoids EAGLEConfig (which reads top-level vocab_size) via
+# mods/fix-explicit-spec-method; the checkpoint's existing text_config value
+# needs no separate top-level pin.
+#
+# method "mtp": no model path (the head ships inside the main checkpoint),
+# no draft_tensor_parallel_size (draft runs at target TP), no
+# disable_eagle_block_drop (EAGLE/EAGLE3/MTP REQUIRE the trailing-block drop,
+# per upstream #54163). NOTE: comments must stay OUT of the command body --
+# a comment between line-continuations truncates the rendered exec-script
+# (observed live: "--speculative-config: command not found", engine booted
+# arg-less and died on world-size validation).
 command: |
   # The store connector host-stages KV through pinned slots, and vLLM
   # hard-rejects any KV connector with expandable_segments
@@ -274,7 +382,7 @@ command: |
     --max-num-batched-tokens {max_num_batched_tokens} \
     --max-cudagraph-capture-size {max_cudagraph_capture_size} \
     --speculative-config '{{"method":"mtp","num_speculative_tokens":{num_speculative_tokens}}}' \
-    --kv-transfer-config '{{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both","kv_load_failure_policy":"recompute","kv_connector_extra_config":{{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":1024,"enable_lookup":true}}}}' \
+    --kv-transfer-config '{{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both","kv_load_failure_policy":"recompute","kv_connector_extra_config":{{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":1024,"enable_lookup":true,"cache_prefix":"{cache_lineage_prefix}"}}}}' \
     --gdn-prefill-backend cutedsl \
     --linear-backend b12x \
     --mm-encoder-tp-mode data \
