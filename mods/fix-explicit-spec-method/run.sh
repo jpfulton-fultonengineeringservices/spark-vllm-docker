@@ -2,21 +2,22 @@
 set -euo pipefail
 
 PREFIX="[fix-explicit-spec-method]"
-PYTHON_ROOT="${PYTHON_ROOT:-/usr/local/lib/python3.12/dist-packages}"
 info() {
   echo "$PREFIX $*"
 }
 
-python3 - "$PYTHON_ROOT" <<'PY'
+EXEC_SCRIPT="/workspace/exec-script.sh"
+if [ "${FIX_EXPLICIT_SPEC_METHOD:-0}" != "1" ] \
+   && { [ ! -f "$EXEC_SCRIPT" ] || ! grep -q 'FIX_EXPLICIT_SPEC_METHOD' "$EXEC_SCRIPT" 2>/dev/null; }; then
+  echo "$PREFIX inert (set FIX_EXPLICIT_SPEC_METHOD=1 to activate)"
+  return 0 2>/dev/null || exit 0
+fi
+
+python3 - <<'PY'
 import ast
 import importlib.util
-from pathlib import Path
-import sys
 
-python_root = sys.argv[1]
 prefix = "[fix-explicit-spec-method]"
-if not Path(python_root, "vllm").is_dir():
-    raise SystemExit(f"{prefix} FAIL: vLLM package not found at {python_root}/vllm")
 spec = importlib.util.find_spec("vllm.config.speculative")
 if spec is None or spec.origin is None:
     raise SystemExit(f"{prefix} FAIL: cannot locate vllm.config.speculative")
