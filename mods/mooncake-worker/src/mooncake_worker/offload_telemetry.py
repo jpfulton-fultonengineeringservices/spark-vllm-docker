@@ -309,8 +309,13 @@ class OffloadCollector:
         # Walks and statvfs run OUTSIDE the lock: a missing root or a slow
         # multi-hundred-GB walk must not block a scrape against a stale-but-
         # consistent snapshot, and one root's failure must not abort the rest.
-        primary = self._walk_root(self.root, tier="staging")
-        extras = [self._walk_root(r, tier="drain") for r in self.extra_roots]
+        primary, primary_ok = self._walk_root(self.root, tier="staging")
+        extras: list[RootSample] = []
+        extras_ok: list[bool] = []
+        for r in self.extra_roots:
+            sample, ok = self._walk_root(r, tier="drain")
+            extras.append(sample)
+            extras_ok.append(ok)
 
         # NFS capacity + wire counters come from whichever roots resolve to an
         # NFS mount, deduped by mountpoint. The staging parent matches no NFS
@@ -336,9 +341,7 @@ class OffloadCollector:
                 server_written_bytes=mount.server_written_bytes,
             )
 
-        dir_ok = False
-        if primary.dir_files > 0 or primary.dir_bytes > 0:
-            dir_ok = True
+        dir_ok = primary_ok and all(extras_ok)
         with self._lock:
             self._primary = primary
             self._extras = extras
@@ -347,11 +350,13 @@ class OffloadCollector:
 
     def _walk_root(self, root: str, tier: str) -> RootSample:
         """Walk one root; degrade to zeroed gauges on any failure."""
+        ok = False
         try:
             dir_bytes, dir_files = collect_dir(root)
+            ok = True
         except (FileNotFoundError, PermissionError, OSError):
-            return RootSample(root=root, tier=tier, dir_bytes=0, dir_files=0)
-        return RootSample(root=root, tier=tier, dir_bytes=dir_bytes, dir_files=dir_files)
+            dir_bytes, dir_files = 0, 0
+        return RootSample(root=root, tier=tier, dir_bytes=dir_bytes, dir_files=dir_files), ok
 
     def start_refresher(self, interval: float) -> None:
         """Run refresh() in a daemon thread every interval seconds; never skip a cycle."""
