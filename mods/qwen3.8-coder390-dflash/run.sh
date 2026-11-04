@@ -217,6 +217,12 @@ INJECT = (
     '        sampling_params["temperature"] = 1.0\n'
     '        sampling_params["top_p"] = 0.95\n'
     '        sampling_params["top_k"] = 20\n'
+    "        # [qwen3.8-coder390-dflash] Anti-repetition: 1.10 is the floor\n"
+    "        # proven (commit 87c40e8fbd) to break the reasoning-channel loop\n"
+    "        # deterministically while leaving prose length intact (1.15\n"
+    "        # measurably shortens it). Assigned on self -- the return passes\n"
+    "        # repetition_penalty=self.repetition_penalty explicitly.\n"
+    "        self.repetition_penalty = 1.10\n"
     "        # [qwen3.8-coder390-dflash] Reasoning-budget gate: this checkpoint's\n"
     "        # reasoning channel degenerates into unbounded repetition on\n"
     "        # near-duplicate context (repeated file reads, license headers,\n"
