@@ -36,16 +36,26 @@ explicit `mtp`; `run.sh` detects that exact old line and migrates it to the
 fixed tuple. Any other anchor drift is a hard failure. Re-running on the
 fixed tree is a no-op.
 
+The mod is inert unless `FIX_EXPLICIT_SPEC_METHOD=1` is in its calling
+environment or `/workspace/exec-script.sh` contains that flag. CCI injects the
+recipe environment as container `-e` arguments before applying mods. The
+exec-script check supports explicit re-application to an existing container;
+on initial native `launch-cluster.sh` creation, pass the flag with `-e` because
+that launcher copies the exec-script after applying mods.
+
 ## Why the vocab_size pin was removed
 
 The top-level `vocab_size:248320` in both MTP recipes was not a valid
 workaround. On this image, `compose_draft_hf_overrides` returns
 `SpeculativeConfig.hf_config_override` when target overrides are a dictionary:
 dictionary overrides are target-only and are not applied to the draft config.
-The unused `_apply_mtp_dict_hf_override` is not called by this path. MTP does
-not wrap the draft in `EAGLEConfig`; the observed failure occurred only after
-the method was incorrectly rewritten to `dflash`. The real vocabulary remains
-at `text_config.vocab_size`.
+The indexed dependency has an `_apply_mtp_dict_hf_override` helper, but the
+installed image's file does not; its draft path uses only
+`compose_draft_hf_overrides`. MTP does not wrap the draft in `EAGLEConfig`;
+the observed failure occurred only after the method was incorrectly rewritten
+to `dflash`. The checkpoint already declares its vocabulary under
+`text_config`; no separate top-level pin is required by this configuration
+path.
 
 ## Verification (image and exact dependency)
 
@@ -83,8 +93,18 @@ avoiding the unrelated DFlash2 name inference. All cases used
 `num_speculative_tokens=3` and the target's `mtp_num_hidden_layers=1`
 override.
 
-The checked-in `git apply` patch also applied in the installed
-`dist-packages` root, passed `PATCH_AST_IMPORT_OK` and `PATCH_IMPORT_OK`, and
-reverse-applied. A subsequent migration test from the exact old `None`-guard
-line reported `Migrating ineffective 2026-11-04 None-guard revision.` and
-then passed the same idempotency check.
+`run.sh` performs the exact anchor replacement directly; the unified diff is
+retained for review and manual patching. A migration test from the exact old
+`None`-guard line reported `Migrating ineffective 2026-11-04 None-guard
+revision.` and then passed the same idempotency check.
+
+The same configuration probe on an unpatched container produced:
+
+```text
+PRISTINE_EXPLICIT_DFLASH2_ERROR AttributeError 'Qwen3_5Config' object has no attribute 'vocab_size'
+PRISTINE_INFERRED None mtp 3 qwen3_5_mtp ['Qwen3_5MTP']
+PRISTINE_INFERRED 'draft_model' mtp 3 qwen3_5_mtp ['Qwen3_5MTP']
+```
+
+This confirms the explicit-DFlash2 regression without changing the neutral
+inference cases.

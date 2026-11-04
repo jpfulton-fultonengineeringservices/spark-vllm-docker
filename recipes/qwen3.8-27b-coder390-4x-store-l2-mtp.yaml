@@ -210,6 +210,9 @@ defaults:
 # Qwen3.5 hybrid (Gated DeltaNet + full attention) on the b12x stack.
 # Same block as recipes/qwen3.8-flash-next-nvfp4-cluster.yaml.
 env:
+  # CCI injects this as a container -e before applying mods; run.sh also
+  # recognizes the flag in a previously rendered exec-script on re-apply.
+  FIX_EXPLICIT_SPEC_METHOD: "1"
   CUTE_DSL_ARCH: "sm_121a"
   SAFETENSORS_FAST_GPU: "1"
   VLLM_WORKER_MULTIPROC_METHOD: "spawn"
@@ -329,7 +332,8 @@ env:
 # receives only SpeculativeConfig.hf_config_override because
 # compose_draft_hf_overrides drops target dictionary overrides. Explicit
 # method "mtp" avoids EAGLEConfig (which reads top-level vocab_size) via
-# mods/fix-explicit-spec-method; the MTP path reads text_config.vocab_size.
+# mods/fix-explicit-spec-method; the checkpoint's existing text_config value
+# needs no separate top-level pin.
 #
 # method "mtp": no model path (the head ships inside the main checkpoint),
 # no draft_tensor_parallel_size (draft runs at target TP), no
