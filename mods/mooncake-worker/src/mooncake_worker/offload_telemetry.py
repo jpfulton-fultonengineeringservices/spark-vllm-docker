@@ -3,9 +3,11 @@
 Serves Prometheus text exposition on :9004 with:
 
 - ``mooncake_offload_dir_bytes`` / ``mooncake_offload_dir_files``: apparent size and
-  file count of the Mooncake offload tree (default /nas-1/mooncake-store).
+  file count of EACH offload tree passed via a repeatable ``--root`` flag, labeled
+  with ``tier="staging"|"drain"`` (first root = staging = the PRIMARY series the
+  dashboard cards chart; remaining roots emit separate labeled series).
 - ``mooncake_offload_mount_total_bytes`` / ``mooncake_offload_mount_free_bytes``:
-  NAS volume capacity via statvfs on the matched NFS mountpoint.
+  volume capacity via statvfs on the matched mountpoint of the PRIMARY root.
 - ``mooncake_offload_nfs_read_bytes_total`` / ``mooncake_offload_nfs_write_bytes_total``:
   /proc/self/mountstats server wire counters for the /nas-1 NFS mount (mount-wide:
   all consumers, not mooncake-only).
@@ -23,7 +25,7 @@ import contextlib
 import os
 import shutil
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -166,6 +168,7 @@ def render_series(
     nfs_read: int | None,
     nfs_write: int | None,
     server_label: str,
+    extra_roots: Sequence[tuple[str, int, int, str]] = (),
 ) -> str:
     """Assemble the Prometheus text exposition body (pure, no I/O)."""
     out = [
@@ -188,6 +191,23 @@ def render_series(
     )
     if mount_free is not None:
         out.append(f'mooncake_offload_mount_free_bytes{mount_label} {mount_free}')
+    # Per-extra-root dir series under a SEPARATE family name. The panel parser
+    # matches `mooncake_offload_dir_bytes` by exact name with last-match-wins,
+    # so extra roots must NOT reuse that family; their own family keeps the
+    # primary series unambiguous while both tiers stay visible in one scrape.
+    for root, extra_bytes, extra_files, extra_label in extra_roots:
+        out.extend(
+            [
+                "# HELP mooncake_offload_extra_dir_bytes Apparent size of an"
+                " additional offload tree root (e.g. the NAS drain tier).",
+                "# TYPE mooncake_offload_extra_dir_bytes gauge",
+                f'mooncake_offload_extra_dir_bytes{extra_label} {extra_bytes}',
+                "# HELP mooncake_offload_extra_dir_files File count in an"
+                " additional offload tree root.",
+                "# TYPE mooncake_offload_extra_dir_files gauge",
+                f'mooncake_offload_extra_dir_files{extra_label} {extra_files}',
+            ]
+        )
     if nfs_read is not None:
         out.extend(
             [
@@ -222,10 +242,12 @@ class OffloadCollector:
     def __init__(
         self,
         root: str,
+        extra_roots: Sequence[str] = (),
         mountstats_path: str = "/proc/self/mountstats",
         read_mountstats: Callable[[], str] | None = None,
     ) -> None:
         self.root = root
+        self.extra_roots = list(extra_roots)
         self._read_mountstats = read_mountstats or (
             lambda: Path(mountstats_path).read_text(encoding="ascii")
         )
@@ -236,6 +258,7 @@ class OffloadCollector:
         self._mount_free: int | None = None
         self._mount_label = '{"mount":"none"}'
         self._scrape_ok = False
+        self._extra_roots: list[tuple[str, int, int, str]] = []
 
     def refresh(self) -> None:
         """Re-walk the offload tree and statvfs the matched mountpoint."""
@@ -262,6 +285,10 @@ class OffloadCollector:
             self._mount_free = mount_free
             self._mount_label = _fmt_labels({"mount": mount.mountpoint if mount else "none"})
             self._scrape_ok = dir_ok
+            self._extra_roots = [
+                (root, *collect_dir(root), _fmt_labels({"root": root}))
+                for root in self.extra_roots
+            ]
 
     def start_refresher(self, interval: float) -> None:
         """Run refresh() in a daemon thread every interval seconds; never skip a cycle."""
@@ -306,6 +333,7 @@ class OffloadCollector:
                 server_label=_fmt_labels(
                     {"mount": mount.mountpoint, "server": mount.server}
                 ),
+                extra_roots=self._extra_roots,
             )
         return render_series(
             dir_bytes=dir_bytes,
@@ -317,6 +345,7 @@ class OffloadCollector:
             nfs_read=None,
             nfs_write=None,
             server_label="",
+            extra_roots=self._extra_roots,
         )
 
 
@@ -335,8 +364,8 @@ class _MetricsHandler(BaseHTTPRequestHandler):
         pass  # keep journald output to the single startup line
 
 
-def serve(port: int, root: str, interval: float) -> None:
-    collector = OffloadCollector(root)
+def serve(port: int, roots: Sequence[str], interval: float) -> None:
+    collector = OffloadCollector(roots[0], extra_roots=roots[1:])
     collector.refresh()
     collector.start_refresher(interval)
 
@@ -346,7 +375,7 @@ def serve(port: int, root: str, interval: float) -> None:
     Handler.collector = collector
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     server.daemon_threads = True
-    print(f"mooncake-offload-metrics listening on :{port} root={root}", flush=True)
+    print(f"mooncake-offload-metrics listening on :{port} roots={list(roots)}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -358,11 +387,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument(
         "--root",
-        default=os.environ.get("MOONCAKE_OFFLOAD_DIR", "/nas-1/mooncake-store"),
+        action="append",
+        default=None,
+        help=(
+            "Offload tree root to walk. Repeatable: the FIRST is the primary"
+            " (staging tier, drives the dashboard cards); later roots emit"
+            " additional labeled series (e.g. the NAS drain tier)."
+            " Default: MOONCAKE_OFFLOAD_DIR or /nas-1/mooncake-store."
+        ),
     )
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL)
     args = parser.parse_args(argv)
-    serve(args.port, args.root, args.interval)
+    roots = args.root or [
+        os.environ.get("MOONCAKE_OFFLOAD_DIR", "/nas-1/mooncake-store")
+    ]
+    serve(args.port, roots, args.interval)
     return 0
 
 
