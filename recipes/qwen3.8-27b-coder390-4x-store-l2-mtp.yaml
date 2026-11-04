@@ -23,6 +23,14 @@
 # cut over by relaunching with --recipe qwen3.8-27b-coder390-4x-store-l2-mtp
 # instead of qwen3.8-27b-coder390-4x-store-l2.
 #
+# Cutover caveats (from the model card): (1) the card warns vLLM MTP on NVFP4
+# with tensor-parallel >= 2 has a known issue (upstream vLLM #52480, noted
+# against vLLM 0.28) and recommends single-GPU there -- this recipe is TP=4
+# NVFP4 on a NEWER build (0.32.0rc1.dev301), so smoke-test acceptance length
+# and output coherence before routing production traffic; (2) MTP trades
+# speed for validation: ~91-129 tok/s C1 vs ~180-218 for DFlash2 per the
+# card's NVFP4 W4A16 table (still ~1.6-2x over no speculation at C8).
+#
 # TP=4 variant of recipes/qwen3.8-27b-coder390-2x-store-l2.yaml: same
 # durable L2 of the computed KV cache -- MooncakeStoreConnector (kv_both)
 # fronts the shared Mooncake store cohort (per-node DRAM segment + NVMe SSD
