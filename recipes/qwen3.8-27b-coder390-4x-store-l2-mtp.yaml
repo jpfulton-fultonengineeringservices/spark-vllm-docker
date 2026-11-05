@@ -119,7 +119,7 @@ mods:
   # "DFlash2" rewrote the method to dflash -- then EAGLEConfig's
   # unconditional vocab_size read on the nested-config Qwen3_5Config killed
   # the boot (observed live 2026-11-04). See the mod's README.
-  - mods/fix-explicit-spec-method
+  # - mods/fix-explicit-spec-method
   # - mods/b12x-kernel-cache
   # B12X_SKIP_RECLAIM is only the GATE - the patch that honours it lives in
   # this mod, so the env var alone does nothing (observed live 2026-10-15:
