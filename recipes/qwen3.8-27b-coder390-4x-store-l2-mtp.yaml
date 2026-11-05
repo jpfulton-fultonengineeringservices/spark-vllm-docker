@@ -347,6 +347,8 @@ command: |
   # hard-rejects any KV connector with expandable_segments
   # (config/vllm.py:952-970). Same belt-and-suspenders as
   # mods/pd-disagg/dispatch.sh.
+  #
+  # JPF - 2026-11-04 - removed --async-scheduling \ from recipe to test theory on ductductduct degenerate reasoning sequence
   unset PYTORCH_CUDA_ALLOC_CONF
   b12x-kcache exec vllm serve local-inference-lab/Qwen3.8-27B-Coder390-DFlash2 \
     --host {host} \
@@ -356,7 +358,6 @@ command: |
     --mamba-cache-mode align \
     --enable-prefix-caching \
     --enable-chunked-prefill \
-    --async-scheduling \
     --dtype bfloat16 \
     --kv-cache-dtype fp8 \
     --block-size 16 \
