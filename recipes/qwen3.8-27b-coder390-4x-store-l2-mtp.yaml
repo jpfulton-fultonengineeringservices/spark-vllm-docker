@@ -79,8 +79,6 @@ defaults:
   # (mtp_num_hidden_layers=1) runs autoregressively per decode step.
   num_speculative_tokens: 3
 
-# Qwen3.5 hybrid (Gated DeltaNet + full attention) on the b12x stack.
-# Same block as recipes/qwen3.8-flash-next-nvfp4-cluster.yaml.
 env:
   FIX_EXPLICIT_SPEC_METHOD: "1"
   CUTE_DSL_ARCH: "sm_121a"
