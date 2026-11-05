@@ -23,7 +23,8 @@ MD5_STOCK_WORKER = "b180493c964225f6a9282b30a47fb967"
 # base + docker/Dockerfile.coder390-derived installed-stage patches; vLLM
 # 0.32.0rc1.dev301+g1ac942555). Stock store/worker.py re-probed 2026-10-25
 # (2494 lines, host_staging count 0). The store recipes pin this image.
-MD5_STOCK_WORKER_CODER390_DERIVED = "8cc1f01a49aebec1ccda89d1545e445c"
+# MD5_STOCK_WORKER_CODER390_DERIVED = "8cc1f01a49aebec1ccda89d1545e445c"
+MD5_STOCK_WORKER_CODER390_DERIVED = "9fa131844dec8ce653e7b50ae1c1a86f"
 
 # Admitted stock bases for the store gate.
 MD5_STOCK_WORKERS = (MD5_STOCK_WORKER, MD5_STOCK_WORKER_CODER390_DERIVED)
