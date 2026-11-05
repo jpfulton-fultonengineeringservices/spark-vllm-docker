@@ -39,8 +39,8 @@ COPY docker/patch_b12x_cache_integrity.py /tmp/b12x-patches/
 RUN python3 /tmp/b12x-patches/patch_b12x_cache_integrity.py --installed
 
 # Accept wheels that predate the CUDA-on-WSL reporting fix.
-COPY docker/patch_vllm_wsl_cuda_uma.py /tmp/vllm-patches/
-RUN python3 /tmp/vllm-patches/patch_vllm_wsl_cuda_uma.py --installed
+# COPY docker/patch_vllm_wsl_cuda_uma.py /tmp/vllm-patches/
+# RUN python3 /tmp/vllm-patches/patch_vllm_wsl_cuda_uma.py --installed
 
 # Enumerate Torch schema arguments once per fill_defaults call.
 COPY docker/patch_torch_schema_enumeration.py /tmp/torch-patches/
