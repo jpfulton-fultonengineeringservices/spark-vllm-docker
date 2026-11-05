@@ -96,11 +96,11 @@ description: vLLM serving the NVFP4 W4A16 (ModelOpt mixed-precision) Qwen3.8-27B
 
 model: local-inference-lab/Qwen3.8-27B-Coder390-DFlash2
 
-container: vllm-node-b12x
-image_id: sha256:e9f6e32941ec5680a58edfbfefaad6997f0527e22344b5b505cf8267de4625f2
+# container: vllm-node-b12x
+# image_id: sha256:e9f6e32941ec5680a58edfbfefaad6997f0527e22344b5b505cf8267de4625f2
 
-build_args:
-  - --exp-b12x
+# build_args:
+#   - --exp-b12x
 
 # TP=4 needs all four cluster nodes, so this recipe has no solo form; the CI
 # recipe test exercises the multi-node dry-run path instead of --solo.
@@ -122,7 +122,7 @@ mods:
   # B12X_SKIP_RECLAIM is only the GATE - the patch that honours it lives in
   # this mod, so the env var alone does nothing (observed live 2026-10-15:
   # env set, worker still spun in _reclaim_programs).
-  - mods/b12x-reclaim-gate
+  # - mods/b12x-reclaim-gate
   # Durable L2: the store connector set (store-only) + the transfer-engine
   # /cupy runtime deps and the standalone-store config render.
   - mods/mooncake-worker
@@ -199,9 +199,9 @@ defaults:
   # returns -1 (worker.py:1002).
   max_num_seqs: 8
   # 2048 - 4096 - 8192 - 16384 - 32768 - 65536 - 131072 - 262144 - 524288 - 1048576
-  max_num_batched_tokens: 16384
+  max_num_batched_tokens: 4096
   # Same cudagraph tightening as the base recipe (45df67ae2b).
-  max_cudagraph_capture_size: 256
+  # max_cudagraph_capture_size: 256
   # 3 per the model card's vLLM MTP prescription. Depth is a throughput/
   # latency knob: the single MTP layer (mtp_num_hidden_layers=1) runs
   # autoregressively num_speculative_tokens times per decode step.
@@ -358,23 +358,17 @@ command: |
     --trust-remote-code \
     --tensor-parallel-size {tensor_parallel} \
     --async-scheduling \
-    --mamba-cache-mode align \
     --enable-prefix-caching \
     --enable-chunked-prefill \
-    --dtype bfloat16 \
     --kv-cache-dtype fp8 \
-    --block-size 16 \
     --quantization modelopt_mixed \
     --load-format instanttensor \
     --hf-overrides '{{"text_config":{{"rope_parameters":{{"mrope_interleaved":true,"mrope_section":[11,11,10],"partial_rotary_factor":0.25,"rope_theta":10000000,"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":262144}}}},"mtp_num_hidden_layers":1}}' \
     --max-model-len {max_model_len} \
     --max-num-seqs {max_num_seqs} \
     --max-num-batched-tokens {max_num_batched_tokens} \
-    --max-cudagraph-capture-size {max_cudagraph_capture_size} \
     --speculative-config '{{"method":"mtp","num_speculative_tokens":{num_speculative_tokens}}}' \
     --kv-transfer-config '{{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both","kv_load_failure_policy":"recompute","kv_connector_extra_config":{{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":1024,"enable_lookup":true,"cache_prefix":"{cache_lineage_prefix}"}}}}' \
-    --gdn-prefill-backend cutedsl \
-    --linear-backend b12x \
     --mm-encoder-tp-mode data \
     --reasoning-parser qwen3 \
     --tool-call-parser qwen3_xml \
