@@ -23,7 +23,8 @@
 #   bash docker/build-coder390-derived-image.sh
 # It is reproducible: the base tag is immutable, every patch is applied in
 # --installed mode, and the resulting config digest is pinned in the recipes.
-FROM eugr/spark-vllm:nightly-20261016
+# FROM eugr/spark-vllm:nightly-2026101
+FROM eugr/spark-vllm:latest
 
 # B12X must accept the hybrid-aligned KV storage block (Qwen3.8-Coder390 TP=2 ->
 # 1648/1664) and let vLLM's existing splitter reduce it to supported kernel

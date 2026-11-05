@@ -18,11 +18,13 @@ set -euo pipefail
 
 PREFIX="[coder390-derived]"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BASE_IMAGE="${BASE_IMAGE:-eugr/spark-vllm:nightly-20261016}"
+# BASE_IMAGE="${BASE_IMAGE:-eugr/spark-vllm:nightly-20261016}"
+BASE_IMAGE="${BASE_IMAGE:-eugr/spark-vllm:nightly}"
 # Config digest of the previously-pinned a1fc4f18 content. Asserting the base
 # resolves to this keeps the recipe's vLLM version fixed; if eugr ever retags
 # this date, the build stops instead of silently shipping a different vLLM.
-EXPECTED_BASE_ID="${EXPECTED_BASE_ID:-sha256:a1fc4f18d3cb1671986feb92b05243ecd31a21957dd64e28da5c9e6125733aa0}"
+# EXPECTED_BASE_ID="${EXPECTED_BASE_ID:-sha256:a1fc4f18d3cb1671986feb92b05243ecd31a21957dd64e28da5c9e6125733aa0}"
+EXPECTED_BASE_ID="${EXPECTED_BASE_ID:-sha256:86c4b6a1e67df7f6258296c3c9705ae9a659d3a31e66a38262ceabc1201ebf98}"
 REGISTRY="${REGISTRY:-${LLM_REGISTRY_HOST:-10.100.170.3}:${LLM_REGISTRY_PORT:-5000}}"
 IMAGE_NAME="${IMAGE_NAME:-spark-vllm}"
 TAG="${TAG:-coder390-kr-$(date -u +%Y%m%d)}"
