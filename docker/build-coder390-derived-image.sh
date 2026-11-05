@@ -19,7 +19,7 @@ set -euo pipefail
 PREFIX="[coder390-derived]"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # BASE_IMAGE="${BASE_IMAGE:-eugr/spark-vllm:nightly-20261016}"
-BASE_IMAGE="${BASE_IMAGE:-eugr/spark-vllm:nightly}"
+BASE_IMAGE="${BASE_IMAGE:-eugr/spark-vllm:latest}"
 # Config digest of the previously-pinned a1fc4f18 content. Asserting the base
 # resolves to this keeps the recipe's vLLM version fixed; if eugr ever retags
 # this date, the build stops instead of silently shipping a different vLLM.
