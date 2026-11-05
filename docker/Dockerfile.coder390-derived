@@ -31,8 +31,8 @@ FROM eugr/spark-vllm:latest
 # pages. Inert when the installed vLLM has no B12X backend -- and inert for the
 # stock coder390 recipes, which run FlashInfer (`--block-size 16`); it matters
 # only for the B12X paged-attention arm (docs/b12x-coder390-attention-gap.md).
-COPY docker/patch_vllm_b12x_storage_block_split.py /tmp/vllm-patches/
-RUN python3 /tmp/vllm-patches/patch_vllm_b12x_storage_block_split.py --installed
+# COPY docker/patch_vllm_b12x_storage_block_split.py /tmp/vllm-patches/
+# RUN python3 /tmp/vllm-patches/patch_vllm_b12x_storage_block_split.py --installed
 
 # Validate cached CuTe objects and recover from interrupted writes.
 COPY docker/patch_b12x_cache_integrity.py /tmp/b12x-patches/
