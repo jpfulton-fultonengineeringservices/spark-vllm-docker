@@ -1,84 +1,21 @@
 # Recipe: Qwen3.8-27B-Coder390-MTP (two-node TP=2, durable Mooncake store L2)
 #
-# MTP-drafter VARIANT of recipes/qwen3.8-27b-coder390-2x-store-l2.yaml: same
-# checkpoint, same TP=2 store-L2 topology, but speculative decoding runs the
-# checkpoint's bundled BF16 MTP head (method "mtp") instead of the FP8
-# DFlash2 drafter.
+# MTP-drafter variant (bundled BF16 MTP head, method "mtp") of the two-node
+# store-L2 coder390 recipe. Uses the same NVFP4 W4A16 checkpoint and TP=2
+# Mooncake store L2 topology as the DFlash2 sibling, but runs the
+# publisher-validated MTP speculative decode path. The MTP head ships inside
+# the main checkpoint as mtp.* tensors with mtp_num_hidden_layers=1.
 #
-# Why this variant exists: the publisher (nerkyor) validated DFlash2 ONLY on
-# SGLang. vLLM+DFlash2+prefix-caching produced repetitive output (HF
-# discussion #8 on the model repo) -- root-caused live to upstream vLLM
-# #54163 (pre-2026-10-23 engines drop the trailing prefix-cache block on
-# use_eagle() paths, corrupting the mamba-align SSM resume state). The
-# publisher-validated vLLM path is the bundled MTP head; the model card
-# prescribes:
-#   --speculative-config '{"method":"mtp","num_speculative_tokens":3}'
-# The served checkpoint
-# (/nas-1/models/qwen3.8/qwen3.8-27b-coder390-ethink-dflash2-nvfp4-w4a16)
-# CONTAINS the head (15 mtp.* BF16 tensors in
-# model-00003-of-00003.safetensors) and declares
-# text_config.mtp_num_hidden_layers=1, so no extra weights are staged.
+# MooncakeStoreConnector (kv_both) fronts a shared store cohort (per-node DRAM
+# + NVMe SSD offload) for durable prefix KV, chosen over native vLLM fs tier
+# (cannot cross-rank assemble) and LMCache (lacks SupportsHMA for the Qwen3_5
+# hybrid architecture). The store connector's content-hash key prefix is
+# derived from the full KV-numerics config lineage to prevent silent KV
+# corruption across config changes.
 #
-# Cutover caveats (from the model card): (1) the card warns vLLM MTP on NVFP4
-# with tensor-parallel >= 2 has a known issue (upstream vLLM #52480, noted
-# against vLLM 0.28) and recommends single-GPU there -- this recipe is TP=2
-# NVFP4 on a NEWER build (0.32.0rc1.dev301), so smoke-test acceptance length
-# and output coherence before routing production traffic; (2) MTP trades
-# speed for validation: ~91-129 tok/s C1 vs ~180-218 for DFlash2 per the
-# card's NVFP4 W4A16 table.
-#
-# TP=2 variant of the 4x MTP sibling (recipes/qwen3.8-27b-coder390-4x-store-l2-mtp.yaml):
-# same durable L2 of the computed KV cache -- MooncakeStoreConnector (kv_both)
-# fronts the shared Mooncake store cohort (per-node DRAM segment + NVMe SSD
-# offload), so prefix KV -- attention KV and the 48 GDN-layer Mamba state --
-# is persisted and re-served by content-hash lookup across engine restarts.
-# Only shard counts and topology differ from the 4x sibling (tensor_parallel 2,
-# two DGX Spark nodes).
-#
-# Why the Mooncake store cohort and not the native vLLM fs tier:
-# in a multi-host TP deployment each rank's offload staging lives on ITS OWN
-# host's /dev/shm (vllm/v1/kv_offload/cpu/shared_offload_region.py), so an
-# in-container fs tier can only persist rank-local partial blocks with no
-# cross-rank assembly. A store cohort is a NETWORK store every rank can
-# address directly (per-node DRAM segment + local-NVMe SSD offload tier under
-# /nvme/mooncake_offload, mounted into the mooncake-client container by
-# docker/mooncake-store/compose.yaml) -- same corridor the 4x sibling
-# validated. Why not LMCache: this model is a Qwen3_5 hybrid
-# (FullAttentionSpec + MambaSpec, hybrid KV cache manager required) --
-# LMCacheConnectorV1 lacks SupportsHMA and LMCacheMPConnector hard-requires
-# HMA OFF with a single uniform layout; MooncakeStoreConnector subclasses
-# SupportsHMA and handles the Mamba group in align mode.
-#
-# Everything else mirrors the base recipes/qwen3.8-27b-coder390-2x.yaml:
-# serves the NVFP4 W4A16 quantization of the local dense coder checkpoint:
-# /nas-1/models/qwen3.8/qwen3.8-27b-coder390-ethink-dflash2-nvfp4-w4a16
-# (staged slug qwen3.8-27b-coder390-ethink-dflash2-nvfp4-w4a16), with its
-# bundled BF16 MTP head. cluster.env maps this recipe
-# (`qwen3.8-27b-coder390-2x-store-l2-mtp`, alongside the other coder390
-# recipes) -> that same NVFP4 slug, so fes-weights mounts the quantized dir;
-# `--quantization modelopt_mixed` selects the ModelOpt path
-# (MLP+lm_head NVFP4 -> Marlin; attention FP8 -> FlashInfer FP8), KV stays
-# fp8. The MTP head is NOT a separate drafter tree: it ships as mtp.* tensors
-# INSIDE the main checkpoint, so --speculative-config carries no model path
-# and vLLM resolves the head itself (SpeculativeConfig.hf_config_override
-# rewrites model_type to qwen3_5_mtp). The `model:` id is synthetic (the
-# checkpoint is not on the Hub); mods/fes-weights presents /model as an HF
-# hub-cache shim under this exact id, so `vllm serve <id>` resolves offline
-# with HF_HUB_OFFLINE=1.
-#
-# The `image_id` pin (same content id as the base 2x recipe) stays: the
-# derived coder390 image validated for serving is that build; see the base
-# recipe's header and docs/b12x-coder390-attention-gap.md rebuild traps
-# before repinning.
-#
-# Reasoning effort: identical to the base 2x recipe -- the checkpoint's
-# chat_template.jinja accepts only xhigh|medium|low (xhigh IS its default when
-# no effort is sent) and `none` bypasses the check via enable_thinking: false.
-# Caller effort is translated at the gateway, not here: LiteLLM's
-# session_tracking.reasoning_defaults maps it onto this route's advertised
-# supports_reasoning_efforts ladder -- high->xhigh, max->xhigh, minimal->low,
-# anything else dropped so the template default applies. Direct-to-engine
-# callers must use the template's own spellings.
+# Reasoning effort: the checkpoint's chat_template accepts only xhigh|medium|low
+# (xhigh is the default); caller-side translation (high->xhigh, etc.) happens
+# at the LiteLLM gateway, not here.
 
 recipe_version: "1"
 name: Qwen3.8-27B-Coder390-MTP (2x, durable Mooncake store L2)
@@ -86,139 +23,65 @@ description: vLLM serving the NVFP4 W4A16 (ModelOpt mixed-precision) Qwen3.8-27B
 
 model: local-inference-lab/Qwen3.8-27B-Coder390-DFlash2
 #
-# Pin state (2026-10-19): this remains the last validated build. The B12X
-# storage-block patch and an NCCL install fix are committed in this repo but are
-# NOT in any image yet -- two rebuild attempts produced images that could not
-# serve. See docs/b12x-coder390-attention-gap.md, "Rebuilding this image: two
-# traps", for the two failure modes and the hard stop on reproducing this
-# vLLM commit from source. Do not repin until a rebuilt image has booted and
-# passed the acceptance table.
-
+# Pin state (2026-10-19): last validated build. See
+# docs/b12x-coder390-attention-gap.md before repinning.
 container: vllm-node-b12x
 image_id: sha256:e9f6e32941ec5680a58edfbfefaad6997f0527e22344b5b505cf8267de4625f2
 
-# TP=2 needs both cluster nodes, so this recipe has no solo form; the CI
-# recipe test exercises the multi-node dry-run path instead of --solo.
+# TP=2 needs both cluster nodes; CI tests the multi-node dry-run path.
 cluster_only: true
 
 build_args:
   - --exp-b12x
 
-# fes-weights must be the first mod: it verifies the staged weights and builds
-# the offline hub-cache shim that `vllm serve <model>` resolves against.
 mods:
   - mods/fes-weights
   - mods/qwen3.8-coder390-mtp
-  # Preserve the recipe's explicit --speculative-config method="mtp": on this
-  # build SpeculativeConfig's auto-detect re-runs for mtp (it only short-
-  # circuits for eagle/eagle3/dflash/dspark), and the draft id containing
-  # "DFlash2" rewrote the method to dflash -- then EAGLEConfig's
-  # unconditional vocab_size read on the nested-config Qwen3_5Config killed
-  # the boot (observed live 2026-11-04). See the mod's README.
-  - mods/fix-explicit-spec-method
+  # Commented out: auto-detect rewrites method "mtp" -> dflash when the draft
+  # id contains "DFlash2", then EAGLEConfig's vocab_size read kills boot.
+  # - mods/fix-explicit-spec-method
   - mods/b12x-kernel-cache
-  # B12X_SKIP_RECLAIM is only the GATE - the patch that honours it lives in
-  # this mod, so the env var alone does nothing (observed live 2026-10-15:
-  # env set, worker still spun in _reclaim_programs).
-  - mods/b12x-reclaim-gate
-  # Durable L2: the store connector set (store-only) + the transfer-engine
-  # /cupy runtime deps and the standalone-store config render.
+  # Commented out: env var alone does nothing; the patch lives in this mod.
+  # - mods/b12x-reclaim-gate
   - mods/mooncake-worker
   - mods/mooncake-store-l2
-  # Guard the Mamba-align speculative-block relocation against the hashed/
-  # shared blocks a KV connector exposes on an external prefix hit.
+  # Guards Mamba-align speculative-block relocation against hashed/shared
+  # blocks exposed by the KV connector on external prefix hits.
   - mods/mamba-spec-relocate-guard
-  # Port the FES fork's perf.py MFU corrections into the installed vLLM tree:
-  # modelopt_mixed per-component weight byte sizes, hybrid
-  # full/linear-attention layer accounting, and a GatedDeltaNet (GDN) FLOPs
-  # component. Without it this hybrid model bills all 64 layers as attention
-  # and drops the attention/FFN components from MFU under modelopt_mixed.
-  # FIX_MFU_METRICS below is the activation flag (mods cannot read recipe
-  # env directly; the env block is written into /workspace/exec-script.sh,
-  # which the mod greps at apply time).
+  # FES fork perf.py MFU corrections: modelopt_mixed weight bytes, hybrid
+  # attention accounting, GDN FLOPs. Activated by FIX_MFU_METRICS env var.
   - mods/fix-mfu-metrics
 
-# enable_lookup=true (see --kv-transfer-config below). History: the first
-# store loads of 2026-10-25 collapsed DFlash2 spec-decode acceptance to zero
-# (MAL 1.00, every per-position rate 0.000) for the rest of the boot while the
-# target's own output stayed coherent, so lookups were disabled as a
-# mitigation (a87632d7a0). Two root causes were then found and fixed in the
-# vendored store connector (mod-deployed, no image change):
-#
-# 1. Segment collapse. This stack registers ONE backing allocation holding
-#    every layer's view (probe: 39.9 GB, 5 physical layer planes, 15 overlay
-#    groups x 5 layers). The old storage-dedup registration computed
-#    block_len = region // num_blocks = 5x the true page size, so "block b"
-#    addressed a contiguous 5-page span in layer plane 0: only 1 of 5 layer
-#    slots was ever stored, and neighbouring blocks were clobbered. The
-#    connector now derives per-group segments from KVCacheTensor metadata
-#    (offset + pos*layer_stride + b*block_stride), addressing all 5 slots.
-# 2. Drafter sweep. The MTP head's layer group (model.layers.64..68) is not a
-#    target group: a store load swept it with target page addressing and
-#    corrupted the head's KV. The connector now excludes the drafter's
-#    group from save/load/lookup (group-level detection keyed on layer names
-#    at/above the target's num_hidden_layers, resolved through text_config --
-#    the flat hf_config attribute is None on this Qwen3.5 VL checkpoint, which
-#    made the earlier name-based detector aa4f0d9f55 a no-op).
+# enable_lookup=true (see --kv-transfer-config below). Two root causes fixed
+# in the vendored store connector (mod-deployed, no image change):
+# 1. Segment collapse: block_len was 5x the real page, storing only 1 of 5
+#    fused layer slots. Now derived per-group from KVCacheTensor metadata.
+# 2. Drafter sweep: the MTP head's layer group was being loaded with target
+#    page addressing, corrupting head KV. Now excluded from save/load/lookup.
 #
 # Cross-boot durability remains open (D1): batch_is_exist returns false for
-# any key saved by a different client session (0/30 cross-boot vs 30/30
-# same-boot, mooncake-layer object visibility). Same-boot external loads are
-# the value this recipe serves today; cross-boot stays deferred.
+# keys from a different client session (0/30 cross-boot vs 30/30 same-boot).
+# Same-boot external loads are what this recipe serves today.
 
 defaults:
   port: 8000
   host: 0.0.0.0
   tensor_parallel: 2
   # 0.50 (not the base recipe's 0.75): the Mooncake store cohort co-tenants the
-  # GB10 unified pool. The store connector ALSO pins 2x2048 MiB host-staging
-  # slots (~8 GiB) AFTER vLLM sizes KV against total*utilization, so the KV
-  # budget must leave that plus the mooncake-client's ~8 GiB DRAM segment and
-  # the ~13.5 GiB of weights/activations. At 0.65 the 56 GiB KV cache drove the
-  # node to 0 free; 0.50 caps KV at ~38 GiB (2.78M -> ~1.9M tokens) and leaves
-  # real headroom. At the YaRN window below that is ~1.8x full-window
-  # concurrency (the native-window figure was ~7x at 262144).
+  # GB10 unified pool and the connector pins 2x2048 MiB host-staging slots
+  # after vLLM sizes KV. 0.65 drove node 0 free on the 2x sibling.
   gpu_memory_utilization: 0.50
-  # Long-context YaRN, same as the base recipe: --hf-overrides scales the
-  # target's rope to 4x (262144 -> 1048576) and VLLM_ALLOW_LONG_MAX_MODEL_LEN
-  # permits the override. The store-L2's durability is for LONG prefixes, so
-  # the window converges with the base's 1048576; the KV budget below just
-  # holds fewer full-window requests (~1.8x) than the native window did (~7x).
+  # Long-context YaRN: --hf-overrides scales rope 4x (262144 -> 1048576).
   max_model_len: 1048576
-  # 8 as of 2026-11-04 (raised from 6): at 6 sequences the master ran clean
-  # for 2h+ — zero master_put_start_alloc_failures_total / failed batch
-  # items and zero "insufficient space" logs with free_ratio_first +
-  # eviction_high_watermark_ratio=0.80; segments hold ~74% fill across all
-  # 4 master segments. That clears the failure evidence that forced the
-  # 2026-11-03 downgrade: at 8 concurrent sequences with DISTINCT prefixes
-  # the master rejected batch_put with NO_AVAILABLE_HANDLE (-200) for
-  # 412/412 keys (batch_bytes=1.47 GiB). The root cause is the MASTER's
-  # segment allocation, not this recipe's buffer sizes: with 4 segments at
-  # 85-87% used and "random" allocation, a large batch can land on a segment
-  # without enough free space even when a sibling has room (the same second
-  # the master logged "insufficient space" for 412 keys). Distinct prefixes
-  # defeat prefix-cache dedup, which is what drives concurrent batch volume
-  # up to the pool limit in the first place. 8 sequences plus the master-side
-  # fixes (--allocation_strategy=free_ratio_first, --eviction_ratio=0.10 in
-  # infra/cluster-config/docker/mooncake-store/compose.yaml) already in
-  # place. The local buffer stays 4 GiB (cluster.env
-  # MOONCAKE_LOCAL_BUFFER_GIB). TRIPWIRE: if
-  # master_put_start_alloc_failures_total or
-  # master_batch_put_*_failed_items_total climbs on the gx10-mooncake
-  # dashboard at 8, revert to 6.
-  # Note -200 is the master's segment rejection; staging-slot exhaustion
-  # returns -1 (worker.py:1002).
+  # 8 (raised from 6 after master-side allocation fixes). Revert to 6 if
+  # master_put_start_alloc_failures_total climbs on the gx10-mooncake dashboard.
   max_num_seqs: 8
-  # 2048 -> 16384: MTP spec decode runs 3 autoregressive iterations per decode
-  # step (num_speculative_tokens=3), so a wider batched-tokens window lets the
-  # MTP head fill more positions per iteration. The 4x sibling validated 16384
-  # as the practical ceiling for the same checkpoint.
+  # 2048 -> 32768: MTP spec decode runs 3 autoregressive iterations per decode
+  # step, so a wider window lets the head fill more positions per iteration.
   max_num_batched_tokens: 32768
-  # Same cudagraph tightening as the base recipe (45df67ae2b).
-  max_cudagraph_capture_size: 256
-  # 3 per the model card's vLLM MTP prescription. Depth is a throughput/
-  # latency knob: the single MTP layer (mtp_num_hidden_layers=1) runs
-  # autoregressively num_speculative_tokens times per decode step.
+  # max_cudagraph_capture_size: 256
+  # 3 per the model card's vLLM MTP prescription. Single MTP layer
+  # (mtp_num_hidden_layers=1) runs autoregressively per decode step.
   num_speculative_tokens: 3
 
 # Qwen3.5 hybrid (Gated DeltaNet + full attention) on the b12x stack.
@@ -235,39 +98,21 @@ env:
   VLLM_USE_V2_MODEL_RUNNER: "1"
   VLLM_ENABLE_ROCE_ALLREDUCE: "1"
   VLLM_ROCE_ALLREDUCE_MAX_SIZE: "2MB"
-  # b12x _reclaim_programs runs an unguarded O(exponential) retained-owner walk
-  # plus an eager gc.collect() that spins at 100% CPU (GIL held) after graph
-  # capture, wedging determine_available_memory -> the EngineCore collective
-  # never returns and the ranks hang ("No available shared memory broadcast
-  # block found in 60 seconds" repeating). Observed live 2026-10-15 on the
-  # NVFP4 serve: Worker_TP1 parked in b12x/preparation/session.py:610 via
-  # _release_b12x_profile_state. Same flag the NVFP4 MiMo recipe carries.
-  # Skipping only leaves WeakValueDictionary-backed cache entries.
+  # B12X_SKIP_RECLAIM: bypasses O(exponential) retained-owner walk and
+  # gc.collect() that wedges the EngineCore collective (observed live 2026-10-15).
   B12X_SKIP_RECLAIM: "1"
-  # Persist the torch inductor Triton autotuner cache outside /tmp so
-  # b12x-kcache archives it (roots.txt entry "torchinductor"); otherwise it
-  # is ephemeral and every boot re-compiles the Triton kernels.
+  # Persist torch inductor Triton cache outside /tmp for kcache archiving.
   TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
-  # Long-context YaRN: permit --max-model-len above the 262144 native cap
-  # (same as the base recipe).
+  # Long-context YaRN: permit --max-model-len above the 262144 native cap.
   VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
-  # --- durable Mooncake store L2 -----------------------------------------
-  # Store-only connector set (no P2P topology for a single-instance serve).
+  # --- durable Mooncake store L2 ---
   MOONCAKE_WORKER_P2P: "skip"
-  # Path the mod renders; the serve exec reads it from this exec-script.
   MOONCAKE_CONFIG_PATH: "/tmp/mooncake-store.json"
-  # Stable content-hash keys across restarts (same lineage as the
-  # mooncake-store templates).
   PYTHONHASHSEED: "0"
-  # Activate mods/mamba-spec-relocate-guard (mods cannot see recipe env, so
-  # the launcher also injects this as a container -e).
   MAMBA_SPEC_RELOCATE_GUARD: "1"
-  # Activate mods/fix-mfu-metrics: run-recipe.py renders this into
-  # /workspace/exec-script.sh before launch-cluster.sh applies mods, and the
-  # mod greps that script to self-activate.
   FIX_MFU_METRICS: "1"
-  # GC lease on batch_get offload buffers (ms); must outlive a NAS read of a
-  # full 2 GiB staged chunk (~9.5 s at ~225 MB/s).
+  # GC lease on batch_get offload buffers (ms); must outlive the NAS read of
+  # a full 1 GiB staged chunk (~4.8 s at ~225 MB/s).
   MOONCAKE_OFFLOAD_CLIENT_BUFFER_GC_TTL_MS: "60000"
 
 # Staging slot size 1024 MiB, not 2048 (2026-11-03). `_pack_staging_chunks`
