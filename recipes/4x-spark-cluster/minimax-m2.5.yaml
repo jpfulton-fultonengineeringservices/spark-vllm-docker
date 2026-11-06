@@ -25,13 +25,9 @@ defaults:
   gpu_memory_utilization: 0.90
   max_model_len: 128000
 
-# Environment variables
-env:
-  VLLM_DISTRIBUTED_EXECUTOR_CONFIG: '{"placement_group_options":{"strategy":"SPREAD"}}'
-
 # The vLLM serve command template
 command: |
-  vllm serve MiniMaxAI/MiniMax-M2.5 \
+  VLLM_DISTRIBUTED_EXECUTOR_CONFIG='{{"placement_group_options":{{"strategy":"SPREAD"}}}}' vllm serve MiniMaxAI/MiniMax-M2.5 \
       --trust-remote-code \
       --port {port} \
       --host {host} \
