@@ -1861,14 +1861,18 @@ Use the same simple name passed to `build-and-copy.sh -t`:
 ./push-to-fse-ghcr.sh pull vllm-node-b12x-kr  # latest dated version
 ```
 
-The publisher requires `gh`, `jq`, Docker, GHCR access, and a Docker GHCR
-login. Before pushing, it checks reported GitHub CLI token scopes and starts
+The publisher requires `gh`, `jq`, Docker, and GHCR access. Before pushing, it
+checks reported GitHub CLI token scopes and starts
 `gh auth refresh --hostname github.com --scopes write:packages` interactively
 when that scope is missing. In noninteractive sessions, refresh beforehand.
 Environment-supplied and fine-grained tokens may need permissions configured
-outside `gh`; unreported scopes cannot be verified. Refreshing `gh` credentials
-does not update Docker's separate GHCR login, which must also have package-write
-access. The publisher uses UTC tags `<name>-YYYYMMDD-N`, allocating N from zero. `pull`
+outside `gh`; unreported scopes cannot be verified. After the checks, the
+publisher automatically logs Docker into GHCR as the active GitHub account,
+passing the token through standard input. This updates Docker's saved GHCR
+credentials in its configured credential helper or Docker config. The account
+also needs access to the organization and package; a successful login alone
+does not guarantee permission to push. Pull uses the existing Docker login.
+The publisher uses UTC tags `<name>-YYYYMMDD-N`, allocating N from zero. `pull`
 retags the selected image locally as `<name>:latest`; provide a dated tag to
 select a specific version. Only simple names and optional `:latest` are accepted.
 

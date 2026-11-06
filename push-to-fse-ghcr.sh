@@ -20,9 +20,10 @@ Versioned tags use IMAGE-YYYYMMDD-N (UTC). Pull retags locally as IMAGE:latest.
 Rail A address 10.100.170.3:5000; override with FSE_CLUSTER_REGISTRY=HOST:PORT.
 --insecure-cluster skips TLS verification for catalog requests, not Docker.
 --new-package acknowledges a GHCR 404 when publishing a new package.
-Push refreshes a stored gh token if its reported scopes lack write:packages;
-Docker's separate GHCR login may also need updating. Cross-machine publishing
-must use a single writer.
+Push refreshes a stored gh token if its reported scopes lack write:packages,
+then updates Docker's GHCR login using the active gh account. Docker may store
+credentials in its configured credential store. Cross-machine publishing must
+use a single writer.
 EOF
 }
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
@@ -123,6 +124,21 @@ ensure_package_write_scope() {
     fi
 }
 
+login_ghcr() {
+    local username
+    if ! username=$(gh api --hostname github.com user --jq .login); then
+        fail 'Cannot determine the authenticated GitHub account; GHCR login not attempted'
+    fi
+    [[ "$username" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] \
+        || fail 'GitHub CLI returned an invalid account name; GHCR login not attempted'
+    printf '%s\n' "Authenticating Docker to ghcr.io as $username using the active gh account." >&2
+    # Never put the token in arguments, variables, logs, or files. Docker may
+    # persist it in its configured credential helper or Docker config.
+    if ! (set -o pipefail; gh auth token --hostname github.com | docker login ghcr.io --username "$username" --password-stdin); then
+        fail 'Docker GHCR login failed; verify token/package permissions and Docker credential storage'
+    fi
+}
+
 # All gh output is buffered and validated before any tag is used.
 gh_tags() {
     local allow_new=$1
@@ -219,6 +235,7 @@ case "$cmd" in
         if [[ "$cluster" == 1 ]]; then cluster_tags; fi
         if grep -Fxq -- "$tag" "$work/gh.tags" "$work/cluster.tags"; then fail "version already exists: $tag"; fi
         gh_ref="$GHCR_REPO:$tag"; cluster_ref="$CLUSTER_REPO:$tag"; alias_ref="$CLUSTER_HOST/$base:latest"
+        login_ghcr
         docker tag "$local_image" "$gh_ref" || fail "tag failed: $gh_ref"
         docker push "$gh_ref" || fail "push failed: $gh_ref"
         printf 'Published %s\n' "$gh_ref"
