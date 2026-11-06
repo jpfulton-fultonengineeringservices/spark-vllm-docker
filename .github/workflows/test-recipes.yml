@@ -22,11 +22,13 @@ on:
       - 'mods/fix-explicit-spec-method/**'
       - 'mods/qwen3.8-coder390-mtp/**'
       - 'mods/qwen3.8-coder390-mrope-yarn/**'
+      - 'mods/instanttensor-selected-ranges/**'
       - 'mods/memory-profile/**'
       - 'mods/b12x-kernel-cache/**'
       - 'tests/test_explicit_spec_method_mod.py'
       - 'tests/test_qwen38_coder390_mtp_sampling.py'
       - 'tests/test_qwen38_mrope_yarn_mod.py'
+      - 'tests/test_instanttensor_selected_ranges_mod.py'
       - '.github/workflows/test-recipes.yml'
   pull_request:
     paths:
@@ -47,6 +49,7 @@ on:
       - 'mods/fix-qwen3-next-autoround/**'
       - 'mods/fix-explicit-spec-method/**'
       - 'mods/qwen3.8-coder390-mtp/**'
+      - 'mods/instanttensor-selected-ranges/**'
       - 'mods/memory-profile/**'
       - 'mods/b12x-kernel-cache/**'
       - 'tests/**'
@@ -94,6 +97,9 @@ jobs:
 
     - name: Test Qwen3.8 MRoPE YaRN mod
       run: python3 tests/test_qwen38_mrope_yarn_mod.py
+
+    - name: Test InstantTensor selected-ranges compatibility mod
+      run: python3 tests/test_instanttensor_selected_ranges_mod.py
 
     - name: Test Hugging Face cache ownership repair
       run: python3 tests/test_hf_download_permissions.py

@@ -35,6 +35,8 @@ build_args:
 mods:
   - mods/fes-weights
   - mods/qwen3.8-coder390-mtp
+  # Keep target-index-aware tensor selection compatible with InstantTensor 0.2.2.
+  - mods/instanttensor-selected-ranges
   # Preserve explicit "mtp": otherwise auto-detection sees the inherited draft
   # id's "DFlash2" and selects dflash, whose EAGLEConfig vocab_size read fails.
   - mods/fix-explicit-spec-method

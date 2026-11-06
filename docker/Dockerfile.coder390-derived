@@ -13,11 +13,11 @@
 # Deriving from that dated tag gives a rebuildable, content-addressed base while
 # holding the vLLM version fixed (no loader/GDN re-validation risk).
 #
-# DO NOT derive from eugr/spark-vllm-b12x:*: that line tracks
-# local-inference-lab/vllm@dev/karmic-kraken, whose tip requires
-# InstantTensor._determine_buffer_size, which no published instanttensor
-# exposes -- the engine dies at load_model. Verified live on :latest (a7f76ae9),
-# which references the capability twice while the installed package lacks it.
+# Loader compatibility is image-specific: newer index-aware vLLM helpers can
+# still call _determine_buffer_size, renamed to _finalize_buffer_size in
+# InstantTensor 0.2.2. Selected physical ranges also require a compacted
+# tensor_keep mask. The MTP recipes apply mods/instanttensor-selected-ranges
+# for the verified image layout; a different base needs fresh validation.
 #
 # Build (on a node with the registry and certs, e.g. gx10-node1):
 #   bash docker/build-coder390-derived-image.sh
