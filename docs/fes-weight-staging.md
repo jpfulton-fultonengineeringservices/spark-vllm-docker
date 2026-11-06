@@ -31,14 +31,18 @@ scripts/fes-eval.sh glm-5.3-flash glm-5.3-flash-nvfp4 --solo
 run-recipe.sh <recipe> \
     --apply-mod mods/fes-weights \
     -v /opt/llm/models/<slug>:/model:ro \
-    -e FES_WEIGHTS_DIR=/model \
-    -e FES_HUB_MODEL=<recipe model: field> \
-    -e HF_HUB_OFFLINE=1 \
+    --default-env FES_WEIGHTS_ENABLED=1 \
+    --default-env FES_WEIGHTS_DIR=/model \
+    --default-env FES_HUB_MODEL=<recipe model: field> \
+    --default-env HF_HUB_OFFLINE=1 \
     <your args>
 ```
 
 All remaining args are passed to `run-recipe.sh` verbatim (`--solo`, `-n`,
-`--port`, and the recipe overrides all work as usual).
+`--port`, and the recipe overrides all work as usual). These four environment
+settings are defaults: recipe `env:` takes precedence, and an explicit `-e`
+takes precedence over both. `--hub-model` changes the wrapper default, not a
+recipe or explicit override.
 
 ## How the hub shim works
 

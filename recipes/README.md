@@ -230,7 +230,8 @@ Launch options:
                               Alias: --head-port
   --eth-if IFACE              Override Ethernet interface
   --ib-if IFACE               Override InfiniBand interface
-  -e VAR=VALUE                Pass environment variable to container (repeatable)
+  --default-env KEY=VALUE     Container default below recipe env (repeatable)
+  -e, --env VAR[=VALUE]       Override container environment (repeatable)
   -j N                        Number of parallel build jobs
   --no-cache-dirs             Do not mount ~/.cache/vllm, ~/.cache/flashinfer, ~/.cache/b12x, ~/.triton, ~/.tilelang
   --keep-entrypoint           Keep the Docker image entrypoint
@@ -282,11 +283,27 @@ Both `run-recipe.sh` and `launch-cluster.sh` accept repeatable `-e VAR=VALUE`
 container environment variables and repeatable `-v LOCAL:CONTAINER` Docker
 volume mappings. Put `launch-cluster.sh` options before `exec`.
 
-Recipe `env:` entries are passed to every container using `-e`, so they are also
-available to mods and Ray workers. Explicit `run-recipe.sh -e VAR=VALUE` arguments
-override recipe values; if a variable is repeated, the last CLI value wins.
-These values override saved `CONTAINER_*` settings as well. Put recipe overrides
-before the `--` separator for extra vLLM arguments.
+Container environment precedence, from lowest to highest, is saved
+`CONTAINER_*` settings, `--default-env KEY=VALUE`, recipe `env:`, and explicit
+`-e` / `--env`. Within either repeatable CLI option, the last value for a key
+wins, regardless of how the two options are interleaved. Orchestrators can use
+`--default-env` for topology and cluster defaults without overriding recipe
+settings. A default must have a non-empty key and an `=`; its value may be
+empty and may contain spaces or additional `=` characters.
+
+Recipe values and defaults are passed to every container using `-e`, so they are
+also available to mods, serving processes, and Ray workers. Explicit `-e KEY`
+keeps Docker's bare-name behavior: it replaces lower-priority assignments and
+asks Docker to inherit `KEY` from the launch environment (or leave it unset if
+not present). Put these options before the `--` separator for extra vLLM
+arguments. For example:
+
+```bash
+./run-recipe.sh my-recipe --solo \
+  --default-env 'SETTING=fallback value=1' \
+  --default-env EMPTY= \
+  -e SETTING=explicit
+```
 
 The [Qwen3.8 Flash Next solo recipe](qwen3.8-flash-next-nvfp4-solo.yaml) and
 [GLM 5.3 Flash recipe](glm-5.3-flash.yaml)

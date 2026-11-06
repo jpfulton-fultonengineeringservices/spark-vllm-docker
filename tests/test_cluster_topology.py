@@ -421,6 +421,40 @@ class RecipeTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("requires NCCL_ALGO=Ring", result.stdout)
 
+    def test_recipe_ring_validation_respects_default_and_recipe_precedence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config_file = root / "test.env"
+            config_file.write_text(config() + "CONTAINER_NCCL_ALGO=Tree\n")
+            recipe = root / "recipe.yaml"
+            def write_recipe(env):
+                import yaml
+                recipe.write_text(yaml.safe_dump({
+                    "recipe_version": "1", "name": "Test", "container": "test-image",
+                    "env": env, "command": "vllm serve test -tp 4",
+                }))
+            argv = [sys.executable, str(ROOT / "run-recipe.py"), str(recipe), "--dry-run",
+                    "--config", str(config_file), "-n", ",".join(ORDER)]
+            cases = [
+                ({}, [], False),
+                ({}, ["--default-env", "NCCL_ALGO=Ring"], True),
+                ({}, ["--default-env", "NCCL_ALGO=Ring", "--default-env", "NCCL_ALGO=Tree"], False),
+                ({"NCCL_ALGO": "Ring"}, ["--default-env", "NCCL_ALGO=Tree"], True),
+                ({"NCCL_ALGO": "Tree"}, ["--default-env", "NCCL_ALGO=Ring"], False),
+                ({"NCCL_ALGO": "Tree"}, ["-e", "NCCL_ALGO=Ring", "--default-env", "NCCL_ALGO=Tree"], True),
+                ({"NCCL_ALGO": "Ring"}, ["--default-env", "NCCL_ALGO=Ring", "-e", "NCCL_ALGO=Tree"], False),
+            ]
+            for env, flags, success in cases:
+                with self.subTest(env=env, flags=flags):
+                    write_recipe(env)
+                    result = subprocess.run([*argv, *flags], capture_output=True, text=True, cwd=ROOT)
+                    self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr)
+                    if success:
+                        self.assertIn("-e NCCL_ALGO=Ring", result.stdout)
+                        self.assertIn("-e NCCL_IB_SUBNET_AWARE_ROUTING=1", result.stdout)
+                    else:
+                        self.assertIn("requires NCCL_ALGO=Ring", result.stdout)
+
     def test_cached_model_is_distributed_to_every_ring_worker(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".env") as file:
             file.write(config()); file.flush()

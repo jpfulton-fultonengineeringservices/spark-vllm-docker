@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -194,6 +195,89 @@ raise SystemExit(subprocess.run(['bash', '-c', command], env=env).returncode)
                         self.assertEqual(env[key], value)
                     self.assertEqual(call["args"][-3:], ["vllm-node", "sleep", "infinity"])
                 self.assertFalse(marker.exists())
+
+    def test_recipe_defaults_and_mod_environment_reach_all_nodes(self):
+        # Exercise the real recipe runner and launcher with only Docker/SSH mocked.
+        # The fake Docker retains each container's environment for docker exec,
+        # as Docker does when invoking a mod or the serving process.
+        for name in ("run-recipe.py", "cluster_topology.py"):
+            shutil.copy2(ROOT / name, self.fixture / name)
+        mod = self.fixture / "mods" / "fixture-mod"
+        mod.mkdir(parents=True)
+        (mod / "run.sh").write_text("#!/bin/bash\nexit 0\n")
+        recipe = self.fixture / "recipe.yaml"
+        recipe.write_text('recipe_version: "1"\nname: Test\ncontainer: test-image\n'
+                          'mods:\n  - mods/fixture-mod\nenv:\n'
+                          '  RECIPE_WINS: "recipe value=x"\n  CLI_WINS: recipe\n'
+                          'command: vllm serve test\n')
+        self.config.write_text(CLUSTER_CONFIG + "CONTAINER_RECIPE_WINS=saved\n"
+                               "CONTAINER_DEFAULT_WINS=saved\nCONTAINER_SAVED_ONLY='a b=c'\n")
+        self.write_tool("docker", """#!/usr/bin/env python3
+import json, os, pathlib, sys
+args = sys.argv[1:]
+node = os.environ.get('NETWORK_TEST_NODE', '192.0.2.1')
+state = pathlib.Path(os.environ['NETWORK_TEST_STATE']) / node
+record = {'node': node, 'args': args}
+if args[:2] == ['image', 'inspect']:
+    print('sha256:test')
+elif args[0] == 'run':
+    values = {}
+    for i, arg in enumerate(args):
+        if arg == '-e':
+            item = args[i + 1]
+            key, sep, value = item.partition('=')
+            if sep:
+                values[key] = value
+            elif key in os.environ:
+                values[key] = os.environ[key]
+            else:
+                values.pop(key, None)
+    state.write_text(json.dumps(values))
+elif args[0] == 'exec' and state.exists():
+    record['container_env'] = json.loads(state.read_text())
+elif args[0] not in ('ps', 'cp', 'stop'):
+    raise SystemExit('Unexpected Docker command: ' + repr(args))
+with open(os.environ['NETWORK_TEST_LOG'], 'a') as log:
+    log.write(json.dumps(record) + '\\n')
+""")
+        self.write_tool("ssh", """#!/usr/bin/env python3
+import os, subprocess, sys
+args = sys.argv[1:]
+while args[0] == '-o':
+    args = args[2:]
+node = args[0]
+assert node == '192.0.2.2', node
+command = ' '.join(args[1:])
+env = dict(os.environ, NETWORK_TEST_NODE=node)
+if command == 'true' or command.startswith(('mkdir -p ', 'rm -rf ', 'rm -f ')):
+    raise SystemExit(0)
+raise SystemExit(subprocess.run(['bash', '-c', command], env=env).returncode)
+""")
+        self.write_tool("scp", "#!/bin/bash\nexit 0\n")
+        self.log.write_text("")
+        env = {**self.env, "NETWORK_TEST_STATE": str(self.fixture)}
+        command = [sys.executable, str(self.fixture / "run-recipe.py"), str(recipe),
+                   "--config", str(self.config), "--no-cache-dirs", "-d",
+                   "--default-env", "RECIPE_WINS=default", "--default-env", "DEFAULT_WINS=old",
+                   "--default-env", "DEFAULT_WINS=default value=x", "--default-env", "EMPTY=",
+                   "-e", "CLI_WINS=explicit", "--default-env", "CLI_WINS=default"]
+        result = subprocess.run(command, cwd=self.fixture, env=env, capture_output=True,
+                                text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        runs = [call for call in calls if call["args"][0] == "run"]
+        mods = [call for call in calls if call["args"][0] == "exec"
+                and any("./run.sh" in arg for arg in call["args"])]
+        serve = [call for call in calls if call["args"][0] == "exec"
+                 and any("exec-script.sh" in arg for arg in call["args"])]
+        expected = {"RECIPE_WINS": "recipe value=x", "DEFAULT_WINS": "default value=x",
+                    "SAVED_ONLY": "a b=c", "CLI_WINS": "explicit", "EMPTY": ""}
+        for group in (runs, mods, serve):
+            self.assertEqual({call["node"] for call in group}, {"192.0.2.1", "192.0.2.2"})
+            for call in group:
+                actual = self.container_env(call) if group is runs else call["container_env"]
+                for key, value in expected.items():
+                    self.assertEqual(actual[key], value)
 
     def test_cluster_keeps_per_node_addresses_and_rdma(self):
         for ray in (False, True):

@@ -205,11 +205,46 @@ class EnvironmentTests(unittest.TestCase):
         self.assertEqual(self.env_args(shlex.split(launch_line.rstrip(" \\"))), actual)
         self.assertNotIn("export ", output)
 
-    def test_bare_cli_variable_replaces_recipe_assignment(self):
-        _, launched = self.run_recipe("-e", "VLLM_PLE_TABLE_MEMORY")
+    def test_default_env_precedence_and_dry_run_match_in_all_modes(self):
+        # Interleave options deliberately: precedence is by layer, not position.
+        flags = ("-e", "B12X_DISK_BACKEND=first", "--default-env", "B12X_DISK_BACKEND=default",
+                 "--default-env", "VLLM_PLE_TABLE_MEMORY=orchestrator",
+                 "--default-env", "DEFAULT_ONLY=first", "-e", "B12X_DISK_BACKEND=final",
+                 "--default-env", "DEFAULT_ONLY=a b=c", "--default-env", "EMPTY_DEFAULT=",
+                 "--default-env", "JSON_VALUE=ignored", "--default-env", "NUMERIC=ignored")
+        expected = {**self.defaults, "B12X_DISK_BACKEND": "final",
+                    "DEFAULT_ONLY": "a b=c", "EMPTY_DEFAULT": ""}
+        for mode in (("--solo",), ("-n", "192.0.2.1,192.0.2.2"),
+                     ("-n", "192.0.2.1,192.0.2.2", "--ray")):
+            with self.subTest(mode=mode):
+                _, launched = self.run_recipe(*flags, mode=mode)
+                actual = self.env_args(launched["args"])
+                self.assertCountEqual(actual, [f"{key}={value}" for key, value in expected.items()])
+                output, dry_launch = self.run_recipe("--dry-run", *flags, mode=mode)
+                self.assertEqual(dry_launch, {})
+                launch_line = next(line for line in output.splitlines() if line.startswith("   ./launch-cluster.sh"))
+                self.assertEqual(self.env_args(shlex.split(launch_line.rstrip(" \\"))), actual)
+
+    def test_bare_cli_variable_replaces_recipe_and_default_assignments(self):
+        _, launched = self.run_recipe("--default-env", "VLLM_PLE_TABLE_MEMORY=default",
+                                      "--default-env", "DEFAULT_ONLY=default",
+                                      "-e", "VLLM_PLE_TABLE_MEMORY", "-e", "DEFAULT_ONLY")
         actual = self.env_args(launched["args"])
         self.assertIn("VLLM_PLE_TABLE_MEMORY", actual)
+        self.assertIn("DEFAULT_ONLY", actual)
         self.assertNotIn("VLLM_PLE_TABLE_MEMORY=shared", actual)
+        self.assertNotIn("DEFAULT_ONLY=default", actual)
+
+    def test_default_env_rejects_missing_assignment_or_key(self):
+        for assignment in ("BARE", "=value"):
+            with self.subTest(assignment=assignment), \
+                    patch.object(sys, "argv", ["run-recipe.py", str(self.recipe), "--solo",
+                                               "--default-env", assignment]), \
+                    contextlib.redirect_stderr(io.StringIO()) as error:
+                with self.assertRaises(SystemExit) as result:
+                    runner.main()
+                self.assertEqual(result.exception.code, 2)
+                self.assertIn("must be KEY=VALUE", error.getvalue())
 
     def test_missing_empty_and_null_recipe_environment_allow_cli_variables(self):
         recipe = runner.yaml.safe_load(self.recipe.read_text())
@@ -222,6 +257,93 @@ class EnvironmentTests(unittest.TestCase):
                 self.recipe.write_text(runner.yaml.safe_dump(recipe))
                 _, launched = self.run_recipe("-e", "CLI_ONLY=value")
                 self.assertEqual(self.env_args(launched["args"]), ["CLI_ONLY=value"])
+
+
+class FesEvalTests(unittest.TestCase):
+    def test_wrapper_defaults_recipe_values_and_explicit_overrides(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "scripts").mkdir()
+            (root / "recipes").mkdir()
+            (root / "mods/fes-weights").mkdir(parents=True)
+            import shutil
+            shutil.copy2(ROOT / "scripts/fes-eval.sh", root / "scripts/fes-eval.sh")
+            shutil.copy2(ROOT / "run-recipe.py", root / "run-recipe.py")
+            shutil.copy2(ROOT / "cluster_topology.py", root / "cluster_topology.py")
+            (root / "mods/fes-weights/verify.py").write_text("import sys\nsys.exit(0)\n")
+            (root / "run-recipe.sh").write_text('#!/bin/bash\nexec python3 "$(dirname "$0")/run-recipe.py" "$@"\n')
+            (root / "run-recipe.sh").chmod(0o755)
+            recipe = {"recipe_version": "1", "name": "FES test", "container": "test",
+                      "model": "org/model", "command": "vllm serve test",
+                      "env": {"FES_WEIGHTS_ENABLED": "recipe enabled", "FES_WEIGHTS_DIR": "/recipe path",
+                              "FES_HUB_MODEL": "recipe/model", "HF_HUB_OFFLINE": "0"}}
+            recipe_path = root / "recipes/test.yaml"
+            recipe_path.write_text(runner.yaml.safe_dump(recipe))
+            base = ["bash", str(root / "scripts/fes-eval.sh"), "--weights-root", str(root / "weights space"),
+                    "--hub-model", "wrapper/model", "test", "slug", "--solo", "--config", "/dev/null", "--dry-run"]
+            for explicit in (False, True):
+                flags = ["-e", "FES_WEIGHTS_ENABLED=override", "-e", "FES_WEIGHTS_DIR=/override path",
+                         "-e", "FES_HUB_MODEL=override/model", "-e", "HF_HUB_OFFLINE=override"] if explicit else []
+                result = subprocess.run([*base, *flags], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                line = next(line for line in result.stdout.splitlines() if line.startswith("   ./launch-cluster.sh"))
+                actual = dict(item.split("=", 1) for item in EnvironmentTests.env_args(shlex.split(line.rstrip(" \\"))))
+                expected = dict(item.split("=", 1) for item in flags[1::2]) if explicit else recipe["env"]
+                for key, value in expected.items():
+                    self.assertEqual(actual[key], value)
+            recipe.pop("env")
+            recipe_path.write_text(runner.yaml.safe_dump(recipe))
+            result = subprocess.run(base, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            line = next(line for line in result.stdout.splitlines() if line.startswith("   ./launch-cluster.sh"))
+            actual = dict(item.split("=", 1) for item in EnvironmentTests.env_args(shlex.split(line.rstrip(" \\"))))
+            self.assertEqual(actual, {"FES_WEIGHTS_ENABLED": "1", "FES_WEIGHTS_DIR": "/model",
+                                      "FES_HUB_MODEL": "wrapper/model", "HF_HUB_OFFLINE": "1"})
+
+
+class Coder390ActivationTests(unittest.TestCase):
+    def test_activation_is_recipe_owned_and_explicit_env_still_wins(self):
+        cases = [
+            ("qwen3.8-27b-coder390-2x-store-l2", 2, "MOONCAKE_L2_ENABLED", "mods/mooncake-store-l2"),
+            ("qwen3.8-27b-coder390-4x-store-l2", 4, "MOONCAKE_L2_ENABLED", "mods/mooncake-store-l2"),
+            ("qwen3.8-27b-coder390-2x-store-l2-mtp", 2, "MOONCAKE_L2_ENABLED", "mods/mooncake-store-l2"),
+            ("qwen3.8-27b-coder390-4x-store-l2-mtp", 4, "MOONCAKE_L2_ENABLED", "mods/mooncake-store-l2"),
+            ("qwen3.8-27b-coder390-2x-lmcache-l2", 2, "LMCACHE_MP_ENABLED", "mods/lmcache-mp-engine"),
+        ]
+        for name, node_count, key, mod in cases:
+            recipe_path = ROOT / "recipes" / f"{name}.yaml"
+            recipe = runner.load_recipe(recipe_path)
+            self.assertEqual(recipe["env"][key], "1", name)
+            self.assertIn(mod, recipe["mods"], name)
+            nodes = ",".join(f"192.0.2.{i}" for i in range(1, node_count + 1))
+            for explicit in (False, True):
+                with self.subTest(recipe=name, explicit=explicit):
+                    flags = ["--default-env", f"{key}=0"]
+                    if explicit:
+                        flags += ["-e", f"{key}=0"]
+                    argv = ["run-recipe.py", str(recipe_path), "--config", "/dev/null",
+                            "-n", nodes, *flags]
+                    output = io.StringIO()
+                    with patch.object(sys, "argv", argv), contextlib.redirect_stdout(output), \
+                            patch.object(runner, "ENV_FILE", None), \
+                            patch.object(runner, "check_model_exists", return_value=True), \
+                            patch.object(runner, "check_image_exists", return_value=True), \
+                            patch.object(runner.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as launch:
+                        self.assertEqual(runner.main(), 0, output.getvalue())
+                    actual = EnvironmentTests.env_args(launch.call_args.args[0])
+                    self.assertIn(f"{key}={0 if explicit else 1}", actual)
+                    with patch.object(sys, "argv", [*argv, "--dry-run"]), \
+                            contextlib.redirect_stdout(io.StringIO()) as dry:
+                        self.assertEqual(runner.main(), 0, dry.getvalue())
+                    launch_line = next(line for line in dry.getvalue().splitlines()
+                                       if line.startswith("   ./launch-cluster.sh"))
+                    self.assertEqual(EnvironmentTests.env_args(shlex.split(launch_line.rstrip(" \\"))), actual)
+
+    def test_plain_recipes_do_not_declare_relocation_guard(self):
+        for nodes in (2, 4):
+            recipe = runner.load_recipe(ROOT / "recipes" / f"qwen3.8-27b-coder390-{nodes}x.yaml")
+            self.assertNotIn("MAMBA_SPEC_RELOCATE_GUARD", recipe.get("env") or {})
+            self.assertNotIn("mods/mamba-spec-relocate-guard", recipe.get("mods") or [])
 
 
 if __name__ == "__main__":

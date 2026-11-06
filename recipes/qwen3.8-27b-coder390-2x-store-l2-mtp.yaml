@@ -100,6 +100,7 @@ env:
   # Long-context YaRN: permit --max-model-len above the 262144 native cap.
   VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
   # --- durable Mooncake store L2 ---
+  MOONCAKE_L2_ENABLED: "1"
   MOONCAKE_WORKER_P2P: "skip"
   MOONCAKE_CONFIG_PATH: "/tmp/mooncake-store.json"
   PYTHONHASHSEED: "0"

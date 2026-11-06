@@ -102,9 +102,7 @@ mods:
   # full/linear-attention layer accounting, and a GatedDeltaNet (GDN) FLOPs
   # component. Without it this hybrid model bills all 64 layers as attention
   # and drops the attention/FFN components from MFU under modelopt_mixed.
-  # FIX_MFU_METRICS below is the activation flag (mods cannot read recipe
-  # env directly; the env block is written into /workspace/exec-script.sh,
-  # which the mod greps at apply time).
+  # FIX_MFU_METRICS below is passed to the container and activates the mod.
   - mods/fix-mfu-metrics
 
 # enable_lookup=true (see --kv-transfer-config below). History: the first
@@ -189,19 +187,17 @@ env:
   # (same as the base recipe).
   VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
   # --- durable Mooncake store L2 -----------------------------------------
-  # Store-only connector set (no P2P topology for a single-instance serve).
+  # Activate the store mod in each container; no P2P for a single-instance serve.
+  MOONCAKE_L2_ENABLED: "1"
   MOONCAKE_WORKER_P2P: "skip"
-  # Path the mod renders; the serve exec reads it from this exec-script.
+  # Path the mod renders and the serving process reads from its environment.
   MOONCAKE_CONFIG_PATH: "/tmp/mooncake-store.json"
   # Stable content-hash keys across restarts (same lineage as the
   # mooncake-store templates).
   PYTHONHASHSEED: "0"
-  # Activate mods/mamba-spec-relocate-guard (mods cannot see recipe env, so
-  # the launcher also injects this as a container -e).
+  # Activate mods/mamba-spec-relocate-guard via the container environment.
   MAMBA_SPEC_RELOCATE_GUARD: "1"
-  # Activate mods/fix-mfu-metrics: run-recipe.py renders this into
-  # /workspace/exec-script.sh before launch-cluster.sh applies mods, and the
-  # mod greps that script to self-activate.
+  # Activate mods/fix-mfu-metrics via the container environment.
   FIX_MFU_METRICS: "1"
   # GC lease on batch_get offload buffers (ms); must outlive a NAS read of a
   # full 2 GiB staged chunk (~9.5 s at ~225 MB/s).

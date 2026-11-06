@@ -106,9 +106,7 @@ mods:
   # full/linear-attention layer accounting, and a GatedDeltaNet (GDN) FLOPs
   # component. Without it this hybrid model bills all 64 layers as attention
   # and drops the attention/FFN components from MFU under modelopt_mixed.
-  # FIX_MFU_METRICS below is the activation flag (mods cannot read recipe
-  # env directly; the env block is written into /workspace/exec-script.sh,
-  # which the mod greps at apply time).
+  # FIX_MFU_METRICS below is passed to the container and activates the mod.
   - mods/fix-mfu-metrics
 
 # Backend id consumed by cluster-config spark-serve.sh's lmcache-ext arm
@@ -156,6 +154,8 @@ env:
   TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
   # Long-context YaRN: permit --max-model-len above 262144 native cap.
   VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
+  # Activate the LMCache MP engine mod in each container.
+  LMCACHE_MP_ENABLED: "1"
   # Stable content-hash keys across restarts (the MP server hashes the same
   # PYTHONHASHSEED=0 side; the lmcache-server entrypoint already sets it).
   PYTHONHASHSEED: "0"
@@ -168,12 +168,9 @@ env:
   # chunk. Any future mamba-align model with a different resolved block
   # size must override this.
   LMCACHE_CHUNK_SIZE: "1648"
-  # Activate mods/mamba-spec-relocate-guard (mods cannot read recipe env, so
-  # the launcher injects the container -e).
+  # Activate mods/mamba-spec-relocate-guard via the container environment.
   MAMBA_SPEC_RELOCATE_GUARD: "1"
-  # Activate mods/fix-mfu-metrics: run-recipe.py renders this into
-  # /workspace/exec-script.sh before launch-cluster.sh applies mods, and the
-  # mod greps that script to self-activate.
+  # Activate mods/fix-mfu-metrics via the container environment.
   FIX_MFU_METRICS: "1"
 
 # The drafter's FP8 quantization is auto-detected from its own config.json's

@@ -138,6 +138,13 @@ def runtime_vllm_pr_reference(value: str) -> str:
     )
 
 
+def default_env_assignment(value: str) -> str:
+    """Require an explicit assignment while retaining its value verbatim."""
+    if "=" not in value or not value.split("=", 1)[0]:
+        raise argparse.ArgumentTypeError("must be KEY=VALUE with a non-empty KEY")
+    return value
+
+
 class OrderedLaunchLayerAction(argparse.Action):
     """Collect a repeatable launch layer while preserving mixed CLI ordering."""
 
@@ -1012,6 +1019,14 @@ Examples:
         help="NCCL debug level",
     )
     launch_group.add_argument(
+        "--default-env",
+        action="append",
+        type=default_env_assignment,
+        default=[],
+        metavar="KEY=VALUE",
+        help="Container environment default (below recipe env and -e). Repeatable; last value wins.",
+    )
+    launch_group.add_argument(
         "-e",
         "--env",
         action="append",
@@ -1247,9 +1262,13 @@ Examples:
     model = recipe.get("model")
     build_args = recipe.get("build_args", [])
 
-    # Keep Docker's -e syntax (including bare names), with the last CLI value
-    # replacing any recipe default for that variable.
-    container_env = {str(key): f"{key}={value}" for key, value in (recipe.get("env") or {}).items()}
+    # Saved CONTAINER_* values are passed separately by launch-cluster.sh.
+    # Layer defaults below recipe env, then explicit CLI -e (including bare
+    # names), regardless of the order in which the options were supplied.
+    container_env = {}
+    for env_var in args.default_env:
+        container_env[env_var.split("=", 1)[0]] = env_var
+    container_env.update({str(key): f"{key}={value}" for key, value in (recipe.get("env") or {}).items()})
     for env_var in args.env_vars:
         container_env[env_var.split("=", 1)[0]] = env_var
 
