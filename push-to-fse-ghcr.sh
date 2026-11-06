@@ -20,7 +20,9 @@ Versioned tags use IMAGE-YYYYMMDD-N (UTC). Pull retags locally as IMAGE:latest.
 Rail A address 10.100.170.3:5000; override with FSE_CLUSTER_REGISTRY=HOST:PORT.
 --insecure-cluster skips TLS verification for catalog requests, not Docker.
 --new-package acknowledges a GHCR 404 when publishing a new package.
-Cross-machine publishing must use a single writer.
+Push refreshes a stored gh token if its reported scopes lack write:packages;
+Docker's separate GHCR login may also need updating. Cross-machine publishing
+must use a single writer.
 EOF
 }
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
@@ -66,6 +68,60 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+ensure_package_write_scope() {
+    local status_file="$work/gh-auth-status" scopes
+    if ! gh auth status --hostname github.com --active > "$status_file" 2>&1; then
+        # Older gh versions do not recognize --active. Do not interpret a
+        # multi-account status report as the credentials actually in use.
+        if grep -Eq 'unknown (flag|option).*--active' "$status_file"; then
+            if ! gh auth status --hostname github.com > "$status_file" 2>&1; then
+                fail 'GitHub CLI authentication failed; run gh auth status and authenticate before pushing'
+            fi
+            if [[ $(grep -c '[Tt]oken scopes:' "$status_file" || true) -gt 1 ]]; then
+                printf '%s\n' 'Warning: older gh reports multiple accounts; cannot identify active token scopes. Verify write:packages manually.' >&2
+                return
+            fi
+        else
+            fail 'GitHub CLI authentication failed; run gh auth status and authenticate before pushing'
+        fi
+    fi
+    # Never log the status: some environments customize it.
+    scopes=$(sed -n '/[Tt]oken scopes:/p' "$status_file" | head -1)
+    if [[ -z "$scopes" ]]; then
+        printf '%s\n' 'Warning: GitHub CLI did not report token scopes; cannot verify write:packages. Environment-provided or fine-grained tokens may require manual permissions.' >&2
+        return
+    fi
+    if printf '%s\n' "$scopes" | grep -Eq '(^|[^[:alnum:]_:-])write:packages([^[:alnum:]_:-]|$)'; then
+        return
+    fi
+    if printf '%s\n' "$scopes" | grep -Eiq '(^|[^[:alnum:]_])\(?((none)|(unknown))\)?([^[:alnum:]_]|$)'; then
+        printf '%s\n' 'Warning: token scopes are unavailable; cannot verify write:packages. Confirm package write access manually.' >&2
+        return
+    fi
+    if [[ -n "${GH_TOKEN:-}" || -n "${GITHUB_TOKEN:-}" ]]; then
+        fail 'GH_TOKEN/GITHUB_TOKEN lacks write:packages; gh cannot refresh environment tokens. Supply a token with package write access.'
+    fi
+    if [[ ! -t 0 || ! -t 2 ]]; then
+        fail 'GitHub token lacks write:packages; run interactively: gh auth refresh --hostname github.com --scopes write:packages'
+    fi
+    printf '%s\n' 'GitHub token lacks write:packages; starting the GitHub CLI authorization refresh.' >&2
+    gh auth refresh --hostname github.com --scopes write:packages \
+        || fail 'GitHub authorization refresh failed; no image was pushed'
+    if ! gh auth status --hostname github.com --active > "$status_file" 2>&1; then
+        if ! grep -Eq 'unknown (flag|option).*--active' "$status_file" || \
+           ! gh auth status --hostname github.com > "$status_file" 2>&1; then
+            fail 'GitHub authentication failed after refresh; no image was pushed'
+        fi
+        if [[ $(grep -c '[Tt]oken scopes:' "$status_file" || true) -gt 1 ]]; then
+            fail 'Cannot verify the active account after refresh; no image was pushed'
+        fi
+    fi
+    scopes=$(sed -n '/[Tt]oken scopes:/p' "$status_file" | head -1)
+    if [[ -z "$scopes" ]] || ! printf '%s\n' "$scopes" | grep -Eq '(^|[^[:alnum:]_:-])write:packages([^[:alnum:]_:-]|$)'; then
+        fail 'GitHub CLI did not confirm write:packages after refresh; no image was pushed'
+    fi
+}
 
 # All gh output is buffered and validated before any tag is used.
 gh_tags() {
@@ -137,6 +193,7 @@ if [[ "$cmd" == push ]]; then
     lock="${TMPDIR:-/tmp}/fse-ghcr-${USER:-$(id -u)}-${base}.lock"
     if ! mkdir "$lock" 2>/dev/null; then lock=''; fail 'another local publisher holds the lock (or lock cannot be created)'; fi
     docker image inspect "$local_image" >/dev/null || fail "local image not found: $local_image"
+    ensure_package_write_scope
 fi
 gh_tags "$new_package"
 if [[ "$cluster" == 1 ]]; then cluster_tags; else : > "$work/cluster.tags"; fi

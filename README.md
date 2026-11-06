@@ -1862,7 +1862,13 @@ Use the same simple name passed to `build-and-copy.sh -t`:
 ```
 
 The publisher requires `gh`, `jq`, Docker, GHCR access, and a Docker GHCR
-login. It uses UTC tags `<name>-YYYYMMDD-N`, allocating N from zero. `pull`
+login. Before pushing, it checks reported GitHub CLI token scopes and starts
+`gh auth refresh --hostname github.com --scopes write:packages` interactively
+when that scope is missing. In noninteractive sessions, refresh beforehand.
+Environment-supplied and fine-grained tokens may need permissions configured
+outside `gh`; unreported scopes cannot be verified. Refreshing `gh` credentials
+does not update Docker's separate GHCR login, which must also have package-write
+access. The publisher uses UTC tags `<name>-YYYYMMDD-N`, allocating N from zero. `pull`
 retags the selected image locally as `<name>:latest`; provide a dated tag to
 select a specific version. Only simple names and optional `:latest` are accepted.
 

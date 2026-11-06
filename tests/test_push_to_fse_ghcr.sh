@@ -5,6 +5,31 @@ T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 mkdir "$T/bin"; export TEST_ROOT="$T" TMPDIR="$T"
 cat > "$T/bin/gh" <<'SH'
 #!/bin/bash
+printf '%s\n' "$*" >> "$TEST_ROOT/gh.log"
+if [ "${1:-}" = auth ] && [ "${2:-}" = status ]; then
+    [ "${AUTH_FAIL:-0}" != 1 ] || exit 1
+    if [ "${OLD_GH:-0}" = 1 ]; then
+        for arg in "$@"; do [ "$arg" != --active ] || { echo 'unknown flag: --active' >&2; exit 1; }; done
+    fi
+    if [ "${MULTI_ACCOUNTS:-0}" = 1 ]; then
+        echo "  - Token scopes: 'repo', 'write:packages'"
+        echo "  - Token scopes: 'repo'"
+        exit 0
+    fi
+    if [ "${NO_SCOPES:-0}" = 1 ]; then echo 'Logged in to github.com'; exit 0; fi
+    if [ "${SCOPE_NONE:-0}" = 1 ]; then echo '  - Token scopes: none'; exit 0; fi
+    if [ "${MISSING_SCOPE:-0}" = 1 ] && [ ! -f "$TEST_ROOT/refreshed" ]; then
+        echo "  - Token scopes: 'repo', 'read:org'"
+    else
+        echo "  - Token scopes: 'repo', 'read:org', 'write:packages'"
+    fi
+    exit 0
+fi
+if [ "${1:-}" = auth ] && [ "${2:-}" = refresh ]; then
+    [ "${REFRESH_FAIL:-0}" != 1 ] || exit 1
+    if [ "${REFRESH_NO_SCOPE:-0}" != 1 ]; then touch "$TEST_ROOT/refreshed"; fi
+    exit 0
+fi
 for arg in "$@"; do
     if [ "$arg" = --slurp ]; then echo 'unknown flag: --slurp' >&2; exit 1; fi
 done
@@ -73,6 +98,46 @@ for invalid in 'host' 'bad/host:5000' 'host:0' 'host:65536'; do
     [ ! -s "$T/docker.log" ] || fail invalid-registry-docker
 done
 if "$script" push vllm-node:dev >/dev/null 2>&1; then fail nonlatest; fi
+: > "$T/gh.log"; : > "$T/docker.log"
+if MISSING_SCOPE=1 "$script" push vllm-node > "$T/failure" 2>&1; then fail missing-scope-noninteractive; fi
+grep -q 'gh auth refresh --hostname github.com --scopes write:packages' "$T/failure" || fail missing-scope-guidance
+! grep -q '^push ' "$T/docker.log" || fail missing-scope-pushed
+! grep -q '^auth refresh' "$T/gh.log" || fail noninteractive-refresh
+if MISSING_SCOPE=1 GH_TOKEN=env-token "$script" push vllm-node > "$T/failure" 2>&1; then fail env-token-missing-scope; fi
+grep -q 'cannot refresh environment tokens' "$T/failure" || fail env-token-guidance
+if AUTH_FAIL=1 "$script" push vllm-node > "$T/failure" 2>&1; then fail auth-status; fi
+NO_SCOPES=1 "$script" push vllm-node > "$T/noscope" 2>&1 || fail scope-unknown
+grep -q 'did not report token scopes' "$T/noscope" || fail scope-unknown-warning
+SCOPE_NONE=1 "$script" push vllm-node > "$T/noscope" 2>&1 || fail scope-none
+grep -q 'token scopes are unavailable' "$T/noscope" || fail scope-none-warning
+OLD_GH=1 "$script" push vllm-node > "$T/old-gh" 2>&1 || fail old-gh-auth
+OLD_GH=1 MULTI_ACCOUNTS=1 "$script" push vllm-node > "$T/multi" 2>&1 || fail old-gh-multi
+grep -q 'cannot identify active token scopes' "$T/multi" || fail old-gh-multi-warning
+if command -v expect >/dev/null 2>&1; then
+    cat > "$T/run-in-pty.exp" <<'EXP'
+set timeout 20
+set mode [lindex $argv 0]
+set script [lindex $argv 1]
+set ::env(MISSING_SCOPE) 1
+set ::env(REFRESH_FAIL) [expr {$mode eq "refresh-fail"}]
+set ::env(REFRESH_NO_SCOPE) [expr {$mode eq "refresh-no-scope"}]
+spawn -noecho $script push vllm-node
+expect eof
+set result [wait]
+exit [lindex $result 3]
+EXP
+    rm -f "$T/refreshed"; : > "$T/gh.log"; : > "$T/docker.log"
+    expect "$T/run-in-pty.exp" success "$script" > "$T/pty" 2>&1 || fail interactive-refresh
+grep -q '^auth refresh --hostname github.com --scopes write:packages$' "$T/gh.log" || fail refresh-not-run
+    grep -q '^push ' "$T/docker.log" || fail refresh-no-push
+    for mode in refresh-fail refresh-no-scope; do
+        rm -f "$T/refreshed"; : > "$T/docker.log"
+        if expect "$T/run-in-pty.exp" "$mode" "$script" > "$T/pty" 2>&1; then fail "$mode-accepted"; fi
+        ! grep -q '^push ' "$T/docker.log" || fail "$mode-pushed"
+    done
+else
+    echo 'SKIP: interactive refresh tests require expect' >&2
+fi
 if GH_FAIL=1 "$script" push vllm-node >/dev/null 2>&1; then fail 404; fi
 GH_FAIL=1 "$script" push vllm-node --new-package >/dev/null 2>&1 || fail new-package
 : > "$T/docker.log"
