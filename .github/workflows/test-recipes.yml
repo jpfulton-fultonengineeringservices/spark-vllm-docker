@@ -19,8 +19,14 @@ on:
       - 'hf-cache.py'
       - 'recipes/**'
       - 'mods/fix-qwen3-next-autoround/**'
+      - 'mods/fix-explicit-spec-method/**'
+      - 'mods/qwen3.8-coder390-mtp/**'
+      - 'mods/qwen3.8-coder390-mrope-yarn/**'
       - 'mods/memory-profile/**'
       - 'mods/b12x-kernel-cache/**'
+      - 'tests/test_explicit_spec_method_mod.py'
+      - 'tests/test_qwen38_coder390_mtp_sampling.py'
+      - 'tests/test_qwen38_mrope_yarn_mod.py'
       - '.github/workflows/test-recipes.yml'
   pull_request:
     paths:
@@ -39,6 +45,8 @@ on:
       - 'hf-cache.py'
       - 'recipes/**'
       - 'mods/fix-qwen3-next-autoround/**'
+      - 'mods/fix-explicit-spec-method/**'
+      - 'mods/qwen3.8-coder390-mtp/**'
       - 'mods/memory-profile/**'
       - 'mods/b12x-kernel-cache/**'
       - 'tests/**'
@@ -64,7 +72,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pyyaml 'matplotlib>=3.6'
+        pip install pyyaml 'matplotlib>=3.6' torch
     
     - name: Make scripts executable
       run: |
@@ -77,6 +85,15 @@ jobs:
     
     - name: Test Qwen3-Next AutoRound compatibility mod
       run: python3 tests/test_qwen3_next_autoround_mod.py
+
+    - name: Test explicit speculative method mod
+      run: python3 tests/test_explicit_spec_method_mod.py
+
+    - name: Test Qwen3.8 Coder390 MTP sampling mod
+      run: python3 tests/test_qwen38_coder390_mtp_sampling.py
+
+    - name: Test Qwen3.8 MRoPE YaRN mod
+      run: python3 tests/test_qwen38_mrope_yarn_mod.py
 
     - name: Test Hugging Face cache ownership repair
       run: python3 tests/test_hf_download_permissions.py

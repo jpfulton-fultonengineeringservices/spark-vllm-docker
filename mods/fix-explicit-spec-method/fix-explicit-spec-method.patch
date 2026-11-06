@@ -1,12 +1,42 @@
 diff --git a/vllm/config/speculative.py b/vllm/config/speculative.py
 --- a/vllm/config/speculative.py
 +++ b/vllm/config/speculative.py
-@@ -1354,7 +1354,7 @@ class SpeculativeConfig:
-                 )
- 
+@@ -1451,6 +1451,10 @@
                  # Automatically detect the method
--                if self.method in ("eagle", "eagle3", "dflash", "dspark"):
-+                if self.method in ("eagle", "eagle3", "dflash", "dspark", "mtp"):
+                 if self.method in ("eagle", "eagle3", "dflash", "dspark"):
                      pass
++                elif self.method == "mtp" and (
++                    self.draft_model_config.hf_config.model_type in get_args(MTPModelTypes)
++                ):
++                    pass
                  # examples:
                  # yuhuili/EAGLE-LLaMA3-Instruct-8B
+                 # yuhuili/EAGLE3-LLaMA3.1-Instruct-8B
+@@ -1485,6 +1489,14 @@
+                     MTPModelTypes
+                 ):
+                     self.method = "mtp"
++                elif self.method == "draft_model":
++                    pass
++                else:
++                    raise NotImplementedError(
++                        f"Unsupported speculative method: '{self.method}'"
++                    )
++
++                if self.method == "mtp":
+                     if (
+                         self.target_model_config is not None
+                         and self.target_model_config.hf_config.model_type
+@@ -1508,12 +1520,6 @@
+                             "multiple times of forward on same MTP layer"
+                             ",which may result in lower acceptance rate"
+                         )
+-                elif self.method == "draft_model":
+-                    pass
+-                else:
+-                    raise NotImplementedError(
+-                        f"Unsupported speculative method: '{self.method}'"
+-                    )
+
+                 if self.method in ("eagle", "eagle3"):
+                     # EAGLE drafts share the target's positional space; a

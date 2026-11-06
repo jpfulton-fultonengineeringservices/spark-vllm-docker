@@ -1,5 +1,46 @@
 # Qwen3.8-27B-Coder390-DFlash2: empty content from reasoning-budget starvation
 
+## MTP mod sampling policy
+
+The MTP recipe has a separate existing server-side policy in
+`mods/qwen3.8-coder390-mtp/run.sh`. For both chat and text completions it
+overrides request values and model defaults with temperature `1.0`, top-p
+`0.95`, top-k `20`, and repetition penalty `1.10`. It also replaces the
+request's thinking budget: with no effective generation cap it uses 32768;
+at 340 tokens or less it uses 0; otherwise it uses
+`min(32768, max(max_tokens * 75 // 100, max_tokens - 256))`. The input to
+that calculation is the effective `max_tokens` argument to vLLM's
+`to_sampling_params`, not the raw request field. Other sampling defaults
+retain vLLM's normal request-over-model precedence.
+
+This is the existing MTP policy, not a conclusion that the repetition penalty
+fixes DFlash's observed empty-content symptom. The investigation below has a
+different scope and explicitly reports the limitations of that evidence.
+The MTP patch targets the explicit-local protocol layout observed in image
+`sha256:c34501ebfa793ce49408a72e559e70b765fd1e28e1f6012370a744635340cc02`;
+it fails at startup if either protocol cannot be found or its sampling
+forwarding layout differs, rather than silently serving without the policy.
+
+To validate both actual vLLM request classes without touching a serving
+container or real weights, from the repository root on the image host run:
+
+```sh
+docker run --rm --user 0:0 --entrypoint bash \
+  -v "$PWD/mods/qwen3.8-coder390-mtp:/repo/mods/qwen3.8-coder390-mtp:ro" \
+  -v "$PWD/tests/test_qwen38_coder390_mtp_sampling.py:/repo/tests/test_qwen38_coder390_mtp_sampling.py:ro" \
+  sha256:c34501ebfa793ce49408a72e559e70b765fd1e28e1f6012370a744635340cc02 \
+  -c 'QWEN_MTP_REAL_VLLM=1 python3 /repo/tests/test_qwen38_coder390_mtp_sampling.py'
+```
+
+The opt-in test creates a minimal disposable checkpoint, applies the mod twice
+inside the temporary container, and calls both real `ChatCompletionRequest`
+and `CompletionRequest` `to_sampling_params` methods with conflicting client
+and model defaults and several generation caps. It does not start an engine or
+change the live service. The offline regression alone runs with
+`python3 tests/test_qwen38_coder390_mtp_sampling.py`.
+
+## DFlash investigation
+
 Status: **partially root-caused; the reported loop itself is still
 unreproduced.** Two distinct things were conflated during this investigation
 and must be kept separate:

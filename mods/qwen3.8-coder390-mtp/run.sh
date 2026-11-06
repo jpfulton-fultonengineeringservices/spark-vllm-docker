@@ -34,9 +34,9 @@
 #    entries into the shim's hf_quant_config.json (replacing the symlink with
 #    a real patched file -- /model itself is read-only).
 #
-# 3. The same publisher sampling envelope + thinking_token_budget gate as the
-#    dflash mod (publisher-confirmed sampling defaults; identical values,
-#    idempotent against the dflash mod's mark).
+# 3. Force the MTP sampling policy and thinking_token_budget at vLLM's
+#    chat/completion sampling boundary, after request and model defaults
+#    have been resolved. Unsupported protocol layouts are a hard failure.
 
 set -euo pipefail
 
@@ -207,9 +207,10 @@ PY
 # --- Force publisher sampling envelope at the sampling-param layer ---
 # This checkpoint ships generation_config.json with do_sample=true,
 # temperature=1.0, top_p=0.95, top_k=20 and NO repetition penalty.
-# Agent/tool-calling clients send temperature=0 (greedy), which is out of the
-# validated envelope and triggers the "fails to stop" reasoning degeneracy
-# documented in docs/qwen38-coder390-degenerate-repetition.md.
+# Agent/tool-calling clients may send temperature=0 (greedy), outside the
+# publisher's envelope. This MTP mod also retains its existing 1.10 repetition
+# penalty and thinking-token budget; see the separate DFlash investigation in
+# docs/qwen38-coder390-degenerate-repetition.md for the limits of that evidence.
 #
 # Force the publisher's envelope at the sampling-param layer
 # (to_sampling_params) so it applies to ALL callers - LiteLLM, direct :8000,
@@ -218,71 +219,49 @@ PY
 # before the Sampler sees them; clamping at the business/tool-call layer is
 # partial and leaves other entry paths unprotected.
 #
-# Idempotent: re-running on an already-patched wheel is a no-op (MARK check).
+# Both protocols must match and compile before either file is written.
+# Re-running on a matching patched wheel is a no-op.
 python3 - <<'PY'
 import importlib.util
 import sys
 
-MARK = "[qwen3.8-coder390-mtp] Force publisher sampling envelope"
-LEGACY_MARK = "[qwen3.8-coder390-dflash] Force publisher sampling envelope"
-ANCHOR = (
-    "            for name, default in self._DEFAULT_SAMPLING_PARAMS.items()\n"
-    "        }\n"
-    "\n"
-    "        # Merge server-default stop_token_ids"
+PREFIX = "[qwen3.8-coder390-mtp]"
+MARK = "# [qwen3.8-coder390-mtp] Force publisher sampling envelope (explicit locals)"
+LEGACY_MARKS = (
+    "[qwen3.8-coder390-mtp] Force publisher sampling envelope",
+    "[qwen3.8-coder390-dflash] Force publisher sampling envelope",
 )
-INJECT = (
-    "            for name, default in self._DEFAULT_SAMPLING_PARAMS.items()\n"
-    "        }\n"
+ANCHOR = (
+    "        if (min_p := self.min_p) is None:\n"
+    "            min_p = default_sampling_params.get(\n"
+    '                "min_p", self._DEFAULT_SAMPLING_PARAMS["min_p"]\n'
+    "            )\n"
     "\n"
-    "        # [qwen3.8-coder390-mtp] Force publisher sampling envelope:\n"
-    "        # temperature=1.0, top_p=0.95, top_k=20 always, regardless of\n"
-    "        # client inputs. The checkpoint ships do_sample=true with no\n"
-    "        # repetition penalty; greedy (temperature=0) from agent/tool-calling\n"
-    "        # clients is outside the validated envelope and triggers the\n"
-    "        # 'fails to stop' reasoning degeneracy\n"
-    "        # (docs/qwen38-coder390-degenerate-repetition.md).\n"
-    '        sampling_params["temperature"] = 1.0\n'
-    '        sampling_params["top_p"] = 0.95\n'
-    '        sampling_params["top_k"] = 20\n'
-    "        # [qwen3.8-coder390-mtp] Anti-repetition: 1.10 is the floor\n"
-    "        # proven (commit 87c40e8fbd) to break the reasoning-channel loop\n"
-    "        # deterministically while leaving prose length intact (1.15\n"
-    "        # measurably shortens it). Set in the dict: repetition_penalty\n"
-    "        # reaches from_optional ONLY via **sampling_params (no explicit\n"
-    "        # kwarg), and the comprehension has already captured the request\n"
-    "        # value (None -> 1.0), so a self-assignment here would never flow\n"
-    "        # through. A dict set is safe: the key exists in\n"
-    "        # _DEFAULT_SAMPLING_PARAMS, so no duplicate-kwarg collision.\n"
-    '        sampling_params["repetition_penalty"] = 1.10\n'
-    "        # [qwen3.8-coder390-mtp] Reasoning-budget gate: this checkpoint's\n"
-    "        # reasoning channel degenerates into unbounded repetition on\n"
-    "        # near-duplicate context (repeated file reads, license headers,\n"
-    "        # similar tool results) -- content=0 with the entire generation\n"
-    "        # budget billed as reasoning_tokens. thinking_token_budget forces\n"
-    "        # the </think> close when the budget exhausts, converting every\n"
-    "        # loop into a completed answer (verified live 2026-11-04: baseline\n"
-    "        # looped 512/512 reasoning with content=0; budget=64 produced\n"
-    "        # finish=stop with 1041 chars of content).\n"
-    "        # Ratio: reasoning-heavy -- 75% of the generation budget goes to\n"
-    "        # reasoning, 25% reserved for output; a default budget of 32768\n"
-    "        # applies when the caller sends no generation cap. Never below\n"
-    "        # max_gen - 256 so output always retains at least 256 tokens.\n"
-    "        # NOTE: assigned on `self`, NOT into sampling_params -- the return\n"
-    "        # statement passes thinking_token_budget=self.thinking_token_budget\n"
-    "        # explicitly, so a dict entry would raise 'multiple values for\n"
-    "        # keyword argument'. `max_tokens` is the method parameter (the\n"
-    "        # effective generation budget), not a sampling_params key.\n"
-    "        _gen_budget = max_tokens\n"
-    "        if _gen_budget is None:\n"
+)
+MERGE = "        # Merge server-default stop_token_ids"
+POLICY = (
+    f"        {MARK}\n"
+    "        # Override the resolved locals, including explicit client values.\n"
+    "        temperature = 1.0\n"
+    "        top_p = 0.95\n"
+    "        top_k = 20\n"
+    "        repetition_penalty = 1.10\n"
+    "        # Use the method's effective generation cap, not a request field.\n"
+    "        if max_tokens is None:\n"
     "            self.thinking_token_budget = 32768\n"
-    "        elif _gen_budget <= 340:\n"
+    "        elif max_tokens <= 340:\n"
     "            self.thinking_token_budget = 0\n"
     "        else:\n"
-    "            self.thinking_token_budget = min(32768, max(int(_gen_budget) * 75 // 100, int(_gen_budget) - 256))\n"
+    "            self.thinking_token_budget = min(\n"
+    "                32768, max(int(max_tokens) * 75 // 100, int(max_tokens) - 256)\n"
+    "            )\n"
     "\n"
-    "        # Merge server-default stop_token_ids"
 )
+
+def fail(message):
+    print(f"{PREFIX} FAIL: sampling-envelope: {message}", file=sys.stderr)
+    sys.exit(1)
+
 
 targets = []
 for modname in (
@@ -291,36 +270,63 @@ for modname in (
 ):
     try:
         spec = importlib.util.find_spec(modname)
-    except ModuleNotFoundError:
-        # vLLM itself is absent (e.g. running on a host, not in the serving
-        # container) -- nothing to patch here.
-        spec = None
-    if spec is not None and spec.origin is not None:
-        targets.append(spec.origin)
+    except (ImportError, ModuleNotFoundError, ValueError) as exc:
+        fail(f"cannot locate {modname}: {exc}")
+    if spec is None or spec.origin is None:
+        fail(f"cannot locate {modname}")
+    targets.append(spec.origin)
 
-if not targets:
-    print(
-        "[qwen3.8-coder390-mtp] sampling-envelope: cannot locate protocol files",
-        file=sys.stderr,
-    )
-    sys.exit(0)
-
+# Verify the locals and thinking budget are forwarded by from_optional in
+# this vLLM layout. The anchor also establishes where the defaults resolve.
+signature = "    def to_sampling_params(\n        self,\n        max_tokens: int,\n"
+forwarding = (
+    "        return SamplingParams.from_optional(\n"
+    "            n=self.n,\n"
+    "            presence_penalty=self.presence_penalty,\n"
+    "            frequency_penalty=self.frequency_penalty,\n"
+    "            repetition_penalty=repetition_penalty,\n"
+    "            temperature=temperature,\n"
+    "            watermarking=self.watermarking,\n"
+    "            top_p=top_p,\n"
+    "            top_k=top_k,\n"
+    "            min_p=min_p,\n"
+)
+budget_kwarg = "            thinking_token_budget=self.thinking_token_budget,\n"
+prepared = []
 for path in targets:
     with open(path) as f:
         src = f.read()
-    if MARK in src or LEGACY_MARK in src:
-        print(f"[qwen3.8-coder390-mtp] sampling envelope already forced: {path}")
+    for name, text in (("signature", signature), ("anchor", ANCHOR),
+                       ("forwarding", forwarding), ("budget kwarg", budget_kwarg)):
+        if src.count(text) != 1:
+            fail(f"{name} count={src.count(text)} != 1 in {path}")
+    anchor_end = src.index(ANCHOR) + len(ANCHOR)
+    if not (src.index(signature) < src.index(ANCHOR) < src.index(forwarding)
+            < src.index(budget_kwarg)):
+        fail(f"sampling forwarding is out of order in {path}")
+    if POLICY in src:
+        if (src.count(POLICY) != 1 or src.count(MARK) != 1
+                or not src.startswith(POLICY + MERGE, anchor_end)):
+            fail(f"misplaced or duplicate sampling policy in {path}")
+        candidate = src
+    else:
+        if any(mark in src for mark in LEGACY_MARKS):
+            fail(f"unrecognized existing sampling policy in {path}")
+        if not src.startswith(MERGE, anchor_end):
+            fail(f"unexpected code after sampling defaults in {path}")
+        candidate = src[:anchor_end] + POLICY + src[anchor_end:]
+    try:
+        compile(candidate, path, "exec")
+    except SyntaxError as exc:
+        fail(f"invalid patched protocol {path}: {exc}")
+    prepared.append((path, src, candidate))
+
+for path, src, candidate in prepared:
+    if candidate == src:
+        print(f"{PREFIX} sampling envelope already forced: {path}")
         continue
-    count = src.count(ANCHOR)
-    if count != 1:
-        print(
-            f"[qwen3.8-coder390-mtp] sampling-envelope: anchor count={count} != 1 in {path}; skipping",
-            file=sys.stderr,
-        )
-        continue
-    src = src.replace(ANCHOR, INJECT, 1)
     with open(path, "w") as f:
-        f.write(src)
-    print(f"[qwen3.8-coder390-mtp] sampling envelope forced: {path}")
+        f.write(candidate)
+    print(f"{PREFIX} sampling envelope forced: {path}")
 PY
 

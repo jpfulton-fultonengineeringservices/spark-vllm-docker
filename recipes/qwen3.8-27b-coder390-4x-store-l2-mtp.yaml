@@ -32,9 +32,12 @@ cluster_only: true
 mods:
   - mods/fes-weights
   - mods/qwen3.8-coder390-mtp
-  # Commented out: auto-detect rewrites method "mtp" -> dflash when the draft
-  # id contains "DFlash2", then EAGLEConfig's vocab_size read kills boot.
-  # - mods/fix-explicit-spec-method
+  # Preserve explicit "mtp": otherwise auto-detection sees the inherited draft
+  # id's "DFlash2" and selects dflash, whose EAGLEConfig vocab_size read fails.
+  - mods/fix-explicit-spec-method
+  # Preserve native-base YaRN frequencies: the installed MRoPE class otherwise
+  # multiplies the native context by four before applying the YaRN correction.
+  - mods/qwen3.8-coder390-mrope-yarn
   - mods/b12x-kernel-cache
   # Commented out: env var alone does nothing; the patch lives in this mod.
   # - mods/b12x-reclaim-gate
@@ -67,7 +70,9 @@ defaults:
   # GB10 unified pool and the connector pins 2x2048 MiB host-staging slots
   # after vLLM sizes KV. 0.65 drove node 0 free on the 2x sibling.
   gpu_memory_utilization: 0.50
-  # Long-context YaRN: --hf-overrides scales rope 4x (262144 -> 1048576).
+  # Long-context YaRN: native 262144, factor 4, advertised maximum 1048576.
+  # Current vLLM expects the advertised maximum already scaled for YaRN; the
+  # draft inherits it through the MTP override and no longer clips to 262144.
   max_model_len: 1048576
   # 8 (raised from 6 after master-side allocation fixes). Revert to 6 if
   # master_put_start_alloc_failures_total climbs on the gx10-mooncake dashboard.
@@ -95,7 +100,7 @@ env:
   B12X_SKIP_RECLAIM: "1"
   # Persist torch inductor Triton cache outside /tmp for kcache archiving.
   TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
-  # Long-context YaRN: permit --max-model-len above the 262144 native cap.
+  # Required by the CLI parser even though the advertised maximum now matches.
   VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
   # --- durable Mooncake store L2 ---
   MOONCAKE_L2_ENABLED: "1"
@@ -120,10 +125,9 @@ env:
 # deployment's KV indistinguishable from a current one. A config change
 # orphans the previous lineage's buckets rather than aliasing onto them.
 
-# The MTP head's BF16 tensors must stay BF16 under modelopt_mixed. The
-# checkpoint already exempts them via hf_quant_config.json exclude_modules
-# and absent quantized_layers entries. mods/qwen3.8-coder390-mtp verifies both
-# and re-injects as a safety net.
+# The MTP head's BF16 tensors must stay BF16 under modelopt_mixed.
+# mods/qwen3.8-coder390-mtp checks the safetensors headers for BF16 MTP weights
+# and ensures MTP exclusion-list entries; it does not inspect quantized_layers.
 #
 # NO disable_eagle_block_drop here -- deliberate. MTP builds draft KV from
 # hidden state AND the next token, so the trailing prefix-cache block drop
@@ -151,7 +155,7 @@ command: |
     --kv-cache-dtype fp8 \
     --quantization modelopt_mixed \
     --load-format instanttensor \
-    --hf-overrides '{{"text_config":{{"rope_parameters":{{"mrope_interleaved":true,"mrope_section":[11,11,10],"partial_rotary_factor":0.25,"rope_theta":10000000,"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":262144}}}},"mtp_num_hidden_layers":1}}' \
+    --hf-overrides '{{"text_config":{{"max_position_embeddings":1048576,"rope_parameters":{{"mrope_interleaved":true,"mrope_section":[11,11,10],"partial_rotary_factor":0.25,"rope_theta":10000000,"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":262144}}}},"mtp_num_hidden_layers":1}}' \
     --max-model-len {max_model_len} \
     --max-num-seqs {max_num_seqs} \
     --max-num-batched-tokens {max_num_batched_tokens} \
