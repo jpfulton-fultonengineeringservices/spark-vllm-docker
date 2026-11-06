@@ -76,9 +76,7 @@ defaults:
   # Current vLLM expects the advertised maximum already scaled for YaRN; the
   # draft inherits it through the MTP override and no longer clips to 262144.
   max_model_len: 1048576
-  # 8 (raised from 6 after master-side allocation fixes). Revert to 6 if
-  # master_put_start_alloc_failures_total climbs on the gx10-mooncake dashboard.
-  max_num_seqs: 8
+  max_num_seqs: 16
   # 2048 - 4096 - 8192 - 16384 - 32768 - 65536 - 131072 - 262144 - 524288 - 1048576
   max_num_batched_tokens: 4096
   # max_cudagraph_capture_size: 256
