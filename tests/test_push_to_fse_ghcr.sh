@@ -113,6 +113,26 @@ grep -q 'https://registry.example:5443/v2/spark-vllm/tags/list' "$T/curl.log" ||
 : > "$T/docker.log"; : > "$T/curl.log"
 "$script" push vllm-node --cluster --insecure-cluster > /dev/null
 grep -q -- '-k' "$T/curl.log" || fail insecure-catalog
+: > "$T/docker.log"; : > "$T/gh.log"; : > "$T/curl.log"
+GH_FAIL=1 AUTH_FAIL=1 "$script" push vllm-node --cluster-only > "$T/cluster-only" 2>&1 || fail cluster-only
+grep -q 'push 10.100.170.3:5000/spark-vllm:vllm-node-20261106-13' "$T/docker.log" || fail cluster-only-version
+grep -q 'push 10.100.170.3:5000/vllm-node:latest' "$T/docker.log" || fail cluster-only-alias
+[ ! -s "$T/gh.log" ] || fail cluster-only-called-gh
+! grep -q 'ghcr.io' "$T/docker.log" || fail cluster-only-ghcr
+: > "$T/docker.log"; : > "$T/gh.log"
+"$script" push vllm-node --cluster-only --no-cluster-latest --insecure-cluster > /dev/null
+! grep -q 'push 10.100.170.3:5000/vllm-node:latest' "$T/docker.log" || fail cluster-only-no-alias
+[ ! -s "$T/gh.log" ] || fail cluster-only-no-alias-gh
+for flags in '--cluster-only --new-package' '--cluster-only --cluster' '--cluster --cluster-only'; do
+    : > "$T/docker.log"; : > "$T/gh.log"
+    # Intentional splitting of test flag pairs.
+    # shellcheck disable=SC2086
+    if "$script" push vllm-node $flags > "$T/failure" 2>&1; then fail cluster-only-flags; fi
+    [ ! -s "$T/docker.log" ] && [ ! -s "$T/gh.log" ] || fail cluster-only-flags-side-effects
+done
+: > "$T/docker.log"
+if FAIL_DOCKER='push 10.100.170.3:5000/vllm-node:latest' "$script" push vllm-node --cluster-only > "$T/failure" 2>&1; then fail cluster-only-alias-failure; fi
+grep -q 'already published 10.100.170.3:5000/spark-vllm:vllm-node-20261106-13' "$T/failure" || fail cluster-only-partial-report
 for invalid in 'host' 'bad/host:5000' 'host:0' 'host:65536'; do
     : > "$T/docker.log"
     if FSE_CLUSTER_REGISTRY="$invalid" "$script" push vllm-node --cluster >/dev/null 2>&1; then fail invalid-registry; fi

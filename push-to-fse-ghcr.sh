@@ -9,13 +9,14 @@ API='/orgs/fulton-engineering-services/packages/container/spark-vllm/versions?pe
 usage() {
     cat <<'EOF'
 Usage:
-  push-to-fse-ghcr.sh push IMAGE [--cluster] [--no-cluster-latest] [--insecure-cluster] [--new-package]
+  push-to-fse-ghcr.sh push IMAGE [--cluster | --cluster-only] [--no-cluster-latest] [--insecure-cluster] [--new-package]
   push-to-fse-ghcr.sh list IMAGE
   push-to-fse-ghcr.sh pull IMAGE [VERSIONED_TAG]
 
 IMAGE is the simple name passed to build-and-copy.sh -t, optionally :latest.
 Versioned tags use IMAGE-YYYYMMDD-N (UTC). Pull retags locally as IMAGE:latest.
---cluster also publishes the same version to node1 and IMAGE:latest there;
+--cluster also publishes the same version to node1 and IMAGE:latest there.
+--cluster-only publishes only to node1 and requires no GitHub authentication.
 --no-cluster-latest skips the moving alias. The registry defaults to node1's
 Rail A address 10.100.170.3:5000; override with FSE_CLUSTER_REGISTRY=HOST:PORT.
 --insecure-cluster skips TLS verification for catalog requests, not Docker.
@@ -36,10 +37,11 @@ base=${input%:latest}
 [[ "$input" == "$base" || "$input" == "$base:latest" ]] || fail 'only unqualified image names or :latest are supported'
 [[ "$base" =~ ^[a-z0-9]+([._-][a-z0-9]+)*$ ]] || fail 'image name must be a simple lowercase Docker repository name'
 local_image="$base:latest"
-cluster=0; latest=1; insecure=0; new_package=0; selected=''
+cluster=0; cluster_only=0; latest=1; insecure=0; new_package=0; selected=''
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --cluster) [[ "$cmd" == push ]] || fail '--cluster is only valid for push'; cluster=1;;
+        --cluster-only) [[ "$cmd" == push ]] || fail '--cluster-only is only valid for push'; cluster_only=1;;
         --no-cluster-latest) [[ "$cmd" == push ]] || fail '--no-cluster-latest is only valid for push'; latest=0;;
         --insecure-cluster) [[ "$cmd" == push ]] || fail '--insecure-cluster is only valid for push'; insecure=1;;
         --new-package) [[ "$cmd" == push ]] || fail '--new-package is only valid for push'; new_package=1;;
@@ -48,7 +50,12 @@ while [[ $# -gt 0 ]]; do
     esac
     shift
 done
-if [[ "$cluster" == 0 && ( "$latest" == 0 || "$insecure" == 1 ) ]]; then fail 'cluster options require --cluster'; fi
+if [[ "$cluster_only" == 1 ]]; then
+    [[ "$cluster" == 0 ]] || fail '--cluster and --cluster-only cannot be combined'
+    [[ "$new_package" == 0 ]] || fail '--new-package cannot be combined with --cluster-only'
+    cluster=1
+fi
+if [[ "$cluster" == 0 && ( "$latest" == 0 || "$insecure" == 1 ) ]]; then fail 'cluster options require --cluster or --cluster-only'; fi
 if [[ "$cluster" == 1 ]]; then
     [[ "$CLUSTER_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*:[0-9]+$ ]] \
         || fail 'FSE_CLUSTER_REGISTRY must be a hostname or IPv4 address followed by :port'
@@ -56,7 +63,8 @@ if [[ "$cluster" == 1 ]]; then
     [[ ${#port} -le 5 && "$port" =~ [1-9] ]] && (( 10#$port <= 65535 )) \
         || fail 'FSE_CLUSTER_REGISTRY port must be between 1 and 65535'
 fi
-for dependency in gh jq; do command -v "$dependency" >/dev/null || fail "$dependency is required"; done
+command -v jq >/dev/null || fail 'jq is required'
+if [[ "$cluster_only" == 0 ]]; then command -v gh >/dev/null || fail 'gh is required'; fi
 if [[ "$cmd" != list ]]; then command -v docker >/dev/null || fail 'docker is required'; fi
 if [[ "$cluster" == 1 ]]; then command -v curl >/dev/null || fail 'curl is required'; fi
 
@@ -209,9 +217,9 @@ if [[ "$cmd" == push ]]; then
     lock="${TMPDIR:-/tmp}/fse-ghcr-${USER:-$(id -u)}-${base}.lock"
     if ! mkdir "$lock" 2>/dev/null; then lock=''; fail 'another local publisher holds the lock (or lock cannot be created)'; fi
     docker image inspect "$local_image" >/dev/null || fail "local image not found: $local_image"
-    ensure_package_write_scope
+    if [[ "$cluster_only" == 0 ]]; then ensure_package_write_scope; fi
 fi
-gh_tags "$new_package"
+if [[ "$cluster_only" == 0 ]]; then gh_tags "$new_package"; else : > "$work/gh.tags"; fi
 if [[ "$cluster" == 1 ]]; then cluster_tags; else : > "$work/cluster.tags"; fi
 cat "$work/gh.tags" "$work/cluster.tags" | matching_tags > "$work/matches"
 
@@ -231,21 +239,26 @@ case "$cmd" in
         tag="$base-$day-$serial"
         [[ ${#tag} -le 128 ]] || fail 'generated Docker tag exceeds 128 characters'
         # Repeat both listings under the local lock to avoid known collisions.
-        gh_tags "$new_package"
+        if [[ "$cluster_only" == 0 ]]; then gh_tags "$new_package"; fi
         if [[ "$cluster" == 1 ]]; then cluster_tags; fi
         if grep -Fxq -- "$tag" "$work/gh.tags" "$work/cluster.tags"; then fail "version already exists: $tag"; fi
         gh_ref="$GHCR_REPO:$tag"; cluster_ref="$CLUSTER_REPO:$tag"; alias_ref="$CLUSTER_HOST/$base:latest"
-        login_ghcr
-        docker tag "$local_image" "$gh_ref" || fail "tag failed: $gh_ref"
-        docker push "$gh_ref" || fail "push failed: $gh_ref"
-        printf 'Published %s\n' "$gh_ref"
+        published=''
+        if [[ "$cluster_only" == 0 ]]; then
+            login_ghcr
+            docker tag "$local_image" "$gh_ref" || fail "tag failed: $gh_ref"
+            docker push "$gh_ref" || fail "push failed: $gh_ref"
+            published="$gh_ref"
+            printf 'Published %s\n' "$gh_ref"
+        fi
         if [[ "$cluster" == 1 ]]; then
-            docker tag "$local_image" "$cluster_ref" || fail "tag failed: $cluster_ref (already published $gh_ref)"
-            docker push "$cluster_ref" || fail "push failed: $cluster_ref (already published $gh_ref)"
+            docker tag "$local_image" "$cluster_ref" || fail "tag failed: $cluster_ref${published:+ (already published $published)}"
+            docker push "$cluster_ref" || fail "push failed: $cluster_ref${published:+ (already published $published)}"
+            published="${published:+$published and }$cluster_ref"
             printf 'Published %s\n' "$cluster_ref"
             if [[ "$latest" == 1 ]]; then
-                docker tag "$local_image" "$alias_ref" || fail "tag failed: $alias_ref (already published $gh_ref and $cluster_ref)"
-                docker push "$alias_ref" || fail "push failed: $alias_ref (already published $gh_ref and $cluster_ref)"
+                docker tag "$local_image" "$alias_ref" || fail "tag failed: $alias_ref (already published $published)"
+                docker push "$alias_ref" || fail "push failed: $alias_ref (already published $published)"
                 printf 'Published %s\n' "$alias_ref"
             fi
         fi;;

@@ -1857,12 +1857,14 @@ Use the same simple name passed to `build-and-copy.sh -t`:
 ```bash
 ./build-and-copy.sh --exp-b12x -t vllm-node-b12x-kr
 ./push-to-fse-ghcr.sh push vllm-node-b12x-kr --cluster
+# Or publish to node1 only, with no GitHub login:
+./push-to-fse-ghcr.sh push vllm-node-b12x-kr --cluster-only
 ./push-to-fse-ghcr.sh list vllm-node-b12x-kr
 ./push-to-fse-ghcr.sh pull vllm-node-b12x-kr  # latest dated version
 ```
 
-The publisher requires `gh`, `jq`, Docker, and GHCR access. Before pushing, it
-checks reported GitHub CLI token scopes and starts
+For GHCR operations, the publisher requires `gh`, `jq`, Docker, and GHCR
+access. Before pushing to GHCR, it checks reported GitHub CLI token scopes and starts
 `gh auth refresh --hostname github.com --scopes write:packages` interactively
 when that scope is missing. In noninteractive sessions, refresh beforehand.
 Environment-supplied and fine-grained tokens may need permissions configured
@@ -1877,10 +1879,14 @@ retags the selected image locally as `<name>:latest`; provide a dated tag to
 select a specific version. Only simple names and optional `:latest` are accepted.
 
 `--cluster` also pushes the same dated tag to `10.100.170.3:5000/spark-vllm`
-and updates `10.100.170.3:5000/<name>:latest`. This is node1's Rail A address,
+and updates `10.100.170.3:5000/<name>:latest`. Use `--cluster-only` instead to
+publish exclusively to the cluster registry, without requiring `gh` or GHCR
+credentials. Cluster-only allocates its serial from cluster tags alone; a later
+combined push checks both registries. This is node1's Rail A address,
 reachable from node1 itself and the cluster without a `gx10-node1` DNS alias.
 Set `FSE_CLUSTER_REGISTRY=host:port` to use another registry. Use
-`--no-cluster-latest` to skip the alias. HTTPS verification is on by default;
+`--no-cluster-latest` to skip the alias. `list` and `pull` continue to operate
+on GHCR. HTTPS verification is on by default;
 when readable, `/etc/docker/certs.d/<host>:<port>/ca.crt` is used for the
 catalog query. `--insecure-cluster` disables verification for that query only;
 Docker must independently trust the registry. A first GHCR publication that returns 404 requires
