@@ -39,6 +39,7 @@ echo 20261106
 SH
 cat > "$T/bin/curl" <<'SH'
 #!/bin/bash
+printf '%s\n' "$*" >> "$TEST_ROOT/curl.log"
 printf 'HTTP/1.1 200 OK\r\n\r\n' > "$TEST_ROOT/fse-headers-temp"
 while [[ $# -gt 0 ]]; do case "$1" in -D) cp "$TEST_ROOT/fse-headers-temp" "$2"; shift;; -o) printf '%s' '{"name":"spark-vllm","tags":["vllm-node-20261106-12"]}' > "$2"; shift;; esac; shift; done
 printf 200
@@ -53,10 +54,24 @@ grep -q 'pull .*vllm-node-20261106-10' "$T/docker.log" || fail latest
 : > "$T/docker.log"
 "$script" push vllm-node --cluster > "$T/push"
 grep -q 'spark-vllm:vllm-node-20261106-13' "$T/push" || fail serial
-grep -q 'push gx10-node1:5000/vllm-node:latest' "$T/docker.log" || fail alias
+grep -q 'push 10.100.170.3:5000/vllm-node:latest' "$T/docker.log" || fail alias
+grep -q 'https://10.100.170.3:5000/v2/spark-vllm/tags/list' "$T/curl.log" || fail default-address
 : > "$T/docker.log"
 "$script" push vllm-node --cluster --no-cluster-latest > /dev/null
-! grep -q 'push gx10-node1:5000/vllm-node:latest' "$T/docker.log" || fail no-alias
+! grep -q 'push 10.100.170.3:5000/vllm-node:latest' "$T/docker.log" || fail no-alias
+: > "$T/docker.log"; : > "$T/curl.log"
+FSE_CLUSTER_REGISTRY=registry.example:5443 "$script" push vllm-node --cluster > /dev/null
+grep -q 'push registry.example:5443/spark-vllm:vllm-node-20261106-13' "$T/docker.log" || fail override-version
+grep -q 'push registry.example:5443/vllm-node:latest' "$T/docker.log" || fail override-alias
+grep -q 'https://registry.example:5443/v2/spark-vllm/tags/list' "$T/curl.log" || fail override-catalog
+: > "$T/docker.log"; : > "$T/curl.log"
+"$script" push vllm-node --cluster --insecure-cluster > /dev/null
+grep -q -- '-k' "$T/curl.log" || fail insecure-catalog
+for invalid in 'host' 'bad/host:5000' 'host:0' 'host:65536'; do
+    : > "$T/docker.log"
+    if FSE_CLUSTER_REGISTRY="$invalid" "$script" push vllm-node --cluster >/dev/null 2>&1; then fail invalid-registry; fi
+    [ ! -s "$T/docker.log" ] || fail invalid-registry-docker
+done
 if "$script" push vllm-node:dev >/dev/null 2>&1; then fail nonlatest; fi
 if GH_FAIL=1 "$script" push vllm-node >/dev/null 2>&1; then fail 404; fi
 GH_FAIL=1 "$script" push vllm-node --new-package >/dev/null 2>&1 || fail new-package
@@ -78,6 +93,6 @@ done
 if GH_OTHER_FAIL=1 "$script" list vllm-node > "$T/failure" 2>&1; then fail other-error; fi
 grep -q 'verify GitHub CLI authentication' "$T/failure" || fail misleading-non-404
 if grep -q '404 may mean' "$T/failure"; then fail misleading-404; fi
-if FAIL_DOCKER='push gx10-node1:5000/spark-vllm' "$script" push vllm-node --cluster > "$T/failure" 2>&1; then fail partial; fi
+if FAIL_DOCKER='push 10.100.170.3:5000/spark-vllm' "$script" push vllm-node --cluster > "$T/failure" 2>&1; then fail partial; fi
 grep -q 'already published' "$T/failure" || fail partial-report
 echo 'PASS: mocked GHCR push/list/pull and cluster publishing'
