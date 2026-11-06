@@ -8,9 +8,7 @@ description: vLLM serving Qwen3.5-397B-A17B-FP8
 
 # HuggingFace model to download (optional, for --download-model)
 model: Qwen/Qwen3.5-397B-A17B-FP8
-
 container: vllm-node-b12x
-image_id: sha256:5a5530d173d7bca3264b7aced5a7f5d7b2a104ba3483fd5782ce1f51337d09c9
 
 # Mod required to fix ROPE syntax error
 mods:

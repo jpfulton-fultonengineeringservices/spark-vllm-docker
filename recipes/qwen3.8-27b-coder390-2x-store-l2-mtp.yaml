@@ -24,7 +24,7 @@ description: vLLM serving the NVFP4 W4A16 (ModelOpt mixed-precision) Qwen3.8-27B
 model: local-inference-lab/Qwen3.8-27B-Coder390-DFlash2
 
 container: vllm-node-b12x
-image_id: sha256:5a5530d173d7bca3264b7aced5a7f5d7b2a104ba3483fd5782ce1f51337d09c9
+# image_id: sha256:5a5530d173d7bca3264b7aced5a7f5d7b2a104ba3483fd5782ce1f51337d09c9
 
 # TP=2 needs both cluster nodes; CI tests the multi-node dry-run path.
 cluster_only: true

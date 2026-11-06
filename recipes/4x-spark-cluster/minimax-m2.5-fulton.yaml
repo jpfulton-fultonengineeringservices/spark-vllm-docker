@@ -8,8 +8,8 @@ description: vLLM serving MiniMax-M2.5 on a 4-node cluster
 # HuggingFace model to download (optional, for --download-model)
 model: MiniMaxAI/MiniMax-M2.5
 
-container: vllm-node-b12x-kr
-image_id: sha256:5a5530d173d7bca3264b7aced5a7f5d7b2a104ba3483fd5782ce1f51337d09c9
+Container image to use
+container: vllm-node
 
 # Can only be run in a cluster
 cluster_only: true
