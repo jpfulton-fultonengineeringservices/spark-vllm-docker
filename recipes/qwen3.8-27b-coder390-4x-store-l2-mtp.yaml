@@ -78,7 +78,7 @@ defaults:
   max_model_len: 1048576
   max_num_seqs: 16
   # 2048 - 4096 - 8192 - 16384 - 32768 - 65536 - 131072 - 262144 - 524288 - 1048576
-  max_num_batched_tokens: 4096
+  max_num_batched_tokens: 8192
   # max_cudagraph_capture_size: 256
   # 3 per the model card's vLLM MTP prescription. Single MTP layer
   # (mtp_num_hidden_layers=1) runs autoregressively per decode step.
