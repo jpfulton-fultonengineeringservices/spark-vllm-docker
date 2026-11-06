@@ -1866,11 +1866,14 @@ login. It uses UTC tags `<name>-YYYYMMDD-N`, allocating N from zero. `pull`
 retags the selected image locally as `<name>:latest`; provide a dated tag to
 select a specific version. Only simple names and optional `:latest` are accepted.
 
-`--cluster` also pushes the same dated tag to `gx10-node1:5000/spark-vllm`
-and updates `gx10-node1:5000/<name>:latest`. Use `--no-cluster-latest` to skip
-the alias. HTTPS verification is on by default; `--insecure-cluster` disables
-verification for the catalog query only. Docker must independently trust the
-cluster registry. A first GHCR publication that returns 404 requires
+`--cluster` also pushes the same dated tag to `10.100.170.3:5000/spark-vllm`
+and updates `10.100.170.3:5000/<name>:latest`. This is node1's Rail A address,
+reachable from node1 itself and the cluster without a `gx10-node1` DNS alias.
+Set `FSE_CLUSTER_REGISTRY=host:port` to use another registry. Use
+`--no-cluster-latest` to skip the alias. HTTPS verification is on by default;
+when readable, `/etc/docker/certs.d/<host>:<port>/ca.crt` is used for the
+catalog query. `--insecure-cluster` disables verification for that query only;
+Docker must independently trust the registry. A first GHCR publication that returns 404 requires
 `--new-package`: GitHub also uses 404 for inaccessible private packages, so
 confirm access before using it.
 
