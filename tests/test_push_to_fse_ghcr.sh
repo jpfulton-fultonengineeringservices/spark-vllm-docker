@@ -9,11 +9,20 @@ for arg in "$@"; do
     if [ "$arg" = --slurp ]; then echo 'unknown flag: --slurp' >&2; exit 1; fi
 done
 if [ "${GH_PARTIAL:-0}" = 1 ]; then
-    printf '%s\n' '[{"metadata":{"container":{"tags":["vllm-node-20261106-99"]}}}]'
+    printf '%s\n' '[{"metadata":{"container":{"tags":["vllm-node-20261106-99"]}}}]' '{"message":"Package not found.","status":"404"}'
     echo 'HTTP 404' >&2
     exit 1
 fi
-if [ "${GH_FAIL:-0}" = 1 ]; then echo 'HTTP 404' >&2; exit 1; fi
+if [ "${GH_ERROR_BODY_SET:-0}" = 1 ]; then
+    printf '%s' "$GH_ERROR_BODY"
+    echo 'gh: Package not found. (HTTP 404)' >&2
+    exit 1
+fi
+if [ "${GH_FAIL:-0}" = 1 ]; then
+    printf '%s\n' '{"message":"Package not found.","documentation_url":"https://docs.github.com/rest/packages/packages#list-package-versions-for-a-package-owned-by-an-organization","status":"404"}'
+    echo 'gh: Package not found. (HTTP 404)' >&2
+    exit 1
+fi
 if [ "${GH_OTHER_FAIL:-0}" = 1 ]; then echo 'unknown flag: --slurp' >&2; exit 1; fi
 if [ "${GH_USE_DATA:-0}" = 1 ]; then printf '%s' "$GH_DATA"; else
     printf '%s\n' '[{"metadata":{"container":{"tags":["vllm-node-20261106-9"]}}}]' '[{"metadata":{"container":{"tags":["vllm-node-20261106-10"]}}}]'
@@ -54,6 +63,13 @@ GH_FAIL=1 "$script" push vllm-node --new-package >/dev/null 2>&1 || fail new-pac
 : > "$T/docker.log"
 if GH_PARTIAL=1 "$script" push vllm-node --new-package > "$T/failure" 2>&1; then fail partial-ghcr; fi
 ! grep -q '^push ' "$T/docker.log" || fail partial-ghcr-pushed
+for body in '[{"status":"404","message":"not found"}]' '{"message":"not found","status":"403"}' '{"status":"404"}' '{' '[] {"message":"not found","status":"404"}'; do
+    : > "$T/docker.log"
+    if GH_ERROR_BODY_SET=1 GH_ERROR_BODY="$body" "$script" push vllm-node --new-package > "$T/failure" 2>&1; then fail invalid-error-body; fi
+    ! grep -q '^push ' "$T/docker.log" || fail invalid-error-body-pushed
+done
+GH_ERROR_BODY_SET=1 GH_ERROR_BODY='' "$script" push vllm-node --new-package >/dev/null 2>&1 || fail empty-404-body
+GH_ERROR_BODY_SET=1 GH_ERROR_BODY='{"message":"not found","status":404}' "$script" push vllm-node --new-package >/dev/null 2>&1 || fail numeric-404-body
 GH_USE_DATA=1 GH_DATA='[]' "$script" list vllm-node > "$T/empty" || fail empty-pages
 [ ! -s "$T/empty" ] || fail empty-pages-output
 for bad in '' '{"message":"not a page"}' '[] {"bad":true}' '[' '[{}]' '[{"metadata":{"container":{"tags":"invalid"}}}]' '[{"metadata":{"container":{"tags":[42]}}}]'; do

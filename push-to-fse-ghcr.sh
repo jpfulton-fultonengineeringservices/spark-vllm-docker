@@ -70,7 +70,14 @@ gh_tags() {
             "$work/gh.json" >/dev/null || fail 'invalid GHCR package response'
         jq -sr '.[][] | .metadata.container.tags[]' \
             "$work/gh.json" > "$work/gh.tags" || fail 'invalid GHCR tags'
-    elif [[ "$allow_new" == 1 && ! -s "$work/gh.json" ]] && grep -Eq 'HTTP 404' "$work/gh.err"; then
+    elif [[ "$allow_new" == 1 ]] && grep -Eq 'HTTP 404' "$work/gh.err" && {
+        # gh may emit a JSON error body on stdout. Accept only a single 404
+        # error object, never earlier successful pages or malformed output.
+        [[ ! -s "$work/gh.json" ]] || jq -se '
+            length == 1 and (.[0] | type == "object" and (.status == "404" or .status == 404)
+                and (.message | type == "string"))
+        ' "$work/gh.json" >/dev/null 2>&1
+    }; then
         printf '%s\n' 'Warning: treating GHCR 404 as a new package; 404 can also mean insufficient access.' >&2
         : > "$work/gh.tags"
     else
