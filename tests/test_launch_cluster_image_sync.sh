@@ -214,11 +214,25 @@ assert_log_not_contains() {
 
 test_matching_images_launch_cluster() {
     setup_fixture
-    REMOTE_IMAGE_ID="sha256:head" run_launch || fail "launch failed for matching image IDs"
+    REMOTE_IMAGE_ID="sha256:head" run_launch --image-id sha256:head || fail "launch failed for matching image IDs"
     assert_output_contains 'Docker image consistency check passed\.'
     assert_output_contains '\[WORKER\] 10\.0\.0\.2: sha256:head \(match\)'
     assert_log_contains '^docker run '
     pass "matching image IDs allow cluster launch"
+}
+
+test_unpinned_launch_skips_image_validation() {
+    setup_fixture
+    LOCAL_IMAGE_MISSING=true REMOTE_IMAGE_MISSING=true run_launch \
+        || fail "unpinned launch performed image validation"
+    assert_log_not_contains 'docker image inspect'
+    assert_log_contains '^docker run '
+    setup_fixture
+    LOCAL_IMAGE_ID=sha256:head REMOTE_IMAGE_ID=sha256:worker run_launch \
+        || fail "unpinned launch rejected different IDs"
+    assert_log_not_contains 'docker image inspect'
+    assert_log_contains '^docker run '
+    pass "no image pin skips image inspection and comparison"
 }
 
 test_unlimited_memlock_on_every_node() {
@@ -239,7 +253,7 @@ test_mismatched_image_aborts_before_launch() {
     setup_fixture
     REMOTE_INSPECT_FILE="$CASE_DIR/different.json"
     sed 's/2222222222/3333333333/g' "$LOCAL_INSPECT_FILE" > "$REMOTE_INSPECT_FILE"
-    if REMOTE_IMAGE_ID="sha256:worker" run_launch; then
+    if REMOTE_IMAGE_ID="sha256:worker" run_launch --image-id sha256:head; then
         fail "launch unexpectedly succeeded for mismatched image IDs"
     fi
     assert_output_contains 'Docker image mismatch on worker node \(10\.0\.0\.2\)'
@@ -252,7 +266,7 @@ test_mismatched_image_aborts_before_launch() {
 
 test_missing_worker_image_aborts_before_launch() {
     setup_fixture
-    if REMOTE_IMAGE_MISSING="true" run_launch; then
+    if REMOTE_IMAGE_MISSING="true" run_launch --image-id sha256:head; then
         fail "launch unexpectedly succeeded with a missing worker image"
     fi
     assert_output_contains "Could not inspect image 'vllm-node' on worker node \\(10\\.0\\.0\\.2\\)"
@@ -263,7 +277,7 @@ test_missing_worker_image_aborts_before_launch() {
 
 test_mixed_image_stores_launch_cluster() {
     setup_fixture
-    REMOTE_IMAGE_ID="sha256:manifest" run_launch || fail "launch failed for equivalent image content"
+    REMOTE_IMAGE_ID="sha256:manifest" run_launch --image-id sha256:head || fail "launch failed for equivalent image content"
     assert_output_contains 'Docker image consistency check passed\.'
     assert_output_contains '\[WORKER\] 10\.0\.0\.2: sha256:manifest \(matching image content\)'
     assert_log_contains '^docker image inspect sha256:head$'
@@ -276,7 +290,7 @@ test_changed_config_aborts_before_launch() {
     setup_fixture
     REMOTE_INSPECT_FILE="$CASE_DIR/different-config.json"
     sed 's/"bash"/"python3"/' "$LOCAL_INSPECT_FILE" > "$REMOTE_INSPECT_FILE"
-    if REMOTE_IMAGE_ID="sha256:worker" run_launch; then
+    if REMOTE_IMAGE_ID="sha256:worker" run_launch --image-id sha256:head; then
         fail "launch unexpectedly succeeded for different runtime configurations"
     fi
     assert_output_contains 'Docker image mismatch on worker node'
@@ -294,15 +308,15 @@ test_unreadable_content_aborts_before_launch() {
                 else
                     REMOTE_INSPECT_FILE=/dev/null
                 fi
-                if REMOTE_IMAGE_ID="sha256:worker" run_launch; then
+                if REMOTE_IMAGE_ID="sha256:worker" run_launch --image-id sha256:head; then
                     fail "launch succeeded with malformed $side metadata"
                 fi
             elif [[ "$side" == "local" ]]; then
-                if LOCAL_INSPECT_STATUS=1 REMOTE_IMAGE_ID="sha256:worker" run_launch; then
+                if LOCAL_INSPECT_STATUS=1 REMOTE_IMAGE_ID="sha256:worker" run_launch --image-id sha256:head; then
                     fail "launch succeeded despite failed local inspection"
                 fi
             else
-                if REMOTE_INSPECT_STATUS=1 REMOTE_IMAGE_ID="sha256:worker" run_launch; then
+                if REMOTE_INSPECT_STATUS=1 REMOTE_IMAGE_ID="sha256:worker" run_launch --image-id sha256:head; then
                     fail "launch succeeded despite failed remote inspection"
                 fi
             fi
@@ -315,10 +329,10 @@ test_unreadable_content_aborts_before_launch() {
 
 test_missing_head_image_aborts_before_launch() {
     setup_fixture
-    if LOCAL_IMAGE_MISSING="true" run_launch; then
+    if LOCAL_IMAGE_MISSING="true" run_launch --image-id sha256:head; then
         fail "launch unexpectedly succeeded with a missing head image"
     fi
-    assert_output_contains "Could not inspect image 'vllm-node' on head node"
+    assert_output_contains "image 'vllm-node' is not present on the head node"
     assert_log_not_contains '^docker run '
     pass "missing head image aborts before containers start"
 }
@@ -470,6 +484,7 @@ test_signal_stops_supervisor_and_clients() {
 }
 
 test_matching_images_launch_cluster
+test_unpinned_launch_skips_image_validation
 test_unlimited_memlock_on_every_node
 test_mismatched_image_aborts_before_launch
 test_missing_worker_image_aborts_before_launch
@@ -477,6 +492,10 @@ test_mixed_image_stores_launch_cluster
 test_changed_config_aborts_before_launch
 test_unreadable_content_aborts_before_launch
 test_missing_head_image_aborts_before_launch
+if [[ "${1:-}" == --image-checks-only ]]; then
+    echo "All $TESTS_PASSED image validation tests passed."
+    exit 0
+fi
 test_failed_exec_captures_logs_before_cleanup
 test_log_errors_preserve_exec_status_and_cleanup
 test_successful_and_daemon_exec_do_not_dump_logs

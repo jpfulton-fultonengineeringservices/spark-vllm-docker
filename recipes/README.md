@@ -114,6 +114,17 @@ Options:
   2. If autodiscovery cannot support the topology, specify nodes as instructed.
 ```
 
+## Optional image pins
+
+`image_id: sha256:<64 lowercase hex>` opts into image-content validation before
+launch. A supplied pin must match the selected container image, and cluster
+nodes must have matching IDs or equivalent image content.
+
+Omit `image_id` (or leave it null/empty) to disable those image-ID checks.
+Unpinned recipes do not fail because a pin is missing or node image IDs differ.
+The image still needs to be available for Docker to run it. An explicit
+`-t`/`--container` override continues to bypass a recipe pin.
+
 ## Setup Options
 
 | Flag | Description |

@@ -1599,8 +1599,10 @@ start_cluster() {
         return
     fi
 
-    verify_pinned_image_id || return 1
-    verify_cluster_image_consistency || return 1
+    if [[ -n "$EXPECTED_IMAGE_ID" ]]; then
+        verify_pinned_image_id || return 1
+        verify_cluster_image_consistency || return 1
+    fi
     prepare_vllm_pr_mods || return 1
 
     # Build docker run arguments based on mode

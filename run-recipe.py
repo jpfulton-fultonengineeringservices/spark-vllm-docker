@@ -466,9 +466,9 @@ def load_recipe(recipe_path: Path) -> dict[str, Any]:
     # `image_id` pins the recipe to exact image content (see the schema docs).
     # Validate the shape here: a typo'd or truncated digest would otherwise be
     # discovered at launch time on the node, which is a far worse place to find
-    # out. Optional, so absent means unpinned.
+    # out. Absent, null or empty means unpinned and skips image-ID validation.
     image_id = recipe.get("image_id")
-    if image_id is not None:
+    if image_id not in (None, ""):
         image_id = str(image_id)
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
             print(

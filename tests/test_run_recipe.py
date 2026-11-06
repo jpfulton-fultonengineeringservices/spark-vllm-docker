@@ -113,6 +113,38 @@ class ModelPreflightTests(unittest.TestCase):
         self.assertEqual(result, 0, output)
         self.process.assert_called_once()
 
+    def test_image_pin_is_optional_and_only_nonempty_pin_is_forwarded(self):
+        base = self.recipe.read_text()
+        pin = "sha256:" + "1" * 64
+        for field, expected in (
+            ("", None), ("image_id:\n", None),
+            ('image_id: ""\n', None), (f"image_id: {pin}\n", pin),
+        ):
+            for cluster in (False, True):
+                for dry_run in (False, True):
+                    with self.subTest(field=field, cluster=cluster, dry_run=dry_run):
+                        self.recipe.write_text(base + field)
+                        self.cache_model()
+                        self.process.reset_mock()
+                        flags = ["--dry-run"] if dry_run else []
+                        result, output = self.run_recipe(*flags, cluster=cluster)
+                        self.assertEqual(result, 0, output)
+                        if dry_run:
+                            line = next(line for line in output.splitlines() if line.startswith("   ./launch-cluster.sh"))
+                            command = shlex.split(line.rstrip(" \\"))
+                        else:
+                            command = self.process.call_args.args[0]
+                        if expected is None:
+                            self.assertNotIn("--image-id", command)
+                        else:
+                            self.assertEqual(command[command.index("--image-id") + 1], expected)
+
+    def test_invalid_nonempty_image_pin_is_rejected(self):
+        self.recipe.write_text(self.recipe.read_text() + "image_id: invalid\n")
+        with self.assertRaises(SystemExit) as result, contextlib.redirect_stdout(io.StringIO()):
+            runner.load_recipe(self.recipe)
+        self.assertEqual(result.exception.code, 1)
+
     def test_cache_without_snapshots_is_missing(self):
         snapshots = self.hub / "models--org--model/snapshots"
         snapshots.mkdir(parents=True)
