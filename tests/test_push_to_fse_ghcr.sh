@@ -6,6 +6,16 @@ mkdir "$T/bin"; export TEST_ROOT="$T" TMPDIR="$T"
 cat > "$T/bin/gh" <<'SH'
 #!/bin/bash
 printf '%s\n' "$*" >> "$TEST_ROOT/gh.log"
+if [ "${1:-}" = api ] && [ "${3:-}" = github.com ] && [ "${4:-}" = user ]; then
+    [ "${USER_LOOKUP_FAIL:-0}" != 1 ] || exit 1
+    printf '%s\n' "${GH_USERNAME:-example-user}"
+    exit 0
+fi
+if [ "${1:-}" = auth ] && [ "${2:-}" = token ]; then
+    [ "${TOKEN_FAIL:-0}" != 1 ] || exit 1
+    printf '%s\n' 'mock-gh-token'
+    exit 0
+fi
 if [ "${1:-}" = auth ] && [ "${2:-}" = status ]; then
     [ "${AUTH_FAIL:-0}" != 1 ] || exit 1
     if [ "${OLD_GH:-0}" = 1 ]; then
@@ -56,6 +66,10 @@ SH
 cat > "$T/bin/docker" <<'SH'
 #!/bin/bash
 printf '%s\n' "$*" >> "$TEST_ROOT/docker.log"
+if [ "${1:-}" = login ]; then
+    IFS= read -r password || exit 1
+    [ "$password" = 'mock-gh-token' ] || exit 1
+fi
 case "${FAIL_DOCKER:-}" in '') ;; *) [[ "$*" != *"$FAIL_DOCKER"* ]] || exit 1;; esac
 SH
 cat > "$T/bin/date" <<'SH'
@@ -76,9 +90,16 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 grep -q 'vllm-node-20261106-10' "$T/list" || fail list
 "$script" pull vllm-node > /dev/null
 grep -q 'pull .*vllm-node-20261106-10' "$T/docker.log" || fail latest
+! grep -q '^login ' "$T/docker.log" || fail pull-login
 : > "$T/docker.log"
-"$script" push vllm-node --cluster > "$T/push"
+"$script" push vllm-node --cluster > "$T/push" 2>&1
 grep -q 'spark-vllm:vllm-node-20261106-13' "$T/push" || fail serial
+grep -q '^login ghcr.io --username example-user --password-stdin$' "$T/docker.log" || fail docker-login
+grep -q '^auth token --hostname github.com$' "$T/gh.log" || fail token-read
+! grep -q 'mock-gh-token' "$T/docker.log" "$T/gh.log" "$T/push" || fail token-exposed
+login_line=$(grep -n '^login ghcr.io' "$T/docker.log" | head -1 | cut -d: -f1)
+push_line=$(grep -n '^push ghcr.io' "$T/docker.log" | head -1 | cut -d: -f1)
+[ "$login_line" -lt "$push_line" ] || fail login-order
 grep -q 'push 10.100.170.3:5000/vllm-node:latest' "$T/docker.log" || fail alias
 grep -q 'https://10.100.170.3:5000/v2/spark-vllm/tags/list' "$T/curl.log" || fail default-address
 : > "$T/docker.log"
@@ -98,6 +119,18 @@ for invalid in 'host' 'bad/host:5000' 'host:0' 'host:65536'; do
     [ ! -s "$T/docker.log" ] || fail invalid-registry-docker
 done
 if "$script" push vllm-node:dev >/dev/null 2>&1; then fail nonlatest; fi
+for failure in USER_LOOKUP_FAIL TOKEN_FAIL; do
+    : > "$T/docker.log"
+    if env "$failure=1" "$script" push vllm-node > "$T/failure" 2>&1; then fail "$failure-accepted"; fi
+    ! grep -q '^push ' "$T/docker.log" || fail "$failure-pushed"
+    ! grep -q 'mock-gh-token' "$T/failure" "$T/docker.log" || fail "$failure-token-exposed"
+done
+: > "$T/docker.log"
+if GH_USERNAME='invalid/user' "$script" push vllm-node > "$T/failure" 2>&1; then fail bad-user; fi
+! grep -q '^login ' "$T/docker.log" || fail bad-user-login
+: > "$T/docker.log"
+if FAIL_DOCKER='login ghcr.io' "$script" push vllm-node > "$T/failure" 2>&1; then fail docker-login-failure; fi
+! grep -q '^push ' "$T/docker.log" || fail login-failure-pushed
 : > "$T/gh.log"; : > "$T/docker.log"
 if MISSING_SCOPE=1 "$script" push vllm-node > "$T/failure" 2>&1; then fail missing-scope-noninteractive; fi
 grep -q 'gh auth refresh --hostname github.com --scopes write:packages' "$T/failure" || fail missing-scope-guidance
@@ -130,6 +163,10 @@ EXP
     expect "$T/run-in-pty.exp" success "$script" > "$T/pty" 2>&1 || fail interactive-refresh
 grep -q '^auth refresh --hostname github.com --scopes write:packages$' "$T/gh.log" || fail refresh-not-run
     grep -q '^push ' "$T/docker.log" || fail refresh-no-push
+    refresh_line=$(grep -n '^auth refresh' "$T/gh.log" | head -1 | cut -d: -f1)
+    token_line=$(grep -n '^auth token' "$T/gh.log" | head -1 | cut -d: -f1)
+    [ "$refresh_line" -lt "$token_line" ] || fail token-read-before-refresh
+    grep -q '^login ghcr.io --username example-user --password-stdin$' "$T/docker.log" || fail refresh-docker-login
     for mode in refresh-fail refresh-no-scope; do
         rm -f "$T/refreshed"; : > "$T/docker.log"
         if expect "$T/run-in-pty.exp" "$mode" "$script" > "$T/pty" 2>&1; then fail "$mode-accepted"; fi
