@@ -62,19 +62,23 @@ trap 'exit 143' TERM
 # All gh output is buffered and validated before any tag is used.
 gh_tags() {
     local allow_new=$1
-    if gh api --paginate --slurp "$API" > "$work/gh.json" 2> "$work/gh.err"; then
-        jq -er '[.[][] | .metadata.container.tags[]? | select(type == "string")] | .[]' "$work/gh.json" > "$work/gh.tags" || {
-            # jq -e returns 4 on an empty stream; accept only valid arrays.
-            jq -e 'type == "array" and all(.[]; type == "array")' "$work/gh.json" >/dev/null || fail 'invalid GHCR package response'
-            jq -r '[.[][] | .metadata.container.tags[]? | select(type == "string")] | .[]' "$work/gh.json" > "$work/gh.tags" || fail 'invalid GHCR tags'
-        }
-        jq -e 'type == "array" and all(.[]; type == "array")' "$work/gh.json" >/dev/null || fail 'invalid GHCR package response'
+    if gh api --paginate "$API" > "$work/gh.json" 2> "$work/gh.err"; then
+        # Older gh releases emit a stream of page arrays without --slurp.
+        # Validate the entire buffered stream before using any page's tags.
+        jq -se 'length > 0 and all(.[]; type == "array" and all(.[];
+            type == "object" and (.metadata.container.tags | type == "array" and all(.[]; type == "string"))))' \
+            "$work/gh.json" >/dev/null || fail 'invalid GHCR package response'
+        jq -sr '.[][] | .metadata.container.tags[]' \
+            "$work/gh.json" > "$work/gh.tags" || fail 'invalid GHCR tags'
     elif [[ "$allow_new" == 1 && ! -s "$work/gh.json" ]] && grep -Eq 'HTTP 404' "$work/gh.err"; then
         printf '%s\n' 'Warning: treating GHCR 404 as a new package; 404 can also mean insufficient access.' >&2
         : > "$work/gh.tags"
     else
         cat "$work/gh.err" >&2
-        fail 'GHCR lookup failed; 404 may mean a missing or inaccessible package (use --new-package only to acknowledge first publication)'
+        if grep -Eq 'HTTP 404' "$work/gh.err"; then
+            fail 'GHCR lookup failed; 404 may mean a missing or inaccessible package (use --new-package only to acknowledge first publication)'
+        fi
+        fail 'GHCR lookup failed; verify GitHub CLI authentication, permissions and connectivity'
     fi
 }
 
