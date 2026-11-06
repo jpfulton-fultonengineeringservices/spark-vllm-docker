@@ -18,6 +18,9 @@ cluster_only: true
 mods:
   - mods/fes-weights
 
+env:
+  FES_WEIGHTS_SLUG: "minimax-m2.5"
+
 # Default settings (can be overridden via CLI)
 defaults:
   port: 8000

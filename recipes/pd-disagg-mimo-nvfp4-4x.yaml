@@ -67,6 +67,7 @@ defaults:
   max_num_batched_tokens: 16384
 
 env:
+  FES_WEIGHTS_SLUG: "mimo-v2.6-flash-nvfp4"
   PD_DISAGG_ENABLED: "1"
   PD_VLLM_SERVE: "b12x-kcache exec vllm serve"
   MIMO_V26_MODEL_ID: "XiaomiMiMo/MiMo-V2.6-Flash-RL-NVFP4"

@@ -82,6 +82,16 @@ Recipe launches check that the model declared in the recipe is in the local
 Hugging Face cache. If it is missing, the runner stops and asks you to rerun
 the same command with `--setup`. Dry runs do not require downloaded models.
 
+### FES-staged weights
+
+Recipes can declare `env.FES_WEIGHTS_SLUG` to use a checkpoint already staged
+at `/opt/llm/models/<slug>` on every node. Direct `run-recipe.sh` launches then
+mount it read-only, run `mods/fes-weights` before serving on each rank, and use
+an offline HF-cache shim; hub model download/preflight is skipped. Override a
+recipe with `--slug`, or force normal hub behavior with `--no-fes-weights`.
+See [FES weight staging](docs/fes-weight-staging.md) for the full precedence
+and legacy `scripts/fes-eval.sh` compatibility contract.
+
 ### Single Spark
 
 Check out locally. Do it on the head node of the cluster.

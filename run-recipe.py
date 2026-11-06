@@ -118,6 +118,135 @@ DEFAULT_REGISTRY_IMAGE_NAME = "spark-vllm"
 DISTRIBUTED_EXECUTOR_RE = re.compile(
     r"--distributed-executor-backend(?:=|\s+)\S+"
 )
+FES_WEIGHTS_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+FES_WEIGHTS_MOD = "mods/fes-weights"
+
+
+def fes_weights_slug(value: str) -> str:
+    """Accept one path component, matching the cluster-config slug contract."""
+    if not FES_WEIGHTS_SLUG_RE.fullmatch(value):
+        raise argparse.ArgumentTypeError(
+            "must match [A-Za-z0-9][A-Za-z0-9._-]* (no slashes or traversal)"
+        )
+    return value
+
+
+def is_fes_weights_mod(value: str) -> bool:
+    """Recognize relative and absolute references to the repository FES mod."""
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = SCRIPT_DIR / path
+    return path.resolve() == (SCRIPT_DIR / FES_WEIGHTS_MOD).resolve()
+
+
+def resolve_fes_weights(
+    recipe: dict[str, Any], args: argparse.Namespace,
+    container_env: dict[str, str],
+) -> str | None:
+    """Resolve CLI > recipe > orchestrator default and add staged launch layers."""
+    if args.no_fes_weights:
+        return None
+    recipe_env = recipe.get("env") or {}
+    slug = args.slug
+    if slug is None:
+        slug = recipe_env.get("FES_WEIGHTS_SLUG")
+        if slug is not None:
+            slug = str(slug)
+    if slug is None:
+        for assignment in reversed(args.default_env):
+            key, value = assignment.split("=", 1)
+            if key == "FES_WEIGHTS_SLUG":
+                slug = value
+                break
+    if slug is None:
+        return None
+    try:
+        slug = fes_weights_slug(slug)
+    except argparse.ArgumentTypeError as exc:
+        print(f"Error: Invalid FES_WEIGHTS_SLUG {slug!r}: {exc}")
+        raise ValueError("invalid staged weights slug") from exc
+
+    hub_model = recipe.get("model")
+    for assignment in container_env.values():
+        if assignment.startswith("FES_HUB_MODEL="):
+            hub_model = assignment.split("=", 1)[1]
+        elif assignment == "FES_HUB_MODEL":
+            hub_model = os.environ.get("FES_HUB_MODEL", "")
+    if not hub_model:
+        print("Error: FES staged weights require a non-empty FES_HUB_MODEL.")
+        print("Set recipe model:, or pass -e FES_HUB_MODEL=org/model explicitly.")
+        raise ValueError("missing staged weights hub model")
+
+    if not args.weights_root:
+        print("Error: --weights-root cannot be empty when staged weights are selected.")
+        raise ValueError("missing staged weights root")
+    weights_dir = str((Path(args.weights_root).expanduser() / slug).absolute())
+    enabled = container_env.get("FES_WEIGHTS_ENABLED")
+    if enabled is not None and enabled != "FES_WEIGHTS_ENABLED=1":
+        print("Error: Staged weights require FES_WEIGHTS_ENABLED=1; got "
+              f"{enabled!r}. Refusing to bypass per-node verification.")
+        raise ValueError("staged weights verification disabled")
+    mount_dir = container_env.get("FES_WEIGHTS_DIR", "FES_WEIGHTS_DIR=/model")
+    if not mount_dir.startswith("FES_WEIGHTS_DIR="):
+        print("Error: Staged weights require an assigned FES_WEIGHTS_DIR.")
+        raise ValueError("staged weights mount unset")
+    mount_dir = mount_dir.split("=", 1)[1]
+    if not mount_dir.startswith("/") or mount_dir == "/":
+        print("Error: FES_WEIGHTS_DIR must be a non-root absolute container path.")
+        raise ValueError("invalid staged weights mount")
+    mapping = f"{weights_dir}:{mount_dir}:ro"
+    explicit_custom_mount = any(
+        assignment == f"FES_WEIGHTS_DIR={mount_dir}" for assignment in args.env_vars
+    )
+    if not explicit_custom_mount and mapping not in args.volume_mappings:
+        print(f"Error: FES_WEIGHTS_DIR {mount_dir!r} requires an explicit read-only "
+              f"mount of the selected staged directory: -v {mapping}")
+        raise ValueError("mismatched staged weights mount")
+    args.volume_mappings.insert(0, mapping)
+    container_env["FES_WEIGHTS_ENABLED"] = "FES_WEIGHTS_ENABLED=1"
+    container_env["FES_WEIGHTS_DIR"] = f"FES_WEIGHTS_DIR={mount_dir}"
+    container_env.setdefault("FES_HUB_MODEL", f"FES_HUB_MODEL={hub_model}")
+    container_env.setdefault("HF_HUB_OFFLINE", "HF_HUB_OFFLINE=1")
+    container_env["FES_WEIGHTS_SLUG"] = f"FES_WEIGHTS_SLUG={slug}"
+    fes_mod = SCRIPT_DIR / FES_WEIGHTS_MOD
+    if not (fes_mod / "run.sh").is_file():
+        print(f"Error: Required mod not found: {fes_mod}")
+        raise ValueError("missing staged weights mod")
+    args.fes_launch_mod = str(fes_mod)
+    return slug
+
+
+def launch_mod_arguments(
+    recipe: dict[str, Any], cli_layers: list[tuple[str, str]],
+    fes_mod: str | None, *, absolute: bool,
+) -> list[list[str]]:
+    """Build ordered mod/PR arguments once for both dry-run and execution."""
+    # Keep recipe paths repository-relative and CLI paths cwd-relative.
+    ordered = [("apply_mods", mod) for mod in recipe.get("mods", [])]
+    for layer in cli_layers:
+        ordered.append(layer)
+    if fes_mod:
+        # Other mods may resolve model files through the verified offline shim.
+        ordered.insert(0, ("apply_mods", fes_mod))
+    seen_fes = False
+    result = []
+    for kind, value in ordered:
+        if kind != "apply_mods":
+            result.append(["--apply-vllm-pr", value])
+            continue
+        if is_fes_weights_mod(value):
+            if seen_fes:
+                continue
+            seen_fes = True
+        path = Path(value).expanduser()
+        if absolute:
+            base = SCRIPT_DIR if value in (recipe.get("mods", []) or []) else Path.cwd()
+            if not path.is_absolute():
+                path = base / path
+            if not path.exists():
+                print(f"Warning: Mod path not found: {path}")
+        result.append(["--apply-mod", str(path) if absolute else value])
+    return result
 
 
 def runtime_vllm_pr_reference(value: str) -> str:
@@ -996,6 +1125,19 @@ Examples:
     launch_group = parser.add_argument_group(
         "Launch options (passed to launch-cluster.sh)"
     )
+    fes_group = launch_group.add_mutually_exclusive_group()
+    fes_group.add_argument(
+        "--slug", type=fes_weights_slug,
+        help="FES staged weights slug; overrides recipe FES_WEIGHTS_SLUG",
+    )
+    fes_group.add_argument(
+        "--no-fes-weights", action="store_true",
+        help="Use hub-cache behavior, ignoring recipe/default FES_WEIGHTS_SLUG",
+    )
+    launch_group.add_argument(
+        "--weights-root", default="/opt/llm/models", metavar="DIR",
+        help="Host root containing staged slugs (default: /opt/llm/models)",
+    )
     launch_group.add_argument(
         "--solo", action="store_true", help="Run in solo mode (single node, no Ray)"
     )
@@ -1272,6 +1414,14 @@ Examples:
     for env_var in args.env_vars:
         container_env[env_var.split("=", 1)[0]] = env_var
 
+    try:
+        fes_slug = resolve_fes_weights(recipe, args, container_env)
+    except ValueError:
+        return 1
+    if fes_slug:
+        print(f"FES staged weights: {Path(args.weights_root).expanduser() / fes_slug}")
+        print()
+
     # Parse nodes - check command line first, then .env file, then autodiscover
     nodes = parse_nodes(args.nodes) if not args.solo else []
     nodes_from_env = False
@@ -1478,7 +1628,7 @@ Examples:
             return 0
 
     # --- Download Phase ---
-    if model and (args.download_only or args.setup or args.force_download):
+    if model and not fes_slug and (args.download_only or args.setup or args.force_download):
         if args.dry_run:
             model_exists = check_model_exists(model)
             if args.force_download or not model_exists or (copy_targets and env.get("CLUSTER_LINKS")):
@@ -1509,8 +1659,8 @@ Examples:
     if args.build_only or args.download_only:
         return 0
 
-    # Require the recipe's model locally before starting a container.
-    if not args.dry_run and model and not check_model_exists(model):
+    # Staged weights are verified by mods/fes-weights on every node, not HF cache.
+    if not args.dry_run and model and not fes_slug and not check_model_exists(model):
         print(f"Error: Model '{model}' not found in the local Hugging Face cache.")
         print("Rerun the same command with --setup to download the model before launching.")
         return 1
@@ -1599,13 +1749,10 @@ Examples:
         cmd_parts = ["./launch-cluster.sh", "-t", container]
         if image_id:
             cmd_parts.extend(["--image-id", image_id])
-        for mod in recipe.get("mods", []):
-            cmd_parts.extend(["--apply-mod", mod])
-        for layer_type, value in cli_launch_layers:
-            if layer_type == "apply_mods":
-                cmd_parts.extend(["--apply-mod", value])
-            else:
-                cmd_parts.extend(["--apply-vllm-pr", value])
+        for mod_args in launch_mod_arguments(
+            recipe, cli_launch_layers, getattr(args, "fes_launch_mod", None), absolute=False
+        ):
+            cmd_parts.extend(mod_args)
         if args.solo:
             cmd_parts.append("--solo")
         elif not is_cluster:
@@ -1675,22 +1822,11 @@ Examples:
         if image_id:
             cmd.extend(["--image-id", image_id])
 
-        # Add mods
-        for mod in recipe.get("mods", []):
-            mod_path = SCRIPT_DIR / mod
-            if not mod_path.exists():
-                print(f"Warning: Mod path not found: {mod_path}")
-            cmd.extend(["--apply-mod", str(mod_path)])
-        for layer_type, value in cli_launch_layers:
-            if layer_type == "apply_mods":
-                mod_path = Path(value).expanduser()
-                if not mod_path.is_absolute():
-                    mod_path = Path.cwd() / mod_path
-                if not mod_path.exists():
-                    print(f"Warning: Mod path not found: {mod_path}")
-                cmd.extend(["--apply-mod", str(mod_path)])
-            else:
-                cmd.extend(["--apply-vllm-pr", value])
+        # Add mods in the same order and with the same deduplication as dry-run.
+        for mod_args in launch_mod_arguments(
+            recipe, cli_launch_layers, getattr(args, "fes_launch_mod", None), absolute=True
+        ):
+            cmd.extend(mod_args)
 
         # Add launch options
         if args.solo:
@@ -1759,7 +1895,9 @@ Examples:
 
         print(f"=== Launching ===")
         print(f"Container: {container}")
-        all_mods = recipe.get("mods", []) + cli_mods
+        all_mods = [layer[1] for layer in launch_mod_arguments(
+            recipe, cli_launch_layers, getattr(args, "fes_launch_mod", None), absolute=False
+        ) if layer[0] == "--apply-mod"]
         if all_mods:
             print(f"Mods: {', '.join(all_mods)}")
         if cli_vllm_prs:

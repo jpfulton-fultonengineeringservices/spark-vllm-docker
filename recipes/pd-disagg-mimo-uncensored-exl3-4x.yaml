@@ -156,6 +156,7 @@ defaults:
   max_num_batched_tokens: 16384
 
 env:
+  FES_WEIGHTS_SLUG: "mimo-v2.6-flash-rl-uncensored-exl3-v1"
   PD_DISAGG_ENABLED: "1"
   # PD_KV_BACKEND is deliberately NOT set here: run-recipe.py emits env: values
   # VERBATIM (no str.format), so a "{pd_kv_backend}" placeholder would export the

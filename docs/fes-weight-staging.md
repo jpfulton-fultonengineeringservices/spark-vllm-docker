@@ -17,33 +17,146 @@ offline.
 
 ## Usage
 
+Stage the selected slug on every node first (cluster-config, on a node or via
+`--node`):
+
+
 ```bash
-# one-time per node (cluster-config, on a node or via --node):
 scripts/model-weights.sh stage <slug>
-
-# evaluation launch (on the lead node, from this repo checkout):
-scripts/fes-eval.sh glm-5.3-flash glm-5.3-flash-nvfp4 --solo
 ```
 
-`fes-eval.sh` expands to:
+A recipe opts into direct staged launches with a literal declaration:
+
+
+```yaml
+model: org/model
+env:
+  FES_WEIGHTS_SLUG: "org-model-revision"
+```
+
+Then use the normal runner:
+
 
 ```bash
-run-recipe.sh <recipe> \
-    --apply-mod mods/fes-weights \
-    -v /opt/llm/models/<slug>:/model:ro \
-    --default-env FES_WEIGHTS_ENABLED=1 \
-    --default-env FES_WEIGHTS_DIR=/model \
-    --default-env FES_HUB_MODEL=<recipe model: field> \
-    --default-env HF_HUB_OFFLINE=1 \
-    <your args>
+./run-recipe.sh <recipe> --solo
 ```
 
-All remaining args are passed to `run-recipe.sh` verbatim (`--solo`, `-n`,
-`--port`, and the recipe overrides all work as usual). These four environment
-settings are defaults: recipe `env:` takes precedence, and an explicit `-e`
-takes precedence over both. `--hub-model` changes the wrapper default, not a
-recipe or explicit override.
+The runner resolves the slug in this order:
 
+
+1. Explicit `--slug <slug>`.
+2. Recipe `env.FES_WEIGHTS_SLUG`.
+3. The last `--default-env FES_WEIGHTS_SLUG=<slug>` (cluster/orchestrator
+   compatibility default).
+4. No staged integration; normal hub-cache behavior.
+
+
+`--no-fes-weights` overrides all of these for a hub launch. It adds no staged
+mount or FES environment and retains normal model preflight/download. An
+inert `mods/fes-weights` entry already in the recipe remains inert because
+`FES_WEIGHTS_ENABLED` is not injected; its literal slug may remain visible for
+traceability. Set `HF_HUB_OFFLINE=0` in a hub-mode recipe if the image's offline
+default would otherwise block hub access. `--no-fes-weights` does not override
+an independently supplied explicit `-e FES_WEIGHTS_ENABLED=1`.
+
+The staged launch passes these values to `launch-cluster.sh`:
+
+
+```bash
+--apply-mod <repo>/mods/fes-weights \
+-v <weights-root>/<slug>:/model:ro \
+-e FES_WEIGHTS_ENABLED=1 \
+-e FES_WEIGHTS_DIR=/model \
+-e FES_HUB_MODEL=<recipe model: field> \
+-e FES_WEIGHTS_SLUG=<slug> \
+-e HF_HUB_OFFLINE=1
+```
+
+
+Only the mount is host-specific. The mod is copied into each container, where
+these environment values are available before the generated serve script runs.
+`FES_HUB_MODEL` and the other standard mod settings can still be overridden
+with explicit `-e` values; a missing `model:` requires an explicit/default
+`FES_HUB_MODEL`. The selected slug is recorded in the container environment.
+`FES_WEIGHTS_SLUG` is not itself the activation switch for the mod. In staged
+mode the mod is always ordered before all other mods, including when the recipe
+omits it, so dependent mods see the verified shim.
+
+Staged launches require `FES_WEIGHTS_ENABLED=1`; empty, bare, false, or other
+values are rejected rather than disabling verification. A recipe/default
+`FES_WEIGHTS_DIR` other than `/model` requires an operator-supplied read-only
+`-v <weights-root>/<slug>:<FES_WEIGHTS_DIR>:ro` mount of the selected directory.
+An explicit `-e FES_WEIGHTS_DIR=<absolute-dir>` creates that matching read-only
+mount automatically. Missing, duplicate, writable, or mismatched mounts are
+rejected before build, download, or launch instead of silently weakening
+recipe environment precedence.
+
+`--weights-root DIR` changes `/opt/llm/models`. Slugs match the cluster contract
+`^[A-Za-z0-9][A-Za-z0-9._-]*$`; empty values, slashes, whitespace, shell
+metacharacters, and traversal are rejected before any build/download/launch.
+Arguments are not evaluated as shell snippets. Use a whitespace-free weights
+root (the standard `/opt/llm/models` is supported); the existing launcher's
+string-based Docker volume handling does not preserve custom paths containing
+whitespace. Docker creates a missing mount source as an empty directory, but
+`mods/fes-weights` then fails verification and stops before serve; there is no
+hub fallback. Stage every rank and do not treat a successful `docker run` as
+proof that weights were verified.
+
+With staged weights selected, model cache preflight and model download/copy
+are skipped, including under `--setup`, `--force-download`, and
+`--download-only`. Image setup and distribution remain unchanged. Use a dry run
+to inspect the generated mount, environment, and mod arguments without staging
+or launching:
+
+
+```bash
+./run-recipe.sh <recipe> --solo --dry-run
+./run-recipe.sh <recipe> --solo --slug <other-slug>
+./run-recipe.sh <recipe> --solo --no-fes-weights
+```
+
+### Legacy wrapper and cluster handoff
+
+
+```bash
+scripts/fes-eval.sh glm-5.3-flash glm-5.3-flash-nvfp4 --solo
+scripts/fes-eval.sh --no-fes-weights glm-5.3-flash ignored --solo
+```
+
+
+`fes-eval.sh` retains its positional `<recipe> <slug>` interface, host-side
+verification, `--weights-root`, and `--hub-model`. It now delegates with
+`--slug <slug> --weights-root <root> --default-env FES_HUB_MODEL=<id>` rather
+than separately injecting the mount and mod. Therefore a recipe declaration
+cannot cause duplicate FES mods, and an explicit later `--slug` still wins.
+All remaining args pass through verbatim. In `--no-fes-weights` mode the
+positional slug remains required for compatibility but is ignored and no
+staged verification or mount occurs.
+
+
+The cluster wrapper resolves its own profile/map/default selection and then
+calls staged launches as:
+
+
+```bash
+scripts/fes-eval.sh <recipe> <resolved-slug> <launch-args...>
+```
+
+
+The fork's precedence at that boundary is explicit later `--slug` > recipe
+`FES_WEIGHTS_SLUG` > compatibility `--default-env FES_WEIGHTS_SLUG`. The cluster
+wrapper must resolve `SPARK_VLLM_DOCKER_SLUGS[recipe]` and its global default
+before calling, so a mapped/default cluster choice is passed explicitly rather
+than being confused with the fork's recipe tier. For hub calls it passes:
+
+
+```bash
+scripts/fes-eval.sh --no-fes-weights <recipe> <unused-positional-slug> <launch-args...>
+```
+
+
+This guarantees recipe slug declarations cannot turn a cluster hub launch into
+staged mode.
 ## How the hub shim works
 
 `vllm serve <org/model>` in every recipe resolves through the HF hub cache.

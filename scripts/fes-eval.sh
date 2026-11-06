@@ -4,14 +4,17 @@
 # verify mod, and the offline hub shim wired up.
 #
 # Usage:
-#   scripts/fes-eval.sh [--weights-root DIR] [--hub-model ID] <recipe> <fes-slug> [run-recipe.sh args...]
+#   scripts/fes-eval.sh [--weights-root DIR] [--hub-model ID] [--no-fes-weights] <recipe> <fes-slug> [run-recipe.sh args...]
 #
 # Examples:
 #   scripts/fes-eval.sh glm-5.3-flash glm-5.3-flash-nvfp4 --solo
 #   scripts/fes-eval.sh qwen3.8-27b-nvfp4-w4a4 qwen3.8-27b-nvfp4-w4a4 -n 10.10.10.165
+#   scripts/fes-eval.sh --no-fes-weights glm-5.3-flash ignored --solo
 #
 # --hub-model defaults to the recipe's `model:` field (the org/model id the
 # command serves). Any remaining args are passed to run-recipe.sh verbatim.
+# --no-fes-weights selects normal hub mode, ignoring the recipe slug. The
+# positional slug is still required for compatibility but is not used or checked.
 #
 # Multi-node recipes: every listed node needs the slug staged under the weights
 # root (cluster-config scripts/model-weights.sh stage <slug> fans it out), since
@@ -24,6 +27,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 WEIGHTS_ROOT="/opt/llm/models"
 HUB_MODEL=""
+NO_FES_WEIGHTS=false
 
 usage() {
     sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
@@ -34,6 +38,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --weights-root) WEIGHTS_ROOT="$2"; shift 2 ;;
         --hub-model) HUB_MODEL="$2"; shift 2 ;;
+        --no-fes-weights) NO_FES_WEIGHTS=true; shift ;;
         -h|--help) usage 0 ;;
         *) break ;;
     esac
@@ -52,6 +57,11 @@ for ext in yaml yml; do
     fi
 done
 [ -n "$recipe_file" ] || { echo "error: recipe not found under recipes/: $RECIPE" >&2; exit 2; }
+
+if [ "$NO_FES_WEIGHTS" = true ]; then
+    echo "[fes-eval] recipe=$RECIPE hub mode (--no-fes-weights)"
+    exec "$REPO_DIR/run-recipe.sh" "$RECIPE" --no-fes-weights "$@"
+fi
 
 if [ -z "$HUB_MODEL" ]; then
     HUB_MODEL="$(python3 - "$recipe_file" <<'PY'
@@ -79,10 +89,6 @@ fi
 echo "[fes-eval] recipe=$RECIPE slug=$SLUG hub-model=$HUB_MODEL weights=$weights_dir"
 
 exec "$REPO_DIR/run-recipe.sh" "$RECIPE" \
-    --apply-mod "$REPO_DIR/mods/fes-weights" \
-    -v "$weights_dir:/model:ro" \
-    --default-env "FES_WEIGHTS_ENABLED=1" \
-    --default-env "FES_WEIGHTS_DIR=/model" \
+    --slug "$SLUG" --weights-root "$WEIGHTS_ROOT" \
     --default-env "FES_HUB_MODEL=$HUB_MODEL" \
-    --default-env "HF_HUB_OFFLINE=1" \
     "$@"

@@ -152,7 +152,41 @@ defaults:
   max_model_len: 32000
 env:
   SOME_VAR: "value"
+  # Optional: use /opt/llm/models/<slug> on every node, without hub downloads.
+  FES_WEIGHTS_SLUG: "org-model-revision"
 ```
+
+### FES-staged weights
+
+Declare `env.FES_WEIGHTS_SLUG` to make a direct `run-recipe.sh` launch use the
+FES staged checkpoint at `/opt/llm/models/<slug>`. The runner adds a read-only
+`/model` mount, `mods/fes-weights`, `FES_HUB_MODEL` from `model:`, and offline
+hub-cache defaults. `mods/fes-weights` need not be listed explicitly; duplicate
+references are applied only once, and it is always first in staged mode so
+later mods can use the verified hub shim. All mods run on every rank before the
+serving script, and missing or invalid weights stop that launch rather than fall back
+to the hub. Stage the same slug on every node first. Normal image setup is
+unchanged, but model cache preflight and model download/copy are skipped,
+including with `--setup` or `--download-only`.
+
+An explicit `--slug` overrides the recipe declaration. An orchestrator may
+provide the lowest-priority compatibility default with
+`--default-env FES_WEIGHTS_SLUG=<slug>`; use `--weights-root DIR` to change
+`/opt/llm/models`. Slugs must match `^[A-Za-z0-9][A-Za-z0-9._-]*$`: slashes,
+empty values, whitespace, shell metacharacters, and traversal components are
+rejected before build, download, or launch. Runner arguments are passed without
+shell evaluation. Use a whitespace-free weights root (the standard
+`/opt/llm/models` is supported); the existing launcher's string-based Docker
+volume handling does not preserve custom paths containing whitespace.
+
+`--no-fes-weights` forces normal hub-cache behavior and ignores recipe/default
+slugs. In this mode the runner adds no staged mount or FES environment and
+retains normal model preflight/download. A recipe that still lists
+`mods/fes-weights` remains inert without `FES_WEIGHTS_ENABLED`; its literal
+`FES_WEIGHTS_SLUG` may remain in the container for traceability. Set the
+recipe's `HF_HUB_OFFLINE` appropriately for hub use. See
+[the FES weight staging guide](../docs/fes-weight-staging.md) for the legacy
+wrapper and cluster handoff.
 
 ### Build Arguments
 
@@ -230,6 +264,9 @@ Launch options:
                               Alias: --head-port
   --eth-if IFACE              Override Ethernet interface
   --ib-if IFACE               Override InfiniBand interface
+  --slug SLUG                 Use FES staged weights (overrides recipe slug)
+  --no-fes-weights            Force hub-cache mode, ignoring recipe/default slugs
+  --weights-root DIR          Staged weights root (default /opt/llm/models)
   --default-env KEY=VALUE     Container default below recipe env (repeatable)
   -e, --env VAR[=VALUE]       Override container environment (repeatable)
   -j N                        Number of parallel build jobs

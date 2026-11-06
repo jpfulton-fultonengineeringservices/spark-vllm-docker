@@ -64,6 +64,7 @@ defaults:
   max_num_batched_tokens: 16384
 
 env:
+  FES_WEIGHTS_SLUG: "mimo-v2.6-flash-rl-exl3-v2"
   CUTE_DSL_ARCH: "sm_121a"
   VLLM_USE_V2_MODEL_RUNNER: "1"
   VLLM_SKIP_KV_CACHE_MEMORY_CHECK: "1"

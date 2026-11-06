@@ -80,6 +80,7 @@ defaults:
   num_speculative_tokens: 3
 
 env:
+  FES_WEIGHTS_SLUG: "qwen3.8-27b-coder390-ethink-dflash2-nvfp4-w4a16"
   FIX_EXPLICIT_SPEC_METHOD: "1"
   CUTE_DSL_ARCH: "sm_121a"
   SAFETENSORS_FAST_GPU: "1"

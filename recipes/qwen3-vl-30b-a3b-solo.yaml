@@ -70,6 +70,7 @@ defaults:
 # NVFP4/ModelOpt and YaRN-specific entries (this checkpoint is BF16 at native
 # 256K context, no rope override).
 env:
+  FES_WEIGHTS_SLUG: "qwen3-vl-30b-a3b-instruct-abliterated"
   CUTE_DSL_ARCH: "sm_121a"
   SAFETENSORS_FAST_GPU: "1"
   VLLM_WORKER_MULTIPROC_METHOD: "spawn"

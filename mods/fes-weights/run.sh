@@ -48,7 +48,22 @@ make_shim() {
     local repo_dir="$hub_root/models--${org}--${name}"
     local fp_file="$repo_dir/.fes-shim-fp"
     local fp base f
-    fp="$(cd "$src" && find . -maxdepth 1 -type f -printf '%f %s\n' | sort | sha256sum | cut -d' ' -f1)"
+    fp="$(python3 - "$src" <<'PY'
+import hashlib
+import os
+import sys
+
+entries = sorted(
+    (entry.name, entry.stat().st_size)
+    for entry in os.scandir(sys.argv[1])
+    if entry.is_file(follow_symlinks=False)
+)
+fingerprint = hashlib.sha256()
+for name, size in entries:
+    fingerprint.update(f"{name} {size}\n".encode())
+print(fingerprint.hexdigest())
+PY
+)"
 
     # Best-effort: hand the repo dir to the serving user and make it
     # group/world writable so a root-squashed peer (mod runs as nobody there)

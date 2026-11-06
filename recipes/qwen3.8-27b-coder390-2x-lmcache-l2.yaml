@@ -139,6 +139,7 @@ defaults:
 # Qwen3.5 hybrid (Gated DeltaNet + full attention) on b12x stack.
 # Same block as recipes/qwen3.8-flash-next-nvfp4-cluster.yaml.
 env:
+  FES_WEIGHTS_SLUG: "qwen3.8-27b-coder390-ethink-dflash2-nvfp4-w4a16"
   CUTE_DSL_ARCH: "sm_121a"
   SAFETENSORS_FAST_GPU: "1"
   VLLM_WORKER_MULTIPROC_METHOD: "spawn"

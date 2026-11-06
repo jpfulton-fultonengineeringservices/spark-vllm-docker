@@ -29,6 +29,7 @@ defaults:
   num_speculative_tokens: 7
 
 env:
+  FES_WEIGHTS_SLUG: "deepseek-v4.1-flash-1017"
   VLLM_ENABLE_ROCE_ALLREDUCE: "1"
   VLLM_ROCE_ALLREDUCE_MAX_SIZE: "2MB"
   B12X_COMPILE_WORKERS: "4"
