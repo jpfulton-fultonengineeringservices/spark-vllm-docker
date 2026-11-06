@@ -53,10 +53,13 @@ class Reader:
 
 def write_checkpoint(path, entries):
     metadata, data = {}, bytearray()
-    for name, values in entries:
+    for name, values, dtype in entries:
+        if isinstance(values, torch.Tensor):
+            values = values.view(torch.uint8).tolist()
         start = len(data)
         data.extend(values)
-        metadata[name] = {"dtype": "U8", "shape": [len(values)],
+        shape = [len(values) // (2 if dtype == "BF16" else 1)]
+        metadata[name] = {"dtype": dtype, "shape": shape,
                           "data_offsets": [start, len(data)]}
     header = json.dumps(metadata).encode()
     path.write_bytes(struct.pack("<Q", len(header)) + header + data)
@@ -139,8 +142,8 @@ class SelectedRangesTests(unittest.TestCase):
         impl.__dict__.update(torch=torch, os=os, _C=self.native,
                              recommended_buffer_size_for_tensors=lambda sizes: 2 * max(sizes, default=0),
                              required_buffer_size_for_io=lambda *args: 4,
-                             safetensors_to_torch_dtype={"U8": torch.uint8},
-                             get_tensor_size=lambda shape, dtype: shape[0])
+                             safetensors_to_torch_dtype={"U8": torch.uint8, "BF16": torch.bfloat16},
+                             get_tensor_size=lambda shape, dtype: shape[0] * (2 if dtype is torch.bfloat16 else 1))
         exec(compile((FIXTURE / "instanttensor_impl.py").read_text(), "<image instanttensor>", "exec"), impl.__dict__)
         base = impl.safe_open
         owner = self
@@ -199,10 +202,10 @@ class SelectedRangesTests(unittest.TestCase):
 
     def checkpoints(self):
         base = write_checkpoint(self.root / "a.safetensors", [
-            ("model.a", [1, 2]), ("model.overlay", [99, 99]),
-            ("other.skip", [77]), ("model.b", [3, 4])])
+            ("model.a", [1, 2], "U8"), ("model.overlay", [99, 99], "U8"),
+            ("other.skip", [77], "U8"), ("model.b", [3, 4], "U8")])
         overlay = write_checkpoint(self.root / "z.safetensors", [
-            ("model.overlay", [5, 6]), ("other.large", list(range(40)))])
+            ("model.overlay", [5, 6], "U8"), ("other.large", list(range(40)), "U8")])
         index = {"model.a": base, "model.b": base, "model.overlay": overlay,
                  "other.skip": base, "other.large": overlay}
         return [base, overlay], index
@@ -218,13 +221,35 @@ class SelectedRangesTests(unittest.TestCase):
         self.assertEqual(self.native.opens[0][3:], (4, 42))
         self.assertEqual(self.native.opens[0][0], [files[0], files[0], files[1]])
 
+    def test_bf16_mtp_head_uses_selected_physical_ranges_and_dtype(self):
+        iterator = self.load_iterator()
+        files, index = self.checkpoints()
+        head = torch.tensor([0.5, -1.25, 3.75, 2.0], dtype=torch.bfloat16)
+        mtp = write_checkpoint(self.root / "m.safetensors", [
+            ("target.unused", [13, 14], "U8"),
+            ("mtp.layers.0.weight", head, "BF16"),
+            ("mtp.norm.weight", torch.tensor([1.0, 0.25], dtype=torch.bfloat16), "BF16"),
+        ])
+        files.append(mtp)
+        index.update({"target.unused": mtp, "mtp.layers.0.weight": mtp,
+                      "mtp.norm.weight": mtp})
+        output = list(iterator(files, False, ["mtp."], indexed_tensor_files=index))
+        self.assertEqual([name for name, _ in output],
+                         ["mtp.layers.0.weight", "mtp.norm.weight"])
+        self.assertEqual([tensor.dtype for _, tensor in output],
+                         [torch.bfloat16, torch.bfloat16])
+        self.assertEqual(output[0][1].float().tolist(), head.float().tolist())
+        self.assertEqual(output[1][1].float().tolist(), [1.0, 0.25])
+        self.assertEqual(self.native.opens[0][0], [mtp])
+        self.assertEqual(self.native.opens[0][2], [True, True])
+
     def test_explicit_budget_cpu_fallback_and_priority_exclusion(self):
         os.environ["INSTANTTENSOR_BUFFER_SIZE"] = "2"
         iterator = self.load_iterator()
         files, index = self.checkpoints()
         # Oversized selected tensor uses CPU; an even larger unselected tensor
         # must not leave the constructor's adjusted buffer size in effect.
-        big = write_checkpoint(self.root / "b.safetensors", [("model.big", [8, 9, 10])])
+        big = write_checkpoint(self.root / "b.safetensors", [("model.big", [8, 9, 10], "U8")])
         files.append(big)
         index["model.big"] = big
         output = [(name, tensor.tolist()) for name, tensor in iterator(
