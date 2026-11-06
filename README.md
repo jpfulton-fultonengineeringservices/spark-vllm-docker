@@ -1850,6 +1850,34 @@ alongside the exported wheels.
 ./build-and-copy.sh -t my-vllm-node
 ```
 
+### Publish a built image
+
+Use the same simple name passed to `build-and-copy.sh -t`:
+
+```bash
+./build-and-copy.sh --exp-b12x -t vllm-node-b12x-kr
+./push-to-fse-ghcr.sh push vllm-node-b12x-kr --cluster
+./push-to-fse-ghcr.sh list vllm-node-b12x-kr
+./push-to-fse-ghcr.sh pull vllm-node-b12x-kr  # latest dated version
+```
+
+The publisher requires `gh`, `jq`, Docker, GHCR access, and a Docker GHCR
+login. It uses UTC tags `<name>-YYYYMMDD-N`, allocating N from zero. `pull`
+retags the selected image locally as `<name>:latest`; provide a dated tag to
+select a specific version. Only simple names and optional `:latest` are accepted.
+
+`--cluster` also pushes the same dated tag to `gx10-node1:5000/spark-vllm`
+and updates `gx10-node1:5000/<name>:latest`. Use `--no-cluster-latest` to skip
+the alias. HTTPS verification is on by default; `--insecure-cluster` disables
+verification for the catalog query only. Docker must independently trust the
+cluster registry. A first GHCR publication that returns 404 requires
+`--new-package`: GitHub also uses 404 for inaccessible private packages, so
+confirm access before using it.
+
+Publishing is not transactional: a later failure leaves earlier pushes in
+place and reports them. Use only one publisher across machines: neither GHCR
+nor the cluster registry provides atomic tag reservation.
+
 **Build runner image from wheels:**
 
 ```bash
