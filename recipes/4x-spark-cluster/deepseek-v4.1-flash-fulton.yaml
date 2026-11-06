@@ -1,16 +1,21 @@
 # Recipe: DeepSeek V4.1 Flash (4x DGX Spark)
 
 recipe_version: "1"
-name: DeepSeek-V4.1-Flash (TP=4)
-description: DeepSeek V4.1 Flash on four DGX Sparks with B12X and DSpark speculative decoding
+name: DeepSeek-V4.1-Flash-1017 (TP=4)
+description: DeepSeek V4.1 Flash 1017 on four DGX Sparks with B12X and DSpark speculative decoding
 
-model: deepseek-ai/DeepSeek-V4.1-Flash
-container: vllm-node-b12x
+model: deepseek-ai/DeepSeek-V4.1-Flash-1017
+
+container: vllm-node-b12x-kr
+image_id: sha256:5a5530d173d7bca3264b7aced5a7f5d7b2a104ba3483fd5782ce1f51337d09c9
 
 build_args:
   - --exp-b12x
 
 cluster_only: true
+
+mods:
+  - mods/fes-weights
 
 defaults:
   port: 8000
@@ -33,7 +38,7 @@ env:
   VLLM_MXFP8_LM_HEAD: "1"
 
 command: |
-  vllm serve deepseek-ai/DeepSeek-V4.1-Flash \
+  vllm serve deepseek-ai/DeepSeek-V4.1-Flash-1017 \
       --host {host} \
       --port {port} \
       --dtype bfloat16 \
