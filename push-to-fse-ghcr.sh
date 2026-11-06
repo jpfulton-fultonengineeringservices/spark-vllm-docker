@@ -2,7 +2,7 @@
 set -euo pipefail
 
 GHCR_REPO="ghcr.io/fulton-engineering-services/spark-vllm"
-CLUSTER_HOST="gx10-node1:5000"
+CLUSTER_HOST="${FSE_CLUSTER_REGISTRY:-10.100.170.3:5000}"
 CLUSTER_REPO="$CLUSTER_HOST/spark-vllm"
 API='/orgs/fulton-engineering-services/packages/container/spark-vllm/versions?per_page=100'
 
@@ -16,8 +16,9 @@ Usage:
 IMAGE is the simple name passed to build-and-copy.sh -t, optionally :latest.
 Versioned tags use IMAGE-YYYYMMDD-N (UTC). Pull retags locally as IMAGE:latest.
 --cluster also publishes the same version to node1 and IMAGE:latest there;
---no-cluster-latest skips the moving alias. --insecure-cluster skips TLS
-verification only for the cluster catalog request, not for Docker.
+--no-cluster-latest skips the moving alias. The registry defaults to node1's
+Rail A address 10.100.170.3:5000; override with FSE_CLUSTER_REGISTRY=HOST:PORT.
+--insecure-cluster skips TLS verification for catalog requests, not Docker.
 --new-package acknowledges a GHCR 404 when publishing a new package.
 Cross-machine publishing must use a single writer.
 EOF
@@ -45,6 +46,13 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 if [[ "$cluster" == 0 && ( "$latest" == 0 || "$insecure" == 1 ) ]]; then fail 'cluster options require --cluster'; fi
+if [[ "$cluster" == 1 ]]; then
+    [[ "$CLUSTER_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*:[0-9]+$ ]] \
+        || fail 'FSE_CLUSTER_REGISTRY must be a hostname or IPv4 address followed by :port'
+    port=${CLUSTER_HOST##*:}
+    [[ ${#port} -le 5 && "$port" =~ [1-9] ]] && (( 10#$port <= 65535 )) \
+        || fail 'FSE_CLUSTER_REGISTRY port must be between 1 and 65535'
+fi
 for dependency in gh jq; do command -v "$dependency" >/dev/null || fail "$dependency is required"; done
 if [[ "$cmd" != list ]]; then command -v docker >/dev/null || fail 'docker is required'; fi
 if [[ "$cluster" == 1 ]]; then command -v curl >/dev/null || fail 'curl is required'; fi
@@ -91,8 +99,13 @@ gh_tags() {
 
 cluster_tags() {
     local url="https://$CLUSTER_HOST/v2/spark-vllm/tags/list?n=1000" status link next count=0
+    local ca_file="/etc/docker/certs.d/$CLUSTER_HOST/ca.crt"
     local curl_opts=(-sS -D "$work/headers" -o "$work/cluster.json" -w '%{http_code}')
-    [[ "$insecure" == 0 ]] || curl_opts+=(-k)
+    if [[ "$insecure" == 1 ]]; then
+        curl_opts+=(-k)
+    elif [[ -r "$ca_file" ]]; then
+        curl_opts+=(--cacert "$ca_file")
+    fi
     : > "$work/cluster.tags"
     while :; do
         count=$((count + 1)); [[ $count -le 1000 ]] || fail 'cluster pagination exceeded safety limit'
