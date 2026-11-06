@@ -14,6 +14,10 @@ cluster_only: true
 
 mods:
   - mods/fes-weights
+  - mods/b12x-kernel-cache
+  - mods/mooncake-worker
+  - mods/mooncake-store-l2
+  - mods/fix-mfu-metrics
 
 defaults:
   port: 8000
@@ -37,7 +41,7 @@ env:
   VLLM_MXFP8_LM_HEAD: "1"
 
 command: |
-  vllm serve deepseek-ai/DeepSeek-V4.1-Flash-1017 \
+  b12x-kcache exec vllm serve deepseek-ai/DeepSeek-V4.1-Flash-1017 \
       --host {host} \
       --port {port} \
       --dtype bfloat16 \
