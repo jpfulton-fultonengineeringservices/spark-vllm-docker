@@ -198,11 +198,12 @@ def resolve_fes_weights(
     explicit_custom_mount = any(
         assignment == f"FES_WEIGHTS_DIR={mount_dir}" for assignment in args.env_vars
     )
-    if not explicit_custom_mount and mapping not in args.volume_mappings:
+    if mount_dir != "/model" and not explicit_custom_mount and mapping not in args.volume_mappings:
         print(f"Error: FES_WEIGHTS_DIR {mount_dir!r} requires an explicit read-only "
               f"mount of the selected staged directory: -v {mapping}")
         raise ValueError("mismatched staged weights mount")
-    args.volume_mappings.insert(0, mapping)
+    if mapping not in args.volume_mappings:
+        args.volume_mappings.insert(0, mapping)
     container_env["FES_WEIGHTS_ENABLED"] = "FES_WEIGHTS_ENABLED=1"
     container_env["FES_WEIGHTS_DIR"] = f"FES_WEIGHTS_DIR={mount_dir}"
     container_env.setdefault("FES_HUB_MODEL", f"FES_HUB_MODEL={hub_model}")

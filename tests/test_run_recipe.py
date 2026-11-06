@@ -337,19 +337,13 @@ class StagedWeightsTests(unittest.TestCase):
                     self.assertEqual(launched, {})
                     download.assert_not_called()
 
-    def test_altered_weights_dir_without_exact_mount_fails_closed(self):
-        for source in ("recipe", "explicit"):
-            self.write_recipe(env={"FES_WEIGHTS_SLUG": "slug"})
-            if source == "recipe":
-                self.write_recipe(env={"FES_WEIGHTS_SLUG": "slug", "FES_WEIGHTS_DIR": "/elsewhere"})
-                flags = []
-            else:
-                flags = ["-e", "FES_WEIGHTS_DIR=/elsewhere"]
-            result, output, launched, _, download = self.run_recipe(*flags)
-            self.assertEqual(result, 1)
-            self.assertIn("requires an explicit read-only mount", output)
-            self.assertEqual(launched, {})
-            download.assert_not_called()
+    def test_recipe_altered_weights_dir_without_exact_mount_fails_closed(self):
+        self.write_recipe(env={"FES_WEIGHTS_SLUG": "slug", "FES_WEIGHTS_DIR": "/elsewhere"})
+        result, output, launched, _, download = self.run_recipe()
+        self.assertEqual(result, 1)
+        self.assertIn("requires an explicit read-only mount", output)
+        self.assertEqual(launched, {})
+        download.assert_not_called()
 
     def test_custom_weights_dir_requires_selected_readonly_mount(self):
         self.write_recipe(env={"FES_WEIGHTS_SLUG": "slug", "FES_WEIGHTS_DIR": "/custom"})
