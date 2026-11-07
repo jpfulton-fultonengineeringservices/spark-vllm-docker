@@ -4,9 +4,9 @@
 # --gdn-decode-kernel flag, so none is passed; decode runs the default fused
 # CUDA GDN kernel (VLLM_GDN_DECODE_KERNEL defaults to "cuda").
 #
-# Serves the local QAD5500 hybrid-refined NVFP4 Flash-Next checkpoint at
-# /nas-1/models/qwen3.8/qwen3.8-flash-next-nvfp4-qad5500-hybrid (40 shard
-# files; the two extra hybrid-main sidecars ship outside the index).
+# Serves local-inference-lab Qwen3.8 Flash Next NVFP4 checkpoint at
+# /nas-1/models/qwen3.8/qwen3.8-flash-next-nvfp4 (40 shard files; two extra
+# hybrid-main sidecars ship outside the index).
 # `model:` is the FES-recognized served identity (the hub shim's /model name)
 # and mods/fes-weights overlays the staged NAS weights onto that shim, so
 # cluster-config's `resolve_recipe_profile` maps this recipe to the shared
@@ -16,10 +16,11 @@
 # `--ray` gate because vllm-node-b12x recipes run no-Ray by construction.
 
 recipe_version: "1"
-name: Qwen3.8-Flash-Next-NVFP4-QAD5500-Hybrid (2x TP=2)
-description: vLLM serving the local QAD5500 hybrid-refined NVFP4 Flash-Next checkpoint on two DGX Sparks with B12X, PLE device tables, and MTP speculative decoding.
+name: Qwen3.8-Flash-Next-NVFP4 (2x TP=2)
+description: >
+  vLLM serving local-inference-lab Qwen3.8 Flash Next NVFP4 from /nas-1/models/qwen3.8/qwen3.8-flash-next-nvfp4 on two DGX Sparks with B12X, PLE device tables, and MTP speculative decoding. UNVALIDATED first-boot and live capability verification pending.
 
-model: nvidia/Qwen3.8-Flash-Next-FP4-Local
+model: local-inference-lab/Qwen3.8-Flash-Next-NVFP4
 
 container: vllm-node-b12x
 
@@ -62,7 +63,7 @@ env:
   B12X_W4A16_A4_PREFILL: "1"
 
 command: |
-  vllm serve nvidia/Qwen3.8-Flash-Next-FP4-Local \
+  vllm serve local-inference-lab/Qwen3.8-Flash-Next-NVFP4 \
     --host {host} \
     --port {port} \
     --tensor-parallel-size {tensor_parallel} \
