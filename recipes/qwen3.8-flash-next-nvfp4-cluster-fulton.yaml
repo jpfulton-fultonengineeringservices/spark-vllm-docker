@@ -12,7 +12,6 @@ description: vLLM serving nvidia/Qwen3.8-Flash-Next-FP4-Local on a dual DGX Spar
 model: nvidia/Qwen3.8-Flash-Next-FP4-Local
 
 container: vllm-node-b12x
-image_id: sha256:5a5530d173d7bca3264b7aced5a7f5d7b2a104ba3483fd5782ce1f51337d09c9
 
 build_args:
   - --exp-b12x
