@@ -1,10 +1,16 @@
 # Recipe: Qwen3.5-397B-A17B-FP8
 # Qwen3.5-397B-A17B model in FP8 precision
 # Multi-modal input
+#
+# This variant adds:
+# - b12x-kcache wrapper to restore/save autotuned kernels
+# - Mooncake env vars for store integration (OPT-IN)
+# - Full interpolation of all command-line defaults
+# - FES weights and fix-qwen3.5-autoround mods
 
 recipe_version: "1"
 name: Qwen3.5-397B-A17B-FP8
-description: vLLM serving Qwen3.5-397B-A17B-FP8
+description: vLLM serving Qwen3.5-397B-A17B-FP8 with b12x-kcache wrapper and Mooncake L2 KV cache support
 
 # HuggingFace model to download (optional, for --download-model)
 model: Qwen/Qwen3.5-397B-A17B-FP8
@@ -23,18 +29,26 @@ defaults:
   gpu_memory_utilization: 0.85
   max_model_len: 262144
   max_num_batched_tokens: 8192
+  max_num_seqs: 32
+  attention_backend: flashinfer
+  cudagraph_mode: none
 
 # Environment variables
-env: 
+env:
   FES_WEIGHTS_SLUG: "qwen3.5-397b-a17b-fp8"
   VLLM_USE_DEEP_GEMM: 0
   VLLM_USE_FLASHINFER_MOE_FP16: 1
   VLLM_USE_FLASHINFER_SAMPLER: 0
   OMP_NUM_THREADS: 4
+  # Mooncake L2 store integration (OPT-IN)
+  # Set MOONCAKE_L2_ENABLED=1 to enable store-l2 mod and MooncakeConnector
+  MOONCAKE_L2_ENABLED: 0
+  MOONCAKE_CONFIG_PATH: "/tmp/mooncake-store.json"
+  MOONCAKE_LOCAL_BUFFER_GIB: 4
 
-# The vLLM serve command template
+# The vLLM serve command template wrapped by b12x-kcache
 command: |
-  vllm serve Qwen/Qwen3.5-397B-A17B-FP8 \
+  b12x-kcache exec vllm serve Qwen/Qwen3.5-397B-A17B-FP8 \
     --max-model-len {max_model_len} \
     --gpu-memory-utilization {gpu_memory_utilization} \
     --port {port} \
@@ -46,11 +60,13 @@ command: |
     --reasoning-parser qwen3 \
     --max-num-batched-tokens {max_num_batched_tokens} \
     --trust-remote-code \
-    -tp {tensor_parallel} \
+    --tensor-parallel-size {tensor_parallel} \
     --distributed-executor-backend ray \
     --mm-encoder-tp-mode data \
     --kv-cache-dtype fp8 \
-    --compilation-config.cudagraph_mode none \
-    --max-num-seqs 32 \
-    --attention-backend flashinfer
-
+    --compilation-config.cudagraph_mode {cudagraph_mode} \
+    --max-num-seqs {max_num_seqs} \
+    --attention-backend {attention_backend} \
+    --enable-mfu-metrics \
+    --kv-cache-metrics \
+    --kv-cache-metrics-sample 1.0

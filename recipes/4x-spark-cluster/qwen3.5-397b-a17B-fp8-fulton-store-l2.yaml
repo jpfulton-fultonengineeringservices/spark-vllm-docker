@@ -1,0 +1,75 @@
+# Recipe: Qwen3.5-397B-A17B-FP8 with Mooncake L2 KV cache
+# Qwen3.5-397B-A17B model in FP8 precision with durable Mooncake L2 store KV cache
+#
+# This variant adds:
+# - b12x-kcache wrapper to restore/save autotuned kernels
+# - Mooncake L2 store KV cache with MooncakeStoreConnector
+# - kv-transfer-config for staged storage with content-hash lookup
+# - Full interpolation of all command-line defaults
+# - FES weights and fix-qwen3.5-autoround mods
+
+recipe_version: "1"
+name: Qwen3.5-397B-A17B-FP8 (store-l2)
+description: vLLM serving Qwen3.5-397B-A17B-FP8 with b12x-kcache wrapper and durable Mooncake L2 KV cache
+
+# HuggingFace model to download (optional, for --download-model)
+model: Qwen/Qwen3.5-397B-A17B-FP8
+container: vllm-node-b12x
+
+# Required mods
+mods:
+  - mods/fes-weights
+  - mods/fix-qwen3.5-autoround
+  - mods/mooncake-store-l2
+
+# Default settings (can be overridden via CLI)
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 4
+  gpu_memory_utilization: 0.85
+  max_model_len: 262144
+  max_num_batched_tokens: 8192
+  max_num_seqs: 32
+  attention_backend: flashinfer
+  cudagraph_mode: none
+
+# Environment variables
+env:
+  FES_WEIGHTS_SLUG: "qwen3.5-397b-a17b-fp8"
+  VLLM_USE_DEEP_GEMM: 0
+  VLLM_USE_FLASHINFER_MOE_FP16: 1
+  VLLM_USE_FLASHINFER_SAMPLER: 0
+  OMP_NUM_THREADS: 4
+  # Mooncake L2 store integration (REQUIRED for store-l2)
+  MOONCAKE_L2_ENABLED: 1
+  MOONCAKE_CONFIG_PATH: "/tmp/mooncake-store.json"
+  MOONCAKE_LOCAL_BUFFER_GIB: 4
+  MOONCAKE_MASTER_SERVER_ADDRESS: "<REDACTED>"
+  MOONCAKE_MASTER_PORT: 50051
+
+# The vLLM serve command template wrapped by b12x-kcache
+command: |
+  b12x-kcache exec vllm serve Qwen/Qwen3.5-397B-A17B-FP8 \
+    --max-model-len {max_model_len} \
+    --gpu-memory-utilization {gpu_memory_utilization} \
+    --port {port} \
+    --host {host} \
+    --load-format instanttensor \
+    --enable-prefix-caching \
+    --enable-auto-tool-choice \
+    --tool-call-parser qwen3_coder \
+    --reasoning-parser qwen3 \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --trust-remote-code \
+    --tensor-parallel-size {tensor_parallel} \
+    --distributed-executor-backend ray \
+    --mm-encoder-tp-mode data \
+    --kv-cache-dtype fp8 \
+    --compilation-config.cudagraph_mode {cudagraph_mode} \
+    --max-num-seqs {max_num_seqs} \
+    --attention-backend {attention_backend} \
+    --kv-transfer-config '{{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both","kv_load_failure_policy":"recompute","kv_connector_extra_config":{{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":1024,"enable_lookup":true,"cache_prefix":"{cache_lineage_prefix}"}}}}' \
+    --enable-mfu-metrics \
+    --kv-cache-metrics \
+    --kv-cache-metrics-sample 1.0
