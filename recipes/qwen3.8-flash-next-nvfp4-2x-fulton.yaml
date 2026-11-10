@@ -18,10 +18,9 @@
 recipe_version: "1"
 name: Qwen3.8-Flash-Next-NVFP4 (2x TP=2)
 description: >
-  vLLM serving local-inference-lab Qwen3.8 Flash Next NVFP4 from /nas-1/models/qwen3.8/qwen3.8-flash-next-nvfp4 on two DGX Sparks with B12X, PLE device tables, and MTP speculative decoding. UNVALIDATED first-boot and live capability verification pending.
+  vLLM serving local-inference-lab Qwen3.8 Flash Next NVFP4 from /nas-1/models/qwen3.8/qwen3.8-flash-next-nvfp4 on two DGX Sparks with B12X, PLE device tables, and MTP speculative decoding.
 
 model: local-inference-lab/Qwen3.8-Flash-Next-NVFP4
-
 container: vllm-node-b12x
 
 build_args:
@@ -30,6 +29,7 @@ build_args:
 cluster_only: true
 
 mods:
+  - mods/b12x-kernel-cache
   - mods/fes-weights
 
 defaults:
@@ -63,7 +63,7 @@ env:
   B12X_W4A16_A4_PREFILL: "1"
 
 command: |
-  vllm serve local-inference-lab/Qwen3.8-Flash-Next-NVFP4 \
+  b12x-kcache exec vllm serve local-inference-lab/Qwen3.8-Flash-Next-NVFP4 \
     --host {host} \
     --port {port} \
     --tensor-parallel-size {tensor_parallel} \
@@ -89,4 +89,8 @@ command: |
     --tool-call-parser qwen3_xml \
     --enable-auto-tool-choice \
     --compilation-config '{{"pass_config":{{"fuse_act_quant":true}}}}' \
-    --gpu-memory-utilization {gpu_memory_utilization}
+    --gpu-memory-utilization {gpu_memory_utilization} \
+    --enable-auto-tool-choice \
+    --enable-mfu-metrics \
+    --kv-cache-metrics \
+    --kv-cache-metrics-sample 1.0

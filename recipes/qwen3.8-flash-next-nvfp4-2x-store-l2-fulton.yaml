@@ -1,0 +1,108 @@
+# Recipe: Qwen3.8-Flash-Next-FP4-Local (two-node cluster, 2x TP=2)
+# Two-node configuration using the B12X-optimized serving stack with PLE
+# tables allocated on the GPU. The vLLM build (0.32) has no
+# --gdn-decode-kernel flag, so none is passed; decode runs the default fused
+# CUDA GDN kernel (VLLM_GDN_DECODE_KERNEL defaults to "cuda").
+#
+# Serves local-inference-lab Qwen3.8 Flash Next NVFP4 checkpoint at
+# /nas-1/models/qwen3.8/qwen3.8-flash-next-nvfp4 (40 shard files; two extra
+# hybrid-main sidecars ship outside the index).
+# `model:` is the FES-recognized served identity (the hub shim's /model name)
+# and mods/fes-weights overlays the staged NAS weights onto that shim, so
+# cluster-config's `resolve_recipe_profile` maps this recipe to the shared
+# qwen3.8-flash-next-nvfp4 Litellm route alongside the 4x TP=4 sibling.
+#
+# NOTE: NOT registered in infra/cluster-config/scripts/lib/spark-launch.sh's
+# `--ray` gate because vllm-node-b12x recipes run no-Ray by construction.
+
+recipe_version: "1"
+name: Qwen3.8-Flash-Next-NVFP4 (2x TP=2, durable Mooncake store L2)
+description: >
+  vLLM serving local-inference-lab Qwen3.8 Flash Next NVFP4 from /nas-1/models/qwen3.8/qwen3.8-flash-next-nvfp4 on two DGX Sparks with B12X, PLE device tables, and MTP speculative decoding.
+
+model: local-inference-lab/Qwen3.8-Flash-Next-NVFP4
+container: vllm-node-b12x
+
+build_args:
+  - --exp-b12x
+
+cluster_only: true
+
+mods:
+  - mods/b12x-kernel-cache
+  - mods/fes-weights
+  - mods/mooncake-worker
+  - mods/mooncake-store-l2
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 2
+  pipeline_parallel: 1
+  block_size: 16
+  max_model_len: 262144
+  max_num_seqs: 16
+  max_num_batched_tokens: 4096
+  num_speculative_tokens: 4
+  gpu_memory_utilization: 0.7
+
+env:
+  VLLM_ENABLE_ROCE_ALLREDUCE: "1"
+  VLLM_ROCE_ALLREDUCE_MAX_SIZE: "2MB"
+  NCCL_BUFFSIZE: "1048576"
+  NCCL_MAX_CTAS: "8"
+  CUTE_DSL_ARCH: "sm_121a"
+  SAFETENSORS_FAST_GPU: "1"
+  VLLM_WORKER_MULTIPROC_METHOD: "spawn"
+  VLLM_SSM_CONV_STATE_LAYOUT: "DS"
+  VLLM_USE_AOT_COMPILE: "1"
+  VLLM_USE_MEGA_AOT_ARTIFACT: "1"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+  B12X_POLICY_MODE: "auto"
+  VLLM_MXFP8_LM_HEAD: "1"
+  VLLM_B12X_MOE_FP4_LAYER_MAX_INPUT_SCALE: "w13"
+  VLLM_B12X_MOE_FP4_FORCE_A16: "1"
+  B12X_W4A16_A4_PREFILL: "1"
+  # --- durable Mooncake store L2 ---
+  MOONCAKE_L2_ENABLED: "1"
+  MOONCAKE_WORKER_P2P: "skip"
+  MOONCAKE_CONFIG_PATH: "/tmp/mooncake-store.json"
+  PYTHONHASHSEED: "0"
+  # GC lease on batch_get offload buffers (ms); must outlive the NAS read of
+  # a full 1 GiB staged chunk (~4.8 s at ~225 MB/s).
+  MOONCAKE_OFFLOAD_CLIENT_BUFFER_GC_TTL_MS: "90000"
+
+command: |
+  # unset PYTORCH_CUDA_ALLOC_CONF
+  b12x-kcache exec vllm serve local-inference-lab/Qwen3.8-Flash-Next-NVFP4 \
+    --host {host} \
+    --port {port} \
+    --tensor-parallel-size {tensor_parallel} \
+    --pipeline-parallel-size {pipeline_parallel} \
+    --mamba-cache-mode align \
+    --enable-prefix-caching \
+    --enable-chunked-prefill \
+    --dtype bfloat16 \
+    --kv-cache-dtype fp8 \
+    --quantization modelopt_mixed \
+    --block-size {block_size} \
+    --load-format b12x \
+    --additional-config '{{"ple_table_memory":"device"}}' \
+    --max-model-len {max_model_len} \
+    --max-num-seqs {max_num_seqs} \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --speculative-config '{{"method":"mtp","num_speculative_tokens":{num_speculative_tokens}, "draft_tensor_parallel_size": {tensor_parallel} }}' \
+    --linear-backend b12x \
+    --moe-backend b12x \
+    --no-enable-flashinfer-autotune \
+    --mm-encoder-tp-mode data \
+    --reasoning-parser qwen3 \
+    --tool-call-parser qwen3_xml \
+    --enable-auto-tool-choice \
+    --compilation-config '{{"pass_config":{{"fuse_act_quant":true}}}}' \
+    --gpu-memory-utilization {gpu_memory_utilization} \
+    --enable-auto-tool-choice \
+    --enable-mfu-metrics \
+    --kv-cache-metrics \
+    --kv-cache-metrics-sample 1.0 \
+    --kv-transfer-config '{{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both","kv_load_failure_policy":"recompute","kv_connector_extra_config":{{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":1024,"enable_lookup":true,"cache_prefix":"{cache_lineage_prefix}"}}}}'

@@ -143,8 +143,7 @@ env:
 # NOTE: comments must stay OUT of the command body -- a comment between
 # line-continuations truncates the rendered exec-script (observed live).
 command: |
-  # vLLM hard-rejects KV connectors with expandable_segments (config/vllm.py:952-970).
-  unset PYTORCH_CUDA_ALLOC_CONF
+  # unset PYTORCH_CUDA_ALLOC_CONF
   b12x-kcache exec vllm serve local-inference-lab/Qwen3.8-27B-Coder390-DFlash2 \
     --host {host} \
     --port {port} \
