@@ -631,9 +631,7 @@ class FesRecipeCatalogTests(unittest.TestCase):
             "qwen3-vl-30b-a3b-solo": "qwen3-vl-30b-a3b-instruct-abliterated",
             "4x-spark-cluster/deepseek-v4.1-flash-fulton": "deepseek-v4.1-flash-1017",
             "4x-spark-cluster/minimax-m2.5-fulton": "minimax-m2.5",
-            "4x-spark-cluster/minimax-m2.5": "minimax-m2.5",
             "4x-spark-cluster/qwen3.5-397b-a17B-fp8-fulton": "qwen3.5-397b-a17b-fp8",
-            "4x-spark-cluster/qwen3.5-397b-a17B-fp8": "qwen3.5-397b-a17b-fp8",
         }
         for name in (
             "2x", "2x-store-l2", "2x-store-l2-mtp", "2x-lmcache-l2",
@@ -647,9 +645,21 @@ class FesRecipeCatalogTests(unittest.TestCase):
                 self.assertEqual(runner.fes_weights_slug(slug), slug)
 
     def test_unmapped_4x_recipes_remain_without_guessed_slugs(self):
+        # The two upstream 4x recipes serve their HF repo id directly
+        # (`vllm serve MiniMaxAI/MiniMax-M2.5`, `vllm serve
+        # Qwen/Qwen3.5-397B-A17B-FP8 --load-format instanttensor`) with no
+        # mods/fes-weights, so they are hub-cache recipes: the staged contract
+        # for those checkpoints belongs to their -fulton twins above, exactly
+        # as deepseek-v4.1-flash's does here. Declaring a slug on them would
+        # switch the launch to a read-only /opt/llm/models/<slug> mount with
+        # HF_HUB_OFFLINE=1 while the command still names the hub id, and the
+        # checkpoints are not staged on any rank today. cluster-config still
+        # maps both in SPARK_VLLM_DOCKER_SLUGS, so a staged launch remains
+        # available per invocation via --mode/--slug; the recipe file simply
+        # does not claim a default it cannot satisfy.
         for name in (
-            "deepseek-v4.1-flash", "nemotron-3-ultra-nvfp4",
-            "qwen3.5-397b-int4-autoround",
+            "deepseek-v4.1-flash", "minimax-m2.5", "nemotron-3-ultra-nvfp4",
+            "qwen3.5-397b-a17B-fp8", "qwen3.5-397b-int4-autoround",
         ):
             with self.subTest(recipe=name):
                 recipe = runner.load_recipe(ROOT / f"recipes/4x-spark-cluster/{name}.yaml")
