@@ -10,7 +10,6 @@ name: Qwen3.8-Flash-Next-FP4-Local (Cluster)
 description: vLLM serving nvidia/Qwen3.8-Flash-Next-FP4-Local on a dual DGX Spark cluster with GPU-resident PLE tables
 
 model: nvidia/Qwen3.8-Flash-Next-FP4-Local
-
 container: vllm-node-b12x
 
 build_args:
