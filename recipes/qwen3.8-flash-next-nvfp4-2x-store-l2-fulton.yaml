@@ -106,6 +106,7 @@ command: |
     --tensor-parallel-size {tensor_parallel} \
     --pipeline-parallel-size {pipeline_parallel} \
     --mamba-cache-mode align \
+    --recurrent-checkpoint-policy aligned \
     --enable-prefix-caching \
     --enable-chunked-prefill \
     --dtype bfloat16 \

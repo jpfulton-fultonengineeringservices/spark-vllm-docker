@@ -90,6 +90,26 @@ class MooncakeStoreKVEvents(KVConnectorKVEvents):
 class MooncakeStoreConnector(KVConnectorBase_V1, SupportsHMA):
     """KV connector using MooncakeDistributedStore as shared KV pool."""
 
+    @classmethod
+    def supports_aligned_hybrid_transfer(cls, config: VllmConfig) -> bool:
+        """Aligned retention transfers this connector's hybrid state correctly.
+
+        ``VllmConfig._verify_kv_transfer_compat`` only lets a Qwen QSA hybrid
+        model keep its GDN/Mamba recurrent state in an external connector when
+        the connector says so, and ``KVConnectorBase_V1`` answers False. This
+        connector is align-mode-only by construction: ``_validate_kv_cache_config``
+        below refuses any ``MambaSpec`` whose ``block_size`` differs from
+        ``cache_config.block_size`` (exactly ``mamba_cache_mode == 'align'``),
+        refuses ``CrossAttentionSpec``, and refuses ``pcp * dcp > 1`` once more
+        than one KV cache group exists -- so every store and lookup of
+        recurrent state lands on hash-aligned block boundaries, the same
+        contract ``SimpleCPUOffloadConnector`` and ``OffloadingConnector``
+        declare. The durable-L2 recipes already running on this path persist
+        the GatedDeltaNet layers' Mamba state by content hash and re-serve it
+        across engine restarts.
+        """
+        return True
+
     @property
     def prefer_cross_layer_blocks(self) -> bool:
         extra_config = self._kv_transfer_config.kv_connector_extra_config
