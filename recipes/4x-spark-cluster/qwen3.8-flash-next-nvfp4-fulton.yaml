@@ -31,6 +31,7 @@ cluster_only: true
 mods:
   - mods/b12x-kernel-cache
   - mods/fes-weights
+  - mods/fix-mfu-metrics
 
 defaults:
   port: 8000
@@ -61,9 +62,10 @@ env:
   VLLM_B12X_MOE_FP4_LAYER_MAX_INPUT_SCALE: "w13"
   VLLM_B12X_MOE_FP4_FORCE_A16: "1"
   B12X_W4A16_A4_PREFILL: "1"
+  FIX_MFU_METRICS: "1"
 
 command: |
-  vllm serve local-inference-lab/Qwen3.8-Flash-Next-NVFP4 \
+  b12x-kcache exec vllm serve local-inference-lab/Qwen3.8-Flash-Next-NVFP4 \
     --host {host} \
     --port {port} \
     --tensor-parallel-size {tensor_parallel} \
