@@ -73,7 +73,7 @@ defaults:
   # 0.50 (not the base recipe's 0.75): the Mooncake store cohort co-tenants the
   # GB10 unified pool and the connector pins 2x2048 MiB host-staging slots
   # after vLLM sizes KV. 0.65 drove node 0 free on the 2x sibling.
-  gpu_memory_utilization: 0.50
+  gpu_memory_utilization: 0.60
   # Long-context YaRN: native 262144, factor 4, advertised maximum 1048576.
   # Current vLLM expects the advertised maximum already scaled for YaRN; the
   # draft inherits it through the MTP override and no longer clips to 262144.
