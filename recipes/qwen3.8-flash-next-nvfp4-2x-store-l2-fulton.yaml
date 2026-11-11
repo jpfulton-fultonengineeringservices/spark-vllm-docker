@@ -66,7 +66,7 @@ defaults:
   # nothing for that ~44 GiB cohort. Every validated durable-L2 recipe in this
   # repo runs 0.50 for exactly this reason; the coder390 2x records 0.65
   # driving a node to 0 free. Re-measure before raising it.
-  gpu_memory_utilization: 0.50
+  gpu_memory_utilization: 0.60
 
 env:
   VLLM_ENABLE_ROCE_ALLREDUCE: "1"
