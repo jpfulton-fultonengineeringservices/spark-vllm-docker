@@ -1,0 +1,192 @@
+# Recipe: Qwen3.8-Flash-Next-FP4-Local (four-node cluster, 4x TP=4, durable Mooncake store L2)
+# Four-node configuration on the B12X-optimized serving stack with PLE tables
+# allocated on the GPU and the durable Mooncake store L2 KV tier behind it. This
+# is the store-L2 twin of recipes/4x-spark-cluster/qwen3.8-flash-next-nvfp4-fulton
+# (TP=4, no L2) and the four-node sibling of
+# recipes/qwen3.8-flash-next-nvfp4-2x-store-l2-fulton (TP=2, L2, running live on
+# two node pairs as of 2026-11-11). The vLLM build (0.32) has no
+# --gdn-decode-kernel flag, so none is passed; decode runs the default fused CUDA
+# GDN kernel (VLLM_GDN_DECODE_KERNEL defaults to "cuda").
+#
+# Serves local-inference-lab Qwen3.8 Flash Next NVFP4 at
+# /nas-1/models/qwen3.8/qwen3.8-flash-next-nvfp4 (40 shard files; two extra
+# hybrid-main sidecars ship outside the index).
+# `model:` is the FES-recognized served identity (the hub shim's /model name)
+# and mods/fes-weights overlays the staged NAS weights onto that shim, so
+# cluster-config's `resolve_recipe_profile` maps this recipe to the shared
+# qwen3.8-flash-next-nvfp4 LiteLLM route alongside its 2x/4x non-L2 siblings.
+#
+# LIVES AT THE recipes/ TOP LEVEL, not under 4x-spark-cluster/, to match every
+# other durable-L2 recipe in this repo (qwen3.8-27b-coder390-2x/-4x-store-l2 and
+# their -mtp twins, and the 2x store-L2 flash-next above). Both spellings
+# resolve: cluster-config's resolve_recipe_profile (scripts/lib/spark-recipe.sh:
+# 128-142) looks up recipes/<spec>.yaml verbatim, so a nested spec works too --
+# but a nested spec would also gain a directory level inside the offload and
+# staging bucket paths, which are keyed on the recipe spec verbatim. Keeping the
+# name flat keeps this family's buckets uniformly shaped.
+#
+# WHAT MAKES THIS BOOT AT ALL (do not "clean up" these two things):
+# vllm/config/vllm.py::_verify_kv_transfer_compat rejects ANY kv_connector for
+# this checkpoint's model_type (qwen3_8_flash_next[_text]) unless the connector
+# satisfies supports_request_boundary_checkpoints, OR
+# (recurrent_checkpoint_policy == "aligned" AND decode_context_parallel_size == 1
+#  AND connector.supports_aligned_hybrid_transfer). The gate compares the RAW
+# literal, and the config default is "auto", so --recurrent-checkpoint-policy
+# aligned below is MANDATORY, not advisory. The second predicate is supplied by
+# mods/mooncake-worker, which patches supports_aligned_hybrid_transfer -> True
+# onto the vendored MooncakeStoreConnector. Drop either one and the engine dies
+# at config validation with "Aligned KV cache block size ... not supported".
+#
+# THE HOST-SIDE COHORT IS NOT THIS RECIPE'S JOB, BUT IT DEPENDS ON ITS NAME:
+# cluster-config starts the mooncake master + per-node clients (gate 3,
+# scripts/lib/spark-launch.sh:205-218) only for recipe specs matching
+# *qwen3.8-flash-next-nvfp4*store-l2*, so this filename is load-bearing -- rename
+# it and vLLM boots happily against a store master nobody ever started. The
+# recipe deliberately declares NO MOONCAKE_MASTER_PORT / _CLIENT_PORT /
+# _SEGMENT_SIZE_GIB / _LOCAL_BUFFER_GIB / _OFFLOAD_MAX_GIB, so spark-launch.sh's
+# recipe_env_or_default fallbacks supply them (50051 / 50053 / 24 GiB DRAM
+# segment / 4 GiB local buffer / 96 GiB NVMe offload cap per node) -- the same
+# shape the validated coder390 store-L2 recipes use.
+#
+# KV NAMESPACE -- READ BEFORE CLONING THIS RECIPE AGAIN:
+# Mooncake keys are {cache_prefix}@{model}@tp_rank:N@...@{token_hash} and
+# derive_cache_lineage_prefix (run-recipe.py:340-365) hashes only model,
+# container, image_id, the KV-relevant defaults slice (kv_cache_dtype,
+# block_size, quantization, max_model_len, num_speculative_tokens) and the
+# command TEMPLATE -- tensor_parallel and gpu_memory_utilization are excluded on
+# purpose (all ranks share one namespace; the key already encodes tp_rank). The
+# command template is hashed BEFORE interpolation, so this file and its 2x twin
+# produce the SAME cache_prefix. That is safe as deployed, because each launch
+# brings up its OWN master (gate 3) and its OWN recipe-keyed offload/staging
+# buckets -- ${MOONCAKE_OFFLOAD_DIR}/<recipe>/<host> and
+# ${MOONCAKE_OFFLOAD_STAGING_ROOT}/<recipe>/<host>, scripts/lib/spark-backends.sh:
+# 76,84-85 -- and because every spark profile is mutually exclusive at the
+# preflight fleet-occupancy gate. It is NOT safe if this recipe is ever pointed
+# at a cohort a TP=2 deployment started: same prefix plus a different shard
+# count means reading another topology's tp_rank keys. The two per-node guards
+# above are what prevent it; do not remove them.
+#
+# NOTE: NOT registered in infra/cluster-config/scripts/lib/spark-launch.sh's
+# `--ray` gate (spark-launch.sh:245-249) because vllm-node-b12x recipes run
+# no-Ray by construction.
+
+recipe_version: "1"
+name: Qwen3.8-Flash-Next-NVFP4 (4x TP=4, durable Mooncake store L2)
+description: >
+  vLLM serving local-inference-lab Qwen3.8 Flash Next NVFP4 from /nas-1/models/qwen3.8/qwen3.8-flash-next-nvfp4 on four DGX Sparks with B12X, PLE device tables, MTP speculative decoding, and the durable Mooncake store L2 KV tier.
+
+model: local-inference-lab/Qwen3.8-Flash-Next-NVFP4
+container: vllm-node-b12x
+
+build_args:
+  - --exp-b12x
+
+cluster_only: true
+
+mods:
+  - mods/b12x-kernel-cache
+  - mods/fes-weights
+  - mods/mooncake-worker
+  - mods/mooncake-store-l2
+  # Guard Mamba-align speculative-block relocation against the hashed/shared
+  # blocks the KV connector exposes on an external prefix hit. Required
+  # whenever --mamba-cache-mode align (command below) meets MTP speculative
+  # decoding and "enable_lookup": true -- without it the first store hit
+  # trips the is_block_writable assert and kills EngineCore. Same guard the
+  # validated durable-L2 twins carry (qwen3.8-27b-coder390-2x/-4x-store-l2).
+  - mods/mamba-spec-relocate-guard
+  # Port the FES fork's perf.py MFU corrections onto the installed vLLM tree:
+  # modelopt_mixed per-component weight byte sizes, hybrid full/linear-attention
+  # layer accounting and GatedDeltaNet (GDN) FLOPs. Activated by FIX_MFU_METRICS
+  # below; the command passes --enable-mfu-metrics, so uncorrected numbers from
+  # this checkpoint would be billed as if they were right.
+  - mods/fix-mfu-metrics
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 4
+  pipeline_parallel: 1
+  block_size: 16
+  max_model_len: 262144
+  max_num_seqs: 16
+  max_num_batched_tokens: 4096
+  num_speculative_tokens: 4
+  # 0.60, NOT the 0.7 the non-L2 4x recipe carries. GB10 unified memory is
+  # zero-sum against the store cohort, which lives OUTSIDE this fraction:
+  # a 24 GiB mooncake-client DRAM segment + ~4 GiB offload buffer per node
+  # (host-side), the rank's 4 GiB TransferEngine local_buffer, plus the
+  # 2 x 1024 MiB host-staging slots the connector pins AFTER vLLM has already
+  # sized its KV pool. That cohort is a PER-NODE fixed cost and is the same at
+  # TP=4 as at TP=2 -- one rank per node either way -- so the value validated on
+  # the live 2x store-L2 pair transfers directly, while 0.7 is only affordable
+  # by recipes with no store daemons to pay for. Re-measure vLLM's free-memory
+  # admission before raising it; lowering it is the expected fix if the worker
+  # init aborts on free memory.
+  gpu_memory_utilization: 0.60
+
+env:
+  VLLM_ENABLE_ROCE_ALLREDUCE: "1"
+  VLLM_ROCE_ALLREDUCE_MAX_SIZE: "2MB"
+  NCCL_BUFFSIZE: "1048576"
+  NCCL_MAX_CTAS: "8"
+  CUTE_DSL_ARCH: "sm_121a"
+  SAFETENSORS_FAST_GPU: "1"
+  VLLM_WORKER_MULTIPROC_METHOD: "spawn"
+  VLLM_SSM_CONV_STATE_LAYOUT: "DS"
+  VLLM_USE_AOT_COMPILE: "1"
+  VLLM_USE_MEGA_AOT_ARTIFACT: "1"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+  B12X_POLICY_MODE: "auto"
+  VLLM_MXFP8_LM_HEAD: "1"
+  VLLM_B12X_MOE_FP4_LAYER_MAX_INPUT_SCALE: "w13"
+  VLLM_B12X_MOE_FP4_FORCE_A16: "1"
+  B12X_W4A16_A4_PREFILL: "1"
+  # --- durable Mooncake store L2 ---
+  MOONCAKE_L2_ENABLED: "1"
+  MOONCAKE_WORKER_P2P: "skip"
+  MOONCAKE_CONFIG_PATH: "/tmp/mooncake-store.json"
+  PYTHONHASHSEED: "0"
+  # Activate mods/mamba-spec-relocate-guard (see mods: above).
+  MAMBA_SPEC_RELOCATE_GUARD: "1"
+  # Activate mods/fix-mfu-metrics (see mods: above).
+  FIX_MFU_METRICS: "1"
+  # GC lease on batch_get offload buffers (ms); must outlive the NAS read of
+  # a full 1 GiB staged chunk (~4.8 s at ~225 MB/s).
+  MOONCAKE_OFFLOAD_CLIENT_BUFFER_GC_TTL_MS: "90000"
+
+command: |
+  # unset PYTORCH_CUDA_ALLOC_CONF
+  b12x-kcache exec vllm serve local-inference-lab/Qwen3.8-Flash-Next-NVFP4 \
+    --host {host} \
+    --port {port} \
+    --tensor-parallel-size {tensor_parallel} \
+    --pipeline-parallel-size {pipeline_parallel} \
+    --mamba-cache-mode align \
+    --recurrent-checkpoint-policy aligned \
+    --enable-prefix-caching \
+    --enable-chunked-prefill \
+    --dtype bfloat16 \
+    --kv-cache-dtype fp8 \
+    --quantization modelopt_mixed \
+    --block-size {block_size} \
+    --load-format b12x \
+    --additional-config '{{"ple_table_memory":"device"}}' \
+    --max-model-len {max_model_len} \
+    --max-num-seqs {max_num_seqs} \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --speculative-config '{{"method":"mtp","num_speculative_tokens":{num_speculative_tokens}, "draft_tensor_parallel_size": {tensor_parallel} }}' \
+    --linear-backend b12x \
+    --moe-backend b12x \
+    --no-enable-flashinfer-autotune \
+    --mm-encoder-tp-mode data \
+    --reasoning-parser qwen3 \
+    --tool-call-parser qwen3_xml \
+    --enable-auto-tool-choice \
+    --compilation-config '{{"pass_config":{{"fuse_act_quant":true}}}}' \
+    --gpu-memory-utilization {gpu_memory_utilization} \
+    --enable-auto-tool-choice \
+    --enable-mfu-metrics \
+    --kv-cache-metrics \
+    --kv-cache-metrics-sample 1.0 \
+    --kv-transfer-config '{{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both","kv_load_failure_policy":"recompute","kv_connector_extra_config":{{"host_staging":true,"staging_num_slots":2,"staging_slot_size_mb":1024,"enable_lookup":true,"cache_prefix":"{cache_lineage_prefix}"}}}}'
