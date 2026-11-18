@@ -134,8 +134,7 @@ model: nvidia/Qwen3.8-Flash-Next-NVFP4-QAD
 # override means "run a different image" and deliberately drops image_id
 # entirely (run-recipe.py:1618), so an operator who passes -t bypasses the
 # identity check on purpose.
-container: vllm-node-b12x-20261118
-image_id: sha256:319205b2ff31868d1578e8efc5d9faa16cbe76b23b613f220b0a4eb8d71323ed
+container: vllm-node-b12x
 
 build_args:
   - --exp-b12x
