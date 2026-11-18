@@ -715,8 +715,19 @@ def list_recipes() -> None:
     """
     List all available recipes with their metadata.
 
-    Scans the recipes/ directory for YAML files and displays key information.
-    Used by the --list CLI option.
+    Scans the recipes/ directory recursively for YAML files and displays key
+    information. Used by the --list CLI option.
+
+    Each recipe is identified by its spec: the path relative to recipes/ with
+    the '.yaml' suffix stripped and forward slashes, e.g.
+    '4x-spark-cluster/minimax-m2.5'. That is the form load_recipe resolves
+    (RECIPES_DIR / spec, then RECIPES_DIR / spec + '.yaml'), so every
+    identifier printed here is accepted verbatim by the loader. A bare
+    filename is not a usable identifier: qwen3.5-397b-int4-autoround.yaml
+    exists at the top level and under both 3x-spark-cluster/ and
+    4x-spark-cluster/, so basename-only discovery is also ambiguous.
+    Topology recipes live one level down (3x/4x/8x-spark-cluster); a
+    non-recursive glob hides all of them.
 
     EXTENSIBILITY:
     - To show additional fields: Add them to the print statements in the loop
@@ -727,16 +738,45 @@ def list_recipes() -> None:
         print("No recipes directory found.")
         return
 
-    recipes = sorted(RECIPES_DIR.glob("*.yaml"))
+    def spec_of(path: Path) -> str:
+        """Recipe identifier: path relative to recipes/, '.yaml' stripped."""
+        return path.relative_to(RECIPES_DIR).as_posix().removesuffix(".yaml")
+
+    def has_recipe_schema(path: Path) -> bool:
+        """True when this YAML is a recipe mapping, not stray documentation.
+
+        load_recipe exits on a file missing a required field, which would take
+        the whole listing down with it, so anything that is not a recipe
+        mapping is filtered out of the discovery instead of being listed.
+        """
+        try:
+            data = yaml.safe_load(path.read_text())
+        except Exception:
+            return False
+        return isinstance(data, dict) and all(
+            field in data
+            for field in ("name", "recipe_version", "container", "command")
+        )
+
+    # Sorted by spec so the listing is deterministic and diffable.
+    recipes = sorted(
+        (
+            path
+            for path in RECIPES_DIR.rglob("*.yaml")
+            if path.is_file() and has_recipe_schema(path)
+        ),
+        key=spec_of,
+    )
     if not recipes:
         print("No recipes found in recipes/ directory.")
         return
 
     print("Available recipes:\n")
     for recipe_path in recipes:
+        spec = spec_of(recipe_path)
         try:
             recipe = load_recipe(recipe_path)
-            name = recipe.get("name", recipe_path.stem)
+            name = recipe.get("name", spec)
             recipe_version = recipe.get("recipe_version", "1")
             desc = recipe.get("description", "")
             container = recipe.get("container", "vllm-node")
@@ -746,7 +786,7 @@ def list_recipes() -> None:
             cluster_only = recipe.get("cluster_only", False)
             solo_only = recipe.get("solo_only", False)
 
-            print(f"  {recipe_path.name}")
+            print(f"  {spec}")
             print(f"    Name: {name}")
             if desc:
                 print(f"    Description: {desc}")
@@ -763,7 +803,7 @@ def list_recipes() -> None:
                 print(f"    Mods: {', '.join(mods)}")
             print()
         except Exception as e:
-            print(f"  {recipe_path.name} (error loading: {e})")
+            print(f"  {spec} (error loading: {e})")
             print()
 
 
