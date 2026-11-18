@@ -1,0 +1,163 @@
+# Recipe: Qwen3.8-27B-NVFP4 (four-node cluster, TP=4)
+#
+# Four-node sibling of recipes/fulton/qwen3.8-27b-nvfp4/qwen3.8-27b-nvfp4-2x.yaml.
+# The ONLY differences from that file are `name:`, `tensor_parallel: 4` and the
+# node-count wording below; every flag, default and env assignment is identical,
+# so a defect found in one arm applies to the other.
+#
+# Serves the ModelOpt NVFP4 mixed-precision quantization of the 27B target:
+# /nas-1/models/qwen3.8/qwen3.8-27b-nvfp4 (21G, 3 safetensors shards, staged
+# slug qwen3.8-27b-nvfp4, hub id RedHatAI/Qwen3.8-27B-NVFP4). The checkpoint
+# ships hf_quant_config.json with a MIXED_PRECISION config and
+# mtp_num_hidden_layers = 1 at the native 262144 context; --quantization
+# modelopt_mixed selects the ModelOpt path (MLP+lm_head NVFP4 -> Marlin,
+# attention FP8 -> FlashInfer FP8) and KV stays fp8.
+#
+# Architecturally this is the Qwen3_5 hybrid (48 Gated DeltaNet + 16
+# full-attention layers, interval 4) WITH a vision tower
+# (Qwen3_5ForConditionalGeneration), so the SSM/hybrid env block,
+# --mamba-cache-mode align, --gdn-prefill-backend cutedsl and --linear-backend
+# b12x mirror the coder390 family (recipes/qwen3.8-27b-coder390-4x.yaml),
+# which is the same architecture on the same b12x image.
+#
+# Weight loader: --load-format instanttensor, NOT --load-format b12x. The b12x
+# loader in this vLLM build is the opt-in Flash Next (Qwen4Exp) loader and
+# rejects every other architecture outright (b12x_loader.py:119-126), so it
+# could never load this checkpoint. instanttensor runs the default safetensors
+# iterator with a CUDA-resident read path and no architecture allow-list.
+#
+# Attention: no --attention-backend and --block-size 16 (image defaults), for
+# the same reason as the coder390 family. BasePlatform._align_hybrid_block_size
+# rewrites the block size to fit the mamba page size while
+# B12xPagedAttentionBackend accepts only page sizes 64/128
+# (v1/attention/backends/b12x.py:47), so forcing the B12X paged-attention arm
+# on this model dies in _check_aligned_block_size with "Aligned KV cache block
+# size 1664 is not supported". FlashInfer at block size 16 boots.
+#
+# Mamba cache dtype: --mamba-cache-dtype is deliberately ABSENT. The flag
+# accepts only auto|float32|float16|bfloat16; `fp8` is not a legal value and
+# `auto` (the default) is what the coder390 arms resolved to after the dtype
+# blocker was settled.
+#
+# No --speculative-config here: this is the no-decode arm. The drafted arms
+# are recipes/fulton/qwen3.8-27b-nvfp4/qwen3.8-27b-nvfp4-{2x,4x}-draft{4b,08b}.yaml,
+# which mount an external full-LM drafter at /drafter and replace this block.
+# The checkpoint's own MTP head (mtp_num_hidden_layers 1) measures acceptance
+# 3.81, below both external drafters, so no MTP arm is published for this
+# checkpoint.
+#
+# TP=4 note: with pp=1 the 64 hybrid layers split 16/16/16/16 across four
+# Sparks; 21G of NVFP4 weights over four GB10s leaves markedly more KV headroom
+# than the 2x arm at the same gpu_memory_utilization, which is the reason this
+# arm exists alongside it rather than instead of it.
+#
+# Image pin: image_id is the content ID of the build these recipes target. The
+# `container:` tag alone cannot pin anything -- tags are mutable, an
+# unrecognised tag falls back to an upstream pull ref, and node1-registry
+# spark-vllm:vllm-node-b12x-20261106-1 and GHCR spark-vllm:vllm-node-b12x-20261106-1
+# are the SAME tag name over DIFFERENT content (c34501eb vs b76585f9). c34501eb
+# is the content actually running as vllm-node-b12x:latest on the nodes. The
+# launcher refuses to start when the tag resolves to other content. After
+# deliberately re-validating on a new image, update both `container:` and
+# `image_id:`.
+#
+# The `model:` id is the FES-recognized served identity: mods/fes-weights
+# presents the staged slug as an HF hub-cache shim under this exact id, so
+# `vllm serve <id>` resolves offline with HF_HUB_OFFLINE=1.
+#
+# STATUS: UNVALIDATED. Never booted on the fleet; first-boot check pending.
+
+recipe_version: "1"
+name: Qwen3.8-27B-NVFP4 (4x)
+description: vLLM serving the ModelOpt NVFP4 (mixed-precision) Qwen3.8-27B-NVFP4 checkpoint, TP=4 across four DGX Spark nodes, no speculative decoding
+
+model: RedHatAI/Qwen3.8-27B-NVFP4
+container: vllm-node-b12x
+image_id: sha256:c34501ebfa793ce49408a72e559e70b765fd1e28e1f6012370a744635340cc02
+
+build_args:
+  - --exp-b12x
+
+cluster_only: true
+
+# fes-weights must be the first mod: it verifies the staged weights and builds
+# the offline hub-cache shim that `vllm serve <model>` resolves against.
+mods:
+  - mods/fes-weights
+  - mods/b12x-kernel-cache
+  # B12X_SKIP_RECLAIM is only the GATE - the patch that honours it lives in
+  # this mod, so the env var alone does nothing.
+  - mods/b12x-reclaim-gate
+  # Port the FES fork's perf.py MFU corrections into the installed vLLM tree:
+  # modelopt_mixed per-component weight byte sizes, hybrid full/linear-attention
+  # layer accounting, and a GatedDeltaNet (GDN) FLOPs component. Without it this
+  # hybrid model bills all 64 layers as attention and drops the attention/FFN
+  # components from MFU under modelopt_mixed. FIX_MFU_METRICS below activates it.
+  - mods/fix-mfu-metrics
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 4
+  pipeline_parallel: 1
+  max_model_len: 262144
+  max_num_seqs: 16
+  max_num_batched_tokens: 4096
+  gpu_memory_utilization: 0.75
+
+# Qwen3.5 hybrid (Gated DeltaNet + full attention) on the b12x stack.
+# Same block as recipes/qwen3.8-27b-coder390-4x.yaml.
+env:
+  FES_WEIGHTS_SLUG: "qwen3.8-27b-nvfp4"
+  CUTE_DSL_ARCH: "sm_121a"
+  SAFETENSORS_FAST_GPU: "1"
+  VLLM_WORKER_MULTIPROC_METHOD: "spawn"
+  VLLM_SSM_CONV_STATE_LAYOUT: "DS"
+  VLLM_USE_AOT_COMPILE: "1"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+  VLLM_ENABLE_ROCE_ALLREDUCE: "1"
+  VLLM_ROCE_ALLREDUCE_MAX_SIZE: "2MB"
+  # b12x _reclaim_programs runs an unguarded O(exponential) retained-owner walk
+  # plus an eager gc.collect() that spins at 100% CPU (GIL held) after graph
+  # capture, wedging determine_available_memory -> the EngineCore collective
+  # never returns and the ranks hang. Same flag the NVFP4 MiMo recipe carries;
+  # skipping only leaves WeakValueDictionary-backed cache entries.
+  B12X_SKIP_RECLAIM: "1"
+  # Persist the torch inductor Triton autotuner cache outside /tmp so
+  # b12x-kcache archives it (roots.txt entry "torchinductor"); otherwise it
+  # is ephemeral and every boot re-compiles the Triton kernels.
+  TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
+  # Activate mods/fix-mfu-metrics via the container environment.
+  FIX_MFU_METRICS: "1"
+
+command: |
+  b12x-kcache exec vllm serve RedHatAI/Qwen3.8-27B-NVFP4 \
+    --host {host} \
+    --port {port} \
+    --trust-remote-code \
+    --tensor-parallel-size {tensor_parallel} \
+    --pipeline-parallel-size {pipeline_parallel} \
+    --mamba-cache-mode align \
+    --enable-prefix-caching \
+    --enable-chunked-prefill \
+    --async-scheduling \
+    --dtype bfloat16 \
+    --kv-cache-dtype fp8 \
+    --block-size 16 \
+    --quantization modelopt_mixed \
+    --load-format instanttensor \
+    --max-model-len {max_model_len} \
+    --max-num-seqs {max_num_seqs} \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --gdn-prefill-backend cutedsl \
+    --linear-backend b12x \
+    --mm-encoder-tp-mode data \
+    --no-enable-flashinfer-autotune \
+    --compilation-config '{{"pass_config":{{"fuse_act_quant":true}}}}' \
+    --reasoning-parser qwen3 \
+    --tool-call-parser qwen3_xml \
+    --enable-auto-tool-choice \
+    --enable-mfu-metrics \
+    --kv-cache-metrics \
+    --kv-cache-metrics-sample 1.0 \
+    --gpu-memory-utilization {gpu_memory_utilization}
