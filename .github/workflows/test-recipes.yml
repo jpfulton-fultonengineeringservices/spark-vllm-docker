@@ -25,10 +25,12 @@ on:
       - 'mods/instanttensor-selected-ranges/**'
       - 'mods/memory-profile/**'
       - 'mods/b12x-kernel-cache/**'
+      - 'mods/qad-nvidia-runtime/**'
       - 'tests/test_explicit_spec_method_mod.py'
       - 'tests/test_qwen38_coder390_mtp_sampling.py'
       - 'tests/test_qwen38_mrope_yarn_mod.py'
       - 'tests/test_instanttensor_selected_ranges_mod.py'
+      - 'tests/test_qad_nvidia_runtime_mod.sh'
       - '.github/workflows/test-recipes.yml'
   pull_request:
     paths:
@@ -52,6 +54,7 @@ on:
       - 'mods/instanttensor-selected-ranges/**'
       - 'mods/memory-profile/**'
       - 'mods/b12x-kernel-cache/**'
+      - 'mods/qad-nvidia-runtime/**'
       - 'tests/**'
       - '.github/workflows/test-recipes.yml'
   workflow_dispatch:
@@ -83,6 +86,7 @@ jobs:
         chmod +x tests/test_recipes.sh tests/test_launch_cluster_image_sync.sh \
           tests/test_b12x_kernel_cache.sh
         chmod +x tests/test_b12x_reclaim_gate_mod.sh tests/test_b12x_kv_group_lookup_mod.sh
+        chmod +x tests/test_qad_nvidia_runtime_mod.sh
         chmod +x tests/test_launch_cluster_vllm_pr.sh
         chmod +x tests/test_launch_cluster_earlyoom.sh
     
@@ -132,6 +136,7 @@ jobs:
         ./tests/test_b12x_kernel_cache.sh
         ./tests/test_b12x_reclaim_gate_mod.sh
         ./tests/test_b12x_kv_group_lookup_mod.sh
+        ./tests/test_qad_nvidia_runtime_mod.sh
         python3 tests/test_b12x_cache_integrity_patch.py
         python3 tests/test_launch_cluster_networking.py
 
@@ -148,12 +153,25 @@ jobs:
     
     - name: Verify all recipes with dry-run
       run: |
-        for recipe in recipes/*.yaml; do
-          name=$(basename "$recipe" .yaml)
-          echo "Testing recipe: $name"
+        # Discovery is recursive: topology recipes live under recipes/<dir>/
+        # (3x/4x/8x-spark-cluster) and a flat recipes/*.yaml glob never saw
+        # them. Each recipe is named by its spec -- the path relative to
+        # recipes/ with .yaml stripped -- which is the identifier run-recipe.py
+        # and load_recipe resolve; bare basenames are ambiguous here because
+        # qwen3.5-397b-int4-autoround.yaml exists at the top level and in two
+        # subdirectories. Unlike tests/test_recipes.sh, which skips YAML files
+        # that are not recipe mappings, this arm treats every .yaml under
+        # recipes/ as a recipe: a non-recipe YAML is a CI error, not a silent
+        # skip.
+        failed=0
+        while IFS= read -r recipe; do
+          spec="${recipe#recipes/}"
+          spec="${spec%.yaml}"
+          echo "Testing recipe: $spec"
           if grep -qE '^cluster_only:[[:space:]]*true' "$recipe"; then
-            ./run-recipe.py "$name" --dry-run -n "10.0.0.1,10.0.0.2" || exit 1
+            ./run-recipe.py "$spec" --dry-run -n "10.0.0.1,10.0.0.2" || failed=1
           else
-            ./run-recipe.py "$name" --dry-run --solo || exit 1
+            ./run-recipe.py "$spec" --dry-run --solo || failed=1
           fi
-        done
+        done < <(find recipes -type f -name '*.yaml' | LC_ALL=C sort)
+        exit "$failed"

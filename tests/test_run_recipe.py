@@ -503,6 +503,294 @@ class StagedWeightsTests(unittest.TestCase):
         download.assert_not_called()
 
 
+class StagedDraftTests(unittest.TestCase):
+    """Recipe-owned drafter mounts for external-draft spec-decode arms."""
+
+    TARGET = "target"
+    DRAFT = "draft-model"
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.weights_root = self.root / "weights"
+        self.recipe = self.root / "recipe.yaml"
+        self.stage(self.TARGET)
+        self.stage(self.DRAFT)
+        self.write_recipe()
+
+    def stage(self, slug, *, config=True):
+        """A staged slug is a directory holding at least a config.json."""
+        directory = self.weights_root / slug
+        directory.mkdir(parents=True, exist_ok=True)
+        if config:
+            (directory / "config.json").write_text("{}")
+        return directory
+
+    def write_recipe(self, *, env=None, model="org/model", mods=None,
+                     draft_slug=DRAFT, draft_hub_model="org/draft-model",
+                     draft_dir=None, extra=None):
+        recipe = {
+            "recipe_version": "1", "name": "Draft test", "container": "test-image",
+            "model": model, "mods": mods or [],
+            "env": {"FES_WEIGHTS_SLUG": self.TARGET} if env is None else env,
+            "command": "vllm serve org/model",
+        }
+        if draft_slug is not None:
+            recipe["draft_slug"] = draft_slug
+        if draft_hub_model is not None:
+            recipe["draft_hub_model"] = draft_hub_model
+        if draft_dir is not None:
+            recipe["draft_dir"] = draft_dir
+        recipe.update(extra or {})
+        self.recipe.write_text(runner.yaml.safe_dump(recipe))
+
+    def run_recipe(self, *flags):
+        argv = ["run-recipe.py", str(self.recipe), "--config", "/dev/null", "--solo",
+                "--weights-root", str(self.weights_root), *flags]
+        output = io.StringIO()
+        launched = {}
+        with patch.object(sys, "argv", argv), contextlib.redirect_stdout(output), \
+                patch.object(runner, "ENV_FILE", None), \
+                patch.object(runner, "check_model_exists", return_value=True), \
+                patch.object(runner, "check_image_exists", return_value=True), \
+                patch.object(runner, "download_model", return_value=True) as download, \
+                patch.object(runner.subprocess, "run", side_effect=lambda command: (
+                    launched.update(args=command) or subprocess.CompletedProcess(command, 0)
+                )):
+            result = runner.main()
+        return result, output.getvalue(), launched, download
+
+    @staticmethod
+    def launched_env(args):
+        return dict(item.split("=", 1) for item in EnvironmentTests.env_args(args))
+
+    def test_drafted_recipe_mounts_drafter_read_only_and_exports_env(self):
+        result, output, launched, download = self.run_recipe()
+        self.assertEqual(result, 0, output)
+        args = launched["args"]
+        # Exactly one drafter mount, beside the target mount, both read-only.
+        self.assertEqual(StagedWeightsTests.args_for(args, "-v"), [
+            f"{self.weights_root / self.DRAFT}:/drafter:ro",
+            f"{self.weights_root / self.TARGET}:/model:ro",
+        ])
+        env = self.launched_env(args)
+        self.assertEqual(env["FES_DRAFT_SLUG"], self.DRAFT)
+        self.assertEqual(env["FES_DRAFT_DIR"], "/drafter")
+        self.assertEqual(env["FES_DRAFT_ENABLED"], "1")
+        self.assertEqual(env["FES_DRAFT_HUB_MODEL"], "org/draft-model")
+        self.assertEqual(env["FES_WEIGHTS_SLUG"], self.TARGET)
+        # One fes-weights mod verifies both mounts; nothing duplicates it.
+        self.assertEqual(
+            StagedWeightsTests.args_for(args, "--apply-mod").count(
+                str(runner.SCRIPT_DIR / "mods/fes-weights")), 1)
+        download.assert_not_called()
+
+    def test_dry_run_renders_the_same_drafter_mount_and_env(self):
+        result, output, launched, _ = self.run_recipe("--dry-run")
+        self.assertEqual(result, 0, output)
+        self.assertEqual(launched, {})
+        line = next(line for line in output.splitlines()
+                    if line.startswith("   ./launch-cluster.sh"))
+        args = shlex.split(line.rstrip(" \\"))
+        self.assertIn(f"{self.weights_root / self.DRAFT}:/drafter:ro",
+                      StagedWeightsTests.args_for(args, "-v"))
+        self.assertEqual(self.launched_env(args)["FES_DRAFT_DIR"], "/drafter")
+
+    def test_recipe_without_drafter_mounts_nothing_and_exports_no_draft_env(self):
+        self.write_recipe(draft_slug=None, draft_hub_model=None)
+        result, output, launched, _ = self.run_recipe()
+        self.assertEqual(result, 0, output)
+        args = launched["args"]
+        self.assertEqual(StagedWeightsTests.args_for(args, "-v"),
+                         [f"{self.weights_root / self.TARGET}:/model:ro"])
+        env = self.launched_env(args)
+        self.assertEqual([key for key in env if key.startswith("FES_DRAFT_")], [])
+
+    def test_draft_slug_cli_overrides_recipe_and_stays_single(self):
+        self.stage("other-draft")
+        self.write_recipe()
+        result, output, launched, _ = self.run_recipe("--draft-slug", "other-draft")
+        self.assertEqual(result, 0, output)
+        args = launched["args"]
+        self.assertEqual(StagedWeightsTests.args_for(args, "-v"), [
+            f"{self.weights_root / 'other-draft'}:/drafter:ro",
+            f"{self.weights_root / self.TARGET}:/model:ro",
+        ])
+        env = self.launched_env(args)
+        self.assertEqual(env["FES_DRAFT_SLUG"], "other-draft")
+        # The recipe's own draft_hub_model: stays the drafter's companion hub id.
+        self.assertEqual(env["FES_DRAFT_HUB_MODEL"], "org/draft-model")
+
+    def test_draft_hub_model_must_be_an_org_model_id(self):
+        # draft_slug is a single path component, so the slug-derived default can
+        # never satisfy the hub-shim shape mods/fes-weights/run.sh enforces after
+        # docker run; the resolver rejects it on the host instead.
+        for hub_model in (None, "no-slash", "org/a/b", "org/", "/model", "org /model",
+                          "org/model name", "../org/model", "org/../model"):
+            with self.subTest(draft_hub_model=hub_model):
+                self.write_recipe(draft_hub_model=hub_model)
+                result, output, launched, download = self.run_recipe()
+                self.assertEqual(result, 1, output)
+                self.assertIn("need an 'org/model' FES_DRAFT_HUB_MODEL", output)
+                self.assertIn("draft_hub_model:", output)
+                self.assertEqual(launched, {})
+                download.assert_not_called()
+        # A blank declaration is rejected even earlier, by the recipe reader.
+        self.write_recipe(draft_hub_model="")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), \
+                self.assertRaises(SystemExit) as result:
+            runner.load_recipe(self.recipe)
+        self.assertEqual(result.exception.code, 1)
+        self.assertIn("'draft_hub_model' must be a non-empty", output.getvalue())
+        # The two real NVIDIA drafter ids clear the shape gate.
+        for hub_model in ("nvidia/Qwen3.5-4B-Qwen3.8-27B-Draft",
+                          "nvidia/Qwen3.5-0.8B-Qwen3.8-27B-Draft"):
+            with self.subTest(draft_hub_model=hub_model):
+                self.write_recipe(draft_hub_model=hub_model)
+                result, output, launched, _ = self.run_recipe()
+                self.assertEqual(result, 0, output)
+                self.assertEqual(
+                    self.launched_env(launched["args"])["FES_DRAFT_HUB_MODEL"],
+                    hub_model)
+        # An explicit container-env value is the documented override path.
+        self.write_recipe()
+        result, output, launched, _ = self.run_recipe(
+            "-e", "FES_DRAFT_HUB_MODEL=org/draft")
+        self.assertEqual(result, 0, output)
+        self.assertEqual(self.launched_env(launched["args"])["FES_DRAFT_HUB_MODEL"],
+                         "org/draft")
+
+    def test_no_fes_draft_ignores_the_recipe_drafter(self):
+        result, output, launched, _ = self.run_recipe("--no-fes-draft")
+        self.assertEqual(result, 0, output)
+        args = launched["args"]
+        self.assertEqual(StagedWeightsTests.args_for(args, "-v"),
+                         [f"{self.weights_root / self.TARGET}:/model:ro"])
+        env = self.launched_env(args)
+        self.assertEqual([key for key in env if key.startswith("FES_DRAFT_")], [])
+
+    def test_no_fes_weights_rejects_a_drafted_recipe(self):
+        # mods/fes-weights/run.sh:21 exits early when FES_WEIGHTS_ENABLED is unset,
+        # and --no-fes-weights makes the target resolver return before it writes that
+        # key. Mounting a drafter in that mode would advertise /drafter while its
+        # per-node verify and hub shim silently never ran, so it fails closed --
+        # including for --dry-run, which is a flag-compatibility error, not a
+        # missing-staged-weights error.
+        for flags in (("--no-fes-weights",), ("--dry-run", "--no-fes-weights")):
+            with self.subTest(flags=flags):
+                result, output, launched, download = self.run_recipe(*flags)
+                self.assertEqual(result, 1, output)
+                self.assertIn("require staged-weights mode", output)
+                self.assertIn("--no-fes-draft", output)
+                self.assertEqual(launched, {})
+                download.assert_not_called()
+        # Both flags together is an explicit opt-out and stays in hub-cache mode.
+        result, output, launched, _ = self.run_recipe(
+            "--no-fes-weights", "--no-fes-draft")
+        self.assertEqual(result, 0, output)
+        args = launched["args"]
+        self.assertEqual(StagedWeightsTests.args_for(args, "-v"), [])
+        env = self.launched_env(args)
+        self.assertEqual([key for key in env if key.startswith("FES_DRAFT_")], [])
+        self.assertNotIn("FES_WEIGHTS_ENABLED", env)
+        # A recipe without a drafter keeps the pre-existing hub-cache behaviour.
+        self.write_recipe(draft_slug=None, draft_hub_model=None)
+        result, output, launched, _ = self.run_recipe("--no-fes-weights")
+        self.assertEqual(result, 0, output)
+        self.assertEqual([key for key in self.launched_env(launched["args"])
+                          if key.startswith("FES_DRAFT_")], [])
+
+    def test_recipe_draft_dir_moves_the_mount_and_env_together(self):
+        self.write_recipe(draft_dir="/draft")
+        result, output, launched, _ = self.run_recipe()
+        self.assertEqual(result, 0, output)
+        args = launched["args"]
+        self.assertIn(f"{self.weights_root / self.DRAFT}:/draft:ro",
+                      StagedWeightsTests.args_for(args, "-v"))
+        self.assertEqual(self.launched_env(args)["FES_DRAFT_DIR"], "/draft")
+
+    def test_unstaged_or_incomplete_drafter_fails_before_launch(self):
+        import shutil
+        shutil.rmtree(self.weights_root / self.DRAFT)
+        result, output, launched, download = self.run_recipe()
+        self.assertEqual(result, 1)
+        self.assertIn("Draft weights are not staged", output)
+        self.assertEqual(launched, {})
+        download.assert_not_called()
+        self.stage(self.DRAFT, config=False)
+        result, output, launched, download = self.run_recipe()
+        self.assertEqual(result, 1)
+        self.assertIn("contain no config.json", output)
+        self.assertEqual(launched, {})
+        download.assert_not_called()
+
+    def test_preview_and_setup_phases_do_not_require_a_staged_drafter(self):
+        import shutil
+        shutil.rmtree(self.weights_root / self.DRAFT)
+        for flag in ("--dry-run", "--build-only", "--download-only"):
+            with self.subTest(flag=flag):
+                result, output, launched, _ = self.run_recipe(flag)
+                self.assertEqual(result, 0, output)
+                if flag == "--dry-run":
+                    # The preview still renders the mount a real launch would use.
+                    line = next(line for line in output.splitlines()
+                                if line.startswith("   ./launch-cluster.sh"))
+                    self.assertIn(
+                        f"{self.weights_root / self.DRAFT}:/drafter:ro",
+                        StagedWeightsTests.args_for(shlex.split(line.rstrip(" \\")), "-v"))
+                else:
+                    self.assertEqual(launched, {})
+        # The same unstaged drafter still fails a real launch.
+        result, output, launched, _ = self.run_recipe()
+        self.assertEqual(result, 1)
+        self.assertIn("Draft weights are not staged", output)
+        self.assertEqual(launched, {})
+
+    def test_path_like_draft_slug_is_rejected(self):
+        for slug in ("../etc", "a/b"):
+            with self.subTest(recipe=slug):
+                self.write_recipe(draft_slug=slug)
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output), \
+                        self.assertRaises(SystemExit) as exit_context:
+                    runner.load_recipe(self.recipe)
+                self.assertEqual(exit_context.exception.code, 1)
+                self.assertIn("Recipe 'draft_slug' is invalid", output.getvalue())
+                self.assertIn("no slashes or traversal", output.getvalue())
+        self.write_recipe()
+        for slug in ("../etc", "a/b"):
+            with self.subTest(cli=slug), patch.object(sys, "argv", [
+                "run-recipe.py", str(self.recipe), "--solo", "--draft-slug", slug
+            ]), contextlib.redirect_stderr(io.StringIO()) as error:
+                with self.assertRaises(SystemExit) as exit_context:
+                    runner.main()
+                self.assertEqual(exit_context.exception.code, 2)
+                self.assertIn("no slashes or traversal", error.getvalue())
+
+    def test_invalid_draft_dir_fails_before_launch(self):
+        for draft_dir in ("drafter", "", "/", "//", "../drafter", "/drafter/../..",
+                          "/a/../b", "/a/../../etc", "/a/./b"):
+            with self.subTest(draft_dir=draft_dir):
+                self.write_recipe(draft_dir=draft_dir)
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output), \
+                        self.assertRaises(SystemExit) as exit_context:
+                    runner.load_recipe(self.recipe)
+                self.assertEqual(exit_context.exception.code, 1)
+                self.assertIn("Recipe 'draft_dir' is invalid", output.getvalue())
+
+    def test_unknown_recipe_field_fails_before_launch(self):
+        self.write_recipe(extra={"draft_slugs": self.DRAFT})
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), \
+                self.assertRaises(SystemExit) as exit_context:
+            runner.load_recipe(self.recipe)
+        self.assertEqual(exit_context.exception.code, 1)
+        self.assertIn("unknown field(s): draft_slugs", output.getvalue())
+
+
 class FesWeightsModTests(unittest.TestCase):
     def run_mod(self, *, enabled=True, valid=True, hub_model="org/model"):
         with tempfile.TemporaryDirectory() as temporary:
@@ -675,6 +963,213 @@ class FesRecipeCatalogTests(unittest.TestCase):
                 recipe = runner.load_recipe(ROOT / f"recipes/{name}.yaml")
                 self.assertIn("mods/fes-weights", recipe["mods"])
                 self.assertNotIn("FES_WEIGHTS_SLUG", recipe["env"])
+
+    # The Qwen NVFP4 / QAD arms of the shared recipe<->launcher contract: canonical
+    # spec -> the staged-weights fields that recipe must declare. The spec strings
+    # are the design doc's corrected placement (.design/spark-vllm-docker/
+    # new-qwen-recipes.md:102-112 -- recipes/fulton/<family>/, superseding the plan's
+    # recipes/qwen3.8-27b/ and recipes/qwen3.8-flash-next/), and they are the very
+    # strings cluster-config keys SPARK_VLLM_DOCKER_SLUGS / _MAX_PARALLEL /
+    # _LITELLM_ROUTES by and cluster-control-infra stores in preset.recipe, so this
+    # table is the coupling point: a one-sided rename turns a row red.
+    #
+    # node_count is the launcher's -n arity. Every one of these recipes is
+    # cluster_only and declares tensor_parallel=node_count, pipeline_parallel=1, so
+    # the launch case below runs in cluster mode and cross-checks that shard count.
+    #
+    # The parked faithful (worker-cls) QAD pair has NO row here. It is registered in
+    # neither the cluster-config maps nor the CCI presets, so a row would be the one
+    # place that parked variant still exists in code -- which is how a parked design
+    # decision leaks back in.
+    QWEN_NVFP4_CONTRACT = {
+        "fulton/qwen3.8-27b-nvfp4/qwen3.8-27b-nvfp4-2x": {
+            "model": "RedHatAI/Qwen3.8-27B-NVFP4",
+            "weights_slug": "qwen3.8-27b-nvfp4",
+            "draft_slug": None,
+            "draft_hub_model": None,
+            "node_count": 2,
+        },
+        "fulton/qwen3.8-27b-nvfp4/qwen3.8-27b-nvfp4-4x": {
+            "model": "RedHatAI/Qwen3.8-27B-NVFP4",
+            "weights_slug": "qwen3.8-27b-nvfp4",
+            "draft_slug": None,
+            "draft_hub_model": None,
+            "node_count": 4,
+        },
+        "fulton/qwen3.8-27b-nvfp4/qwen3.8-27b-nvfp4-2x-draft4b": {
+            "model": "RedHatAI/Qwen3.8-27B-NVFP4",
+            "weights_slug": "qwen3.8-27b-nvfp4",
+            "draft_slug": "qwen3.5-4b-qwen3.8-27b-draft",
+            "draft_hub_model": "nvidia/Qwen3.5-4B-Qwen3.8-27B-Draft",
+            "node_count": 2,
+        },
+        "fulton/qwen3.8-27b-nvfp4/qwen3.8-27b-nvfp4-4x-draft4b": {
+            "model": "RedHatAI/Qwen3.8-27B-NVFP4",
+            "weights_slug": "qwen3.8-27b-nvfp4",
+            "draft_slug": "qwen3.5-4b-qwen3.8-27b-draft",
+            "draft_hub_model": "nvidia/Qwen3.5-4B-Qwen3.8-27B-Draft",
+            "node_count": 4,
+        },
+        "fulton/qwen3.8-27b-nvfp4/qwen3.8-27b-nvfp4-2x-draft08b": {
+            "model": "RedHatAI/Qwen3.8-27B-NVFP4",
+            "weights_slug": "qwen3.8-27b-nvfp4",
+            "draft_slug": "qwen3.5-0.8b-qwen3.8-27b-draft",
+            "draft_hub_model": "nvidia/Qwen3.5-0.8B-Qwen3.8-27B-Draft",
+            "node_count": 2,
+        },
+        "fulton/qwen3.8-27b-nvfp4/qwen3.8-27b-nvfp4-4x-draft08b": {
+            "model": "RedHatAI/Qwen3.8-27B-NVFP4",
+            "weights_slug": "qwen3.8-27b-nvfp4",
+            "draft_slug": "qwen3.5-0.8b-qwen3.8-27b-draft",
+            "draft_hub_model": "nvidia/Qwen3.5-0.8B-Qwen3.8-27B-Draft",
+            "node_count": 4,
+        },
+        "fulton/qwen3.8-flash-next-nvfp4/qwen3.8-flash-next-nvfp4-qad-nvidia-2x": {
+            "model": "nvidia/Qwen3.8-Flash-Next-NVFP4-QAD",
+            "weights_slug": "qwen3.8-flash-next-nvfp4-qad-nvidia",
+            "draft_slug": None,
+            "draft_hub_model": None,
+            "node_count": 2,
+        },
+        "fulton/qwen3.8-flash-next-nvfp4/qwen3.8-flash-next-nvfp4-qad-nvidia-4x": {
+            "model": "nvidia/Qwen3.8-Flash-Next-NVFP4-QAD",
+            "weights_slug": "qwen3.8-flash-next-nvfp4-qad-nvidia",
+            "draft_slug": None,
+            "draft_hub_model": None,
+            "node_count": 4,
+        },
+    }
+
+    # Specs whose recipe file is legitimately absent. Every contract spec has now
+    # landed, so this MUST stay empty: declared_recipe() fails outright on a
+    # missing file that is not listed here, and
+    # test_qwen_nvfp4_unlanded_allowlist_tracks_the_recipe_files fails if a file
+    # exists while its spec is still listed. Keeping it empty is enforced by the
+    # suite rather than remembered by whoever lands a recipe.
+    NOT_YET_LANDED = frozenset()
+
+    def recipe_path(self, spec):
+        """The repo path a contract spec's recipe file must occupy."""
+        return ROOT / "recipes" / f"{spec}.yaml"
+
+    def declared_recipe(self, spec):
+        """The raw (un-defaulted) recipe document a contract row binds to.
+
+        Nothing here may build a recipe from the row it is about to assert against:
+        an assertion against a document derived from the row is true by construction
+        and keeps passing whether the real file is absent, mis-keyed or renamed. A
+        missing file is therefore a hard failure unless the spec is listed in
+        NOT_YET_LANDED, where it is reported as a skip instead.
+        """
+        path = self.recipe_path(spec)
+        if not path.is_file():
+            if spec in self.NOT_YET_LANDED:
+                self.skipTest(f"recipes/{spec}.yaml has not landed yet")
+            self.fail(f"recipes/{spec}.yaml is missing, but {spec} is in "
+                      "QWEN_NVFP4_CONTRACT")
+        with open(path) as handle:
+            return runner.yaml.safe_load(handle)
+
+    def test_qwen_nvfp4_unlanded_allowlist_tracks_the_recipe_files(self):
+        self.assertLessEqual(self.NOT_YET_LANDED, set(self.QWEN_NVFP4_CONTRACT),
+                             "NOT_YET_LANDED names a spec the contract does not")
+        for spec in sorted(self.QWEN_NVFP4_CONTRACT):
+            with self.subTest(recipe=spec):
+                if self.recipe_path(spec).is_file():
+                    self.assertNotIn(
+                        spec, self.NOT_YET_LANDED,
+                        f"recipes/{spec}.yaml now exists; drop it from "
+                        "NOT_YET_LANDED so the contract binds to the file")
+
+    def test_qwen_nvfp4_specs_declare_their_drafter_contract(self):
+        for spec, row in self.QWEN_NVFP4_CONTRACT.items():
+            with self.subTest(recipe=spec):
+                recipe = self.declared_recipe(spec)
+                weights_slug = (recipe.get("env") or {}).get("FES_WEIGHTS_SLUG")
+                self.assertEqual(weights_slug, row["weights_slug"])
+                self.assertEqual(recipe.get("model"), row["model"])
+                self.assertEqual(
+                    runner.fes_weights_slug(row["weights_slug"]), row["weights_slug"])
+                # Absence is asserted on the raw document: load_recipe() would have
+                # filled the key with its default.
+                if row["draft_slug"] is None:
+                    self.assertNotIn("draft_slug", recipe)
+                    self.assertNotIn("draft_hub_model", recipe)
+                    self.assertIn(recipe.get("draft_dir"), (None, "/drafter"))
+                    continue
+                self.assertEqual(recipe.get("draft_slug"), row["draft_slug"])
+                self.assertEqual(recipe.get("draft_hub_model"), row["draft_hub_model"])
+                self.assertIn(recipe.get("draft_dir"), (None, "/drafter"))
+                self.assertEqual(
+                    runner.fes_weights_slug(row["draft_slug"]), row["draft_slug"])
+
+    def test_qwen_nvfp4_launches_mount_only_the_declared_drafter(self):
+        for spec, row in self.QWEN_NVFP4_CONTRACT.items():
+            with self.subTest(recipe=spec):
+                declaration = self.declared_recipe(spec)
+                # The row's arity has to be the file's own shard count: -n is how the
+                # launcher learns the node count, and every one of these recipes is
+                # cluster_only, so --solo would be rejected outright. Topology lives
+                # under the recipe's `defaults:` block, which run-recipe.py merges
+                # into the command placeholders; there is no top-level
+                # `tensor_parallel_size` and no `node_count` key in this schema, so
+                # reading those here would compare two identical defaults and pass
+                # whatever the shipped file says.
+                defaults = declaration.get("defaults") or {}
+                self.assertEqual(
+                    defaults.get("tensor_parallel", 1)
+                    * defaults.get("pipeline_parallel", 1),
+                    row["node_count"], f"recipes/{spec}.yaml shard count")
+                with tempfile.TemporaryDirectory() as temporary:
+                    weights_root = Path(temporary) / "models"
+                    for slug in (row["weights_slug"], row["draft_slug"]):
+                        if slug is None:
+                            continue
+                        staged = weights_root / slug
+                        staged.mkdir(parents=True)
+                        (staged / "config.json").write_text("{}")
+                    nodes = ",".join(f"192.0.2.{index}"
+                                     for index in range(1, row["node_count"] + 1))
+                    # The shipped file is the launch input, so a renamed or dropped
+                    # draft_slug in the YAML reaches the resolver here.
+                    argv = ["run-recipe.py", str(self.recipe_path(spec)),
+                            "--config", "/dev/null", "-n", nodes,
+                            "--weights-root", str(weights_root)]
+                    launched = {}
+                    output = io.StringIO()
+                    with patch.object(sys, "argv", argv), \
+                            contextlib.redirect_stdout(output), \
+                            patch.object(runner, "ENV_FILE", None), \
+                            patch.object(runner, "check_model_exists", return_value=True), \
+                            patch.object(runner, "check_image_exists", return_value=True), \
+                            patch.object(runner, "download_model", return_value=True), \
+                            patch.object(runner.subprocess, "run", side_effect=lambda command: (
+                                launched.update(args=command)
+                                or subprocess.CompletedProcess(command, 0))):
+                        self.assertEqual(runner.main(), 0, output.getvalue())
+                    args = launched["args"]
+                    env = dict(item.split("=", 1)
+                               for item in EnvironmentTests.env_args(args))
+                    expected = []
+                    if row["draft_slug"] is None:
+                        self.assertEqual(
+                            [key for key in env if key.startswith("FES_DRAFT_")], [])
+                    else:
+                        draft_dir = declaration.get("draft_dir") or "/drafter"
+                        expected = [f"{weights_root / row['draft_slug']}:{draft_dir}:ro"]
+                        self.assertEqual(env["FES_DRAFT_SLUG"], row["draft_slug"])
+                        self.assertEqual(env["FES_DRAFT_ENABLED"], "1")
+                        self.assertEqual(env["FES_DRAFT_DIR"], draft_dir)
+                        self.assertEqual(env["FES_DRAFT_HUB_MODEL"],
+                                         row["draft_hub_model"])
+                    # Exactly one drafter mount, plus the target's own, and no other
+                    # staged directory leaks in. Mounts the launcher adds for
+                    # unrelated host paths are outside this assertion's scope.
+                    staged = [volume for volume in StagedWeightsTests.args_for(args, "-v")
+                              if volume.startswith(f"{weights_root}/")]
+                    self.assertEqual(sorted(staged), sorted(expected + [
+                        f"{weights_root / row['weights_slug']}:/model:ro",
+                    ]))
 
 
 class Coder390ActivationTests(unittest.TestCase):

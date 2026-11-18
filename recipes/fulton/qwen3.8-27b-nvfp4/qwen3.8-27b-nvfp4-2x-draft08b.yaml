@@ -1,0 +1,156 @@
+# Recipe: Qwen3.8-27B-NVFP4 + Qwen3.5-0.8B external drafter (two-node cluster, TP=2)
+#
+# Small-drafter arm of recipes/fulton/qwen3.8-27b-nvfp4/qwen3.8-27b-nvfp4-2x.yaml.
+# Target, loader, kernel and sizing choices are byte-identical to the plain 2x
+# file and to the 4B drafter arm; this file differs only in which drafter it
+# mounts and in num_speculative_tokens / the name. Read
+# qwen3.8-27b-nvfp4-2x.yaml for the target-side rationale (instanttensor vs the
+# Qwen4Exp-only b12x loader, no --attention-backend with --block-size 16, no
+# --mamba-cache-dtype, the image pin) and qwen3.8-27b-nvfp4-2x-draft4b.yaml for
+# the shared drafter rationale.
+#
+# Target: /nas-1/models/qwen3.8/qwen3.8-27b-nvfp4 (staged slug
+# qwen3.8-27b-nvfp4, hub id RedHatAI/Qwen3.8-27B-NVFP4), a ModelOpt NVFP4
+# MIXED_PRECISION quantization of the Qwen3_5 hybrid (48 Gated DeltaNet + 16
+# full-attention layers, interval 4) with a vision tower.
+#
+# Drafter: /nas-1/models/qwen3.8/drafters/qwen3.5-0.8b-qwen3.8-27b-draft (1.5G
+# BF16, staged slug qwen3.5-0.8b-qwen3.8-27b-draft, hub id
+# nvidia/Qwen3.5-0.8B-Qwen3.8-27B-Draft) -- a FULL language model
+# (Qwen3_5ForCausalLM), not a draft head, hence "method":"draft_model".
+#
+# WHY THIS ARM EXISTS: measured acceptance length 3.92, only marginally above
+# the target's bundled MTP head (3.81). The 4B drafter (5.58) is the value arm;
+# this one is kept as the comparison point that separates "a bigger draft model
+# buys acceptance" from "any external drafter does", and because at 1.5G BF16 it
+# is the cheapest draft shard on the node. Expect it to lose on tokens/s rather
+# than to win; it is not the default.
+#
+# The mount is recipe-owned: `draft_slug:` makes run-recipe.py's
+# resolve_fes_draft() insert `-v <weights-root>/qwen3.5-0.8b-qwen3.8-27b-draft:/drafter:ro`
+# and export FES_DRAFT_ENABLED / FES_DRAFT_DIR / FES_DRAFT_HUB_MODEL /
+# FES_DRAFT_SLUG, and mods/fes-weights/run.sh verifies the mount and builds the
+# FES_DRAFT_HUB_MODEL shim on every rank. This file is the single source of
+# truth for which drafter the arm mounts; there is no host-side spec->drafter
+# map. `draft_dir:` is omitted, so the mount is the default /drafter.
+#
+# --speculative-config model: is the MOUNTED PATH (/drafter), never the hub id:
+# the drafter is a staged NAS directory and HF_HUB_OFFLINE=1 is set, so the
+# path is what the launcher guarantees present. draft_hub_model: is still
+# declared because the fes-weights shim is built from it and run-recipe.py
+# hard-exits on a malformed or missing value.
+#
+# draft_sample_method "probabilistic": the drafter was trained and measured
+# under probabilistic drafting (temperature 1.0, top-k 20, top-p 0.95) with
+# rejection sampling; vLLM's SpeculativeConfig default is "greedy", which
+# changes the acceptance distribution the arm was tuned against.
+#
+# num_speculative_tokens 4: measured acceptance length 3.92 for this drafter,
+# so the draft window is sized to the measured mean rather than extrapolated
+# from the 4B arm's 6. It is the first thing to sweep on first boot.
+# draft_tensor_parallel_size tracks the target TP (2 here) so the draft shards
+# identically with the target.
+#
+# STATUS: UNVALIDATED. Never booted on the fleet; first-boot check pending
+# (including the acceptance length, which is the whole point of this arm).
+
+recipe_version: "1"
+name: Qwen3.8-27B-NVFP4 + Qwen3.5-0.8B draft (2x)
+description: vLLM serving the ModelOpt NVFP4 Qwen3.8-27B-NVFP4 checkpoint with the external Qwen3.5-0.8B full-LM drafter at /drafter, TP=2 across two DGX Spark nodes
+
+model: RedHatAI/Qwen3.8-27B-NVFP4
+draft_slug: qwen3.5-0.8b-qwen3.8-27b-draft
+draft_hub_model: nvidia/Qwen3.5-0.8B-Qwen3.8-27B-Draft
+container: vllm-node-b12x
+image_id: sha256:c34501ebfa793ce49408a72e559e70b765fd1e28e1f6012370a744635340cc02
+
+build_args:
+  - --exp-b12x
+
+cluster_only: true
+
+# fes-weights must be the first mod: it verifies the staged weights and builds
+# the offline hub-cache shim that `vllm serve <model>` resolves against, and it
+# is the same mod that verifies the read-only drafter mount.
+mods:
+  - mods/fes-weights
+  - mods/b12x-kernel-cache
+  # B12X_SKIP_RECLAIM is only the GATE - the patch that honours it lives in
+  # this mod, so the env var alone does nothing.
+  - mods/b12x-reclaim-gate
+  # Port the FES fork's perf.py MFU corrections into the installed vLLM tree:
+  # modelopt_mixed per-component weight byte sizes, hybrid full/linear-attention
+  # layer accounting, and a GatedDeltaNet (GDN) FLOPs component. Without it this
+  # hybrid model bills all 64 layers as attention and drops the attention/FFN
+  # components from MFU under modelopt_mixed. FIX_MFU_METRICS below activates it.
+  - mods/fix-mfu-metrics
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 2
+  pipeline_parallel: 1
+  max_model_len: 262144
+  max_num_seqs: 16
+  max_num_batched_tokens: 4096
+  gpu_memory_utilization: 0.75
+  num_speculative_tokens: 4
+  draft_tensor_parallel_size: 2
+
+# Qwen3.5 hybrid (Gated DeltaNet + full attention) on the b12x stack.
+# Same block as recipes/qwen3.8-27b-coder390-2x.yaml.
+env:
+  FES_WEIGHTS_SLUG: "qwen3.8-27b-nvfp4"
+  CUTE_DSL_ARCH: "sm_121a"
+  SAFETENSORS_FAST_GPU: "1"
+  VLLM_WORKER_MULTIPROC_METHOD: "spawn"
+  VLLM_SSM_CONV_STATE_LAYOUT: "DS"
+  VLLM_USE_AOT_COMPILE: "1"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+  VLLM_ENABLE_ROCE_ALLREDUCE: "1"
+  VLLM_ROCE_ALLREDUCE_MAX_SIZE: "2MB"
+  # b12x _reclaim_programs runs an unguarded O(exponential) retained-owner walk
+  # plus an eager gc.collect() that spins at 100% CPU (GIL held) after graph
+  # capture, wedging determine_available_memory -> the EngineCore collective
+  # never returns and the ranks hang. Same flag the NVFP4 MiMo recipe carries;
+  # skipping only leaves WeakValueDictionary-backed cache entries.
+  B12X_SKIP_RECLAIM: "1"
+  # Persist the torch inductor Triton autotuner cache outside /tmp so
+  # b12x-kcache archives it (roots.txt entry "torchinductor"); otherwise it
+  # is ephemeral and every boot re-compiles the Triton kernels.
+  TORCHINDUCTOR_CACHE_DIR: "/root/.cache/torchinductor"
+  # Activate mods/fix-mfu-metrics via the container environment.
+  FIX_MFU_METRICS: "1"
+
+command: |
+  b12x-kcache exec vllm serve RedHatAI/Qwen3.8-27B-NVFP4 \
+    --host {host} \
+    --port {port} \
+    --trust-remote-code \
+    --tensor-parallel-size {tensor_parallel} \
+    --pipeline-parallel-size {pipeline_parallel} \
+    --mamba-cache-mode align \
+    --enable-prefix-caching \
+    --enable-chunked-prefill \
+    --async-scheduling \
+    --dtype bfloat16 \
+    --kv-cache-dtype fp8 \
+    --block-size 16 \
+    --quantization modelopt_mixed \
+    --load-format instanttensor \
+    --max-model-len {max_model_len} \
+    --max-num-seqs {max_num_seqs} \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --speculative-config '{{"method":"draft_model","model":"/drafter","num_speculative_tokens":{num_speculative_tokens},"draft_tensor_parallel_size":{draft_tensor_parallel_size},"draft_sample_method":"probabilistic"}}' \
+    --gdn-prefill-backend cutedsl \
+    --linear-backend b12x \
+    --mm-encoder-tp-mode data \
+    --no-enable-flashinfer-autotune \
+    --compilation-config '{{"pass_config":{{"fuse_act_quant":true}}}}' \
+    --reasoning-parser qwen3 \
+    --tool-call-parser qwen3_xml \
+    --enable-auto-tool-choice \
+    --enable-mfu-metrics \
+    --kv-cache-metrics \
+    --kv-cache-metrics-sample 1.0 \
+    --gpu-memory-utilization {gpu_memory_utilization}

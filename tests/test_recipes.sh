@@ -168,6 +168,44 @@ run_recipe_dry_run() {
     fi
 }
 
+# Every recipe YAML in the tree, recursively, sorted, one file path per line.
+# Topology recipes live under recipes/<dir>/ (3x/4x/8x-spark-cluster), so a
+# flat recipes/*.yaml glob silently skips every one of them.
+discover_recipe_files() {
+    find "$PROJECT_DIR/recipes" -type f -name '*.yaml' | LC_ALL=C sort
+}
+
+# Recipe spec for a recipe file path: the path relative to recipes/ with the
+# .yaml suffix stripped and forward slashes (e.g.
+# 4x-spark-cluster/minimax-m2.5). This is exactly the identifier run-recipe.py
+# and load_recipe resolve, so what discovery emits is always loadable, and it
+# stays unambiguous where a basename is not --
+# qwen3.5-397b-int4-autoround.yaml exists at the top level and in two
+# subdirectories.
+spec_from_file() {
+    local spec="${1#"$PROJECT_DIR/recipes/"}"
+    printf '%s\n' "${spec%.yaml}"
+}
+
+# Every recipe spec in the tree, recursively, sorted, one per line. Only YAML
+# whose top level carries the loader's required keys is emitted, so a stray
+# documentation .yaml under recipes/ is skipped instead of being dry-run as a
+# broken recipe.
+discover_recipe_specs() {
+    local file
+    while IFS= read -r file; do
+        awk '
+            /^[[:space:]]*#/ { next }
+            /^name:/           { has_name = 1 }
+            /^recipe_version:/ { has_version = 1 }
+            /^container:/      { has_container = 1 }
+            /^command:/        { has_command = 1 }
+            END { exit !(has_name && has_version && has_container && has_command) }
+        ' "$file" || continue
+        spec_from_file "$file"
+    done < <(discover_recipe_files)
+}
+
 # Check prerequisites
 check_prerequisites() {
     log_test "Checking prerequisites..."
@@ -230,25 +268,130 @@ test_list_recipes() {
     fi
 }
 
+# Test: --list enumerates every recipe discovery finds, in loadable spec form
+test_list_covers_all_specs() {
+    log_test "run-recipe.py --list prints every discovered recipe spec"
+
+    local output
+    output=$("$PROJECT_DIR/run-recipe.py" --list 2>&1)
+    if ! echo "$output" | grep -q "Available recipes"; then
+        log_fail "--list did not produce a recipe listing"
+        log_verbose "$output"
+        return
+    fi
+
+    # Both sides come from the tree and from --list's own output; neither is a
+    # literal count. Pinning a number here would make the suite red the moment
+    # anyone adds a recipe, which is not a defect -- what must hold is the
+    # RELATIONSHIP: the specs on disk and the specs printed are the same set,
+    # each appearing exactly once, and every printed spec resolves through
+    # load_recipe to exactly recipes/<spec>.yaml (not to a same-basename file in
+    # another directory, which is why identifiers are specs and never basenames).
+    local tmp_d tmp_p discovered printed resolve_err total
+    tmp_d=$(mktemp) || { log_fail "could not create temp file"; return; }
+    tmp_p=$(mktemp) || { log_fail "could not create temp file"; rm -f "$tmp_d"; return; }
+    discover_recipe_specs | LC_ALL=C sort > "$tmp_d"
+    # --list indents recipe identifiers exactly two spaces; the metadata fields
+    # under each are indented four, so this selects identifiers only.
+    printf '%s\n' "$output" | awk '/^  [^ ]/ { print substr($0, 3) }' | LC_ALL=C sort > "$tmp_p"
+    total=$(awk 'END { print NR }' "$tmp_d")
+
+    local missing extra dupes resolve_out resolve_rc
+    missing=$(LC_ALL=C comm -23 "$tmp_d" "$tmp_p" | tr '\n' ' ')
+    extra=$(LC_ALL=C comm -13 "$tmp_d" "$tmp_p" | tr '\n' ' ')
+    dupes=$(LC_ALL=C uniq -d "$tmp_p" | tr '\n' ' ')
+
+    # Resolution check: one interpreter call for the whole set. load_recipe
+    # falls back to RECIPES_DIR/<basename>.yaml, so a spec that resolves to the
+    # wrong file can still exit 0; observing which file it actually opened is
+    # the only assertion with teeth against that.
+    # Capture stderr and the exit status as well, and require a sentinel from
+    # the snippet: an interpreter-side failure (exec_module raising after a
+    # rebase, a SyntaxError, PyYAML absent in a runner) leaves stdout empty, and
+    # an empty result would otherwise read as PASS having checked nothing.
+    resolve_out=$(cd "$PROJECT_DIR" && python3 -c '
+import importlib.util, sys
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location("rr", "run-recipe.py")
+rr = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(rr)
+opened = {}
+orig = rr.yaml.safe_load
+
+
+def spy(stream, *a, **k):
+    # Accumulate rather than overwrite: the claim is "load_recipe read this
+    # recipe file", not "the last thing it read was this file". A loader that
+    # later gains a second yaml.safe_load (sidecar, overlay, draft manifest)
+    # must not turn every spec red for a reason that is not a defect.
+    opened.setdefault("files", []).append(getattr(stream, "name", None))
+    return orig(stream, *a, **k)
+
+
+rr.yaml.safe_load = spy
+bad = []
+for line in Path(sys.argv[1]).read_text().splitlines():
+    if not line:
+        continue
+    # Compare canonical absolute paths: the file object reports the path
+    # load_recipe opened (RECIPES_DIR is absolute), so a relative expectation
+    # would never match.
+    want = (Path("recipes") / (line + ".yaml")).resolve()
+    opened.clear()
+    try:
+        rr.load_recipe(Path(line))
+    except SystemExit as exc:
+        bad.append(line + "(exits " + str(exc.code) + ")")
+        continue
+    files = [str(Path(str(p)).resolve()) for p in opened.get("files", []) if p is not None]
+    if str(want) not in files:
+        bad.append(line + "(opened " + (",".join(Path(str(p)).name for p in opened.get("files", [])) or "nothing") + ")")
+if bad:
+    print("BAD:" + " ".join(bad))
+else:
+    print("RESOLVE_OK")
+' "$tmp_d" 2>&1)
+    resolve_rc=$?
+    rm -f "$tmp_d" "$tmp_p"
+
+    if [[ $total -eq 0 ]]; then
+        log_fail "recursive discovery found no recipes; this test would pass vacuously"
+    elif [[ -n "$missing" ]]; then
+        log_fail "--list omits:$missing"
+    elif [[ -n "$extra" ]]; then
+        log_fail "--list prints spec(s) with no file on disk:$extra"
+    elif [[ -n "$dupes" ]]; then
+        log_fail "--list prints duplicate spec(s):$dupes"
+    elif [[ $resolve_rc -ne 0 ]]; then
+        log_fail "resolution check exited rc=$resolve_rc, so nothing was verified:$resolve_out"
+    elif [[ "$resolve_out" != "RESOLVE_OK" ]]; then
+        log_fail "--list spec(s) do not resolve to recipes/<spec>.yaml:$resolve_out"
+    else
+        log_pass "--list covers all $total recipe specs, each resolving to recipes/<spec>.yaml"
+    fi
+}
+
 # Test: All recipes have required recipe_version field
 test_recipe_version_required() {
     log_test "All recipes have required recipe_version field"
     
     local all_valid=true
-    for recipe in "$PROJECT_DIR/recipes/"*.yaml; do
-        if [[ -f "$recipe" ]]; then
-            recipe_name=$(basename "$recipe")
-            if ! grep -q "^recipe_version:" "$recipe"; then
-                log_verbose "$recipe_name missing recipe_version"
-                all_valid=false
-            fi
+    local missing=""
+    local recipe spec
+    while IFS= read -r recipe; do
+        spec=$(spec_from_file "$recipe")
+        if ! grep -q "^recipe_version:" "$recipe"; then
+            log_verbose "$spec missing recipe_version"
+            missing="$missing $spec"
+            all_valid=false
         fi
-    done
+    done < <(discover_recipe_files)
     
     if [[ "$all_valid" == "true" ]]; then
         log_pass "All recipes have recipe_version field"
     else
-        log_fail "Some recipes missing recipe_version field"
+        log_fail "Some recipes missing recipe_version field:$missing"
     fi
 }
 
@@ -257,37 +400,46 @@ test_all_recipes_load() {
     log_test "All recipes load without errors"
     
     local all_valid=true
-    for recipe in "$PROJECT_DIR/recipes/"*.yaml; do
-        if [[ -f "$recipe" ]]; then
-            recipe_name=$(basename "$recipe" .yaml)
-            cluster_only=$(grep -E "^cluster_only:" "$recipe" | awk '{print $2}')
-            solo_only=$(grep -E "^solo_only:" "$recipe" | awk '{print $2}')
-            
-            if [[ "$cluster_only" == "true" && "$solo_only" == "true" ]]; then
-                log_verbose "$recipe_name has conflicting cluster_only + solo_only"
-                all_valid=false
-                continue
-            fi
-            
-            if [[ "$cluster_only" == "true" ]]; then
-                output=$("$PROJECT_DIR/run-recipe.py" "$recipe_name" --dry-run -n "10.0.0.1,10.0.0.2" 2>&1 || true)
-            else
-                output=$("$PROJECT_DIR/run-recipe.py" "$recipe_name" --dry-run --solo 2>&1 || true)
-            fi
-            
-            if ! echo "$output" | grep -q "Error:"; then
-                log_verbose "$recipe_name loads OK"
-            else
-                log_verbose "$recipe_name failed to load"
-                all_valid=false
-            fi
+    local failed_specs=""
+    local recipe_name recipe_file output rc
+    local cluster_only solo_only
+    while IFS= read -r recipe_name; do
+        recipe_file="$PROJECT_DIR/recipes/${recipe_name}.yaml"
+        cluster_only=$(grep -E "^cluster_only:" "$recipe_file" | awk '{print $2}')
+        solo_only=$(grep -E "^solo_only:" "$recipe_file" | awk '{print $2}')
+        
+        if [[ "$cluster_only" == "true" && "$solo_only" == "true" ]]; then
+            log_verbose "$recipe_name has conflicting cluster_only + solo_only"
+            failed_specs="$failed_specs $recipe_name(conflicting mode flags)"
+            all_valid=false
+            continue
         fi
-    done
+        
+        if [[ "$cluster_only" == "true" ]]; then
+            output=$("$PROJECT_DIR/run-recipe.py" "$recipe_name" --dry-run -n "10.0.0.1,10.0.0.2" 2>&1)
+            rc=$?
+        else
+            output=$("$PROJECT_DIR/run-recipe.py" "$recipe_name" --dry-run --solo 2>&1)
+            rc=$?
+        fi
+        
+        # Exit status is load-bearing: run-recipe.py can return 1 without
+        # printing "Error:" (e.g. the ValueError path around resolve_fes_weights),
+        # so grepping the transcript alone would log a silently failing recipe
+        # as loading OK.
+        if [[ $rc -eq 0 ]] && ! echo "$output" | grep -q "Error:"; then
+            log_verbose "$recipe_name loads OK"
+        else
+            log_verbose "$recipe_name failed to load (rc=$rc)"
+            failed_specs="$failed_specs $recipe_name(rc=$rc)"
+            all_valid=false
+        fi
+    done < <(discover_recipe_specs)
     
     if [[ "$all_valid" == "true" ]]; then
         log_pass "All recipes load successfully"
     else
-        log_fail "Some recipes failed to load"
+        log_fail "Some recipes failed to load:$failed_specs"
     fi
 }
 
@@ -1640,6 +1792,7 @@ main() {
     
     # Basic functionality tests
     test_list_recipes
+    test_list_covers_all_specs
     test_recipe_version_required
     test_all_recipes_load
     echo ""
