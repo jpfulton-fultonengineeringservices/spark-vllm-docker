@@ -1,0 +1,180 @@
+# Recipe: Qwen3.8-Flash-Next-NVFP4-QAD-NVIDIA (four-node cluster, 4x TP=4)
+#
+# Deliberate clone of recipes/qwen3.8-flash-next-nvfp4-2x-fulton.yaml — the same
+# Qwen4ExpForConditionalGeneration arch family, same B12X serving stack, same
+# PLE-on-device tables — with exactly THREE intentional differences from that
+# base, each cited below. It is the 4-node twin of
+# recipes/fulton/qwen3.8-flash-next-nvfp4/qwen3.8-flash-next-nvfp4-qad-nvidia-2x.yaml:
+# the two files share a byte-identical command block and differ only in
+# defaults.tensor_parallel, so all four files can be diffed to see only intent.
+#
+#   1. The served checkpoint is the NVIDIA QAD release, not the
+#      local-inference-lab one: /nas-1/models/qwen3.8/qwen3.8-flash-next-nvfp4-qad-nvidia
+#      (121G, 36 shards, `Qwen4ExpForConditionalGeneration`, MoE 512 experts
+#      top-10, PLE + ngram + indexer). It is on the Hub as
+#      nvidia/Qwen3.8-Flash-Next-NVFP4-QAD, so `model:` is the real hub id and
+#      mods/fes-weights overlays the staged NAS directory onto that name as an
+#      offline hub-cache shim (env.FES_WEIGHTS_SLUG below). Same arch family as
+#      the base, so --load-format b12x (whose loader in this vLLM build accepts
+#      only Qwen4Exp, b12x_loader.py:119-126) remains the correct loader.
+#
+#   2. NO --speculative-config at all. The base runs the MTP draft head; the
+#      QAD release documents MTP as unvalidated for it, so these two arms are
+#      non-speculative. Consequently there is no draft_slug / draft_hub_model /
+#      draft_dir here and the launch renders no FES_DRAFT_* entry, and the
+#      base's now-unused `num_speculative_tokens` default is dropped with the
+#      flag it existed for.
+#
+#   3. NVIDIA's own serve line adds `--enable-expert-parallel` and selects
+#      `--reasoning-parser qwen3 --tool-call-parser qwen3_coder`. The reasoning
+#      parser already matches the base; the tool-call parser is CHANGED from the
+#      base's qwen3_xml to qwen3_coder, and --enable-expert-parallel is added.
+#      Whether expert parallelism helps at TP=4 is unmeasured; it follows the
+#      vendor command rather than a local measurement.
+#
+# Four-node topology: the recipe schema carries no node count — RECIPE_KEYS
+# (run-recipe.py:518-536) has no such field, `grep '^nodes:' recipes/` matches
+# nothing, and is_cluster is derived from the launcher's `-n` IP list
+# (run-recipe.py:1360-1362, :1683). The only topology-valued field in this file
+# is therefore defaults.tensor_parallel, set to 4 (TP=4 over four Sparks,
+# pipeline_parallel stays 1).
+#
+# Deliberate non-delta, recorded rather than copied: the repo's own 4-node
+# sibling of this recipe, recipes/4x-spark-cluster/qwen3.8-flash-next-nvfp4-fulton.yaml,
+# additionally pairs its --enable-mfu-metrics with mods/fix-mfu-metrics and the
+# FIX_MFU_METRICS=1 container env var (its lines 34 and 65), which this recipe's
+# 2x base does not. Matching the base wins over matching the sibling: the mod is
+# MFU-accounting accuracy only (per-component weight bytes and hybrid/GDN FLOPs
+# in perf.py) and has no serving or numerics effect, so these two arms stay
+# identical to the base they clone and differ from each other only in TP.
+#
+# Deliberately ABSENT: `--worker-cls` and any PYTHONPATH override. The QAD
+# checkpoint ships a serving/canonical_worker.py whose runtime-manifest.json
+# pins pinned_modelopt_runtime_sha256 = 41e00493d2770af19db03f585e9edb0004093c98b851d0f6726c2870cba11e22,
+# which is vLLM v0.30.0's model_executor/layers/quantization/modelopt.py. Every
+# b12x image we build today carries the 5dfedfbd… revision (vLLM
+# 0.1.dev21830+g8244d1c44), so a custom worker class would fail the runtime's
+# own hash gate before serving. The faithful NVIDIA command (with --worker-cls
+# canonical_worker.CanonicalWorker) stays parked until a vLLM v0.30.0-pinned
+# b12x image exists; this recipe is the bootable flavour.
+#
+# Pre-existing defect in the base, NOT replicated here: the base declares
+# --enable-auto-tool-choice twice (recipes/4x-spark-cluster/qwen3.8-flash-next-nvfp4-fulton.yaml
+# lines 92 and 95). Here it is emitted exactly once.
+#
+# NOTE: NOT registered in infra/cluster-config/scripts/lib/spark-launch.sh's
+# `--ray` gate because vllm-node-b12x recipes run no-Ray by construction.
+
+recipe_version: "1"
+name: Qwen3.8-Flash-Next-NVFP4-QAD-NVIDIA (4x TP=4)
+description: >
+  vLLM serving the NVIDIA QAD Qwen3.8 Flash Next NVFP4 checkpoint from /nas-1/models/qwen3.8/qwen3.8-flash-next-nvfp4-qad-nvidia on four DGX Sparks with B12X, PLE device tables, and expert parallelism. The MTP draft head is omitted: the QAD release documents it as unvalidated.
+
+model: nvidia/Qwen3.8-Flash-Next-NVFP4-QAD
+#
+# Image pin: image_id is the image CONFIG ID (`docker image inspect .Id`) of the
+# content this family is certified against, measured on gx10-node1 by the
+# orchestrator on 2026-11-18. It is exactly what `vllm-node-b12x:latest` resolves
+# to on the nodes today, so the pin is a no-op now and only bites on future tag
+# drift — which is why it is required at all: `container:` alone pins nothing.
+# Tags are mutable, and the SAME tag name carries DIFFERENT content in the two
+# registries the nodes pull from: node1-registry
+# `10.100.170.3:5000/spark-vllm:vllm-node-b12x-20261106-1` is c34501eb… while
+# GHCR `spark-vllm:vllm-node-b12x-20261106-1` is b76585f9…; and the date-stamped
+# `vllm-node-b12x-20261106-0` is a genuinely different image (config ID
+# b76585f9…), the drift risk made concrete. That same c34501eb content also
+# carries the RepoTags `vllm-node-b12x:latest`, `eugr/spark-vllm-b12x:latest`,
+# `10.100.170.3:5000/vllm-node-b12x:latest`,
+# `10.100.170.3:5000/spark-vllm:vllm-node-b12x-20261106-1` and
+# `10.100.170.3:5000/spark-vllm:coder390-kr-20261019`. The launcher refuses to
+# start when `container` resolves to other content (run-recipe.py:1618) and hands
+# the pin to launch-cluster.sh as `--image-id` (run-recipe.py:1972); the pin also
+# enters the KV cache-lineage prefix (run-recipe.py:483), so re-validating on a
+# new image must change `container:` and `image_id:` together.
+#
+# AUDIT NOTE — read this before concluding the pin is wrong: `docker images
+# --digests` on gx10-node1 does NOT list c34501eb at all; it reports
+# `10.100.170.3:5000/vllm-node-b12x:latest` with RepoDigest sha256:8e2b6339….
+# That is not a contradiction and does not invalidate the pin. RepoDigest is the
+# REGISTRY MANIFEST digest; `image_id:` is the image CONFIG ID. The same image
+# has both. Audit with
+#   docker image inspect c34501eb --format '{{.Id}}'
+# and never with --digests.
+#
+# Scope: the pin governs the DEFAULT launch only — an explicit -t/--container
+# override means "run a different image" and deliberately drops image_id
+# entirely (run-recipe.py:1618), so an operator who passes -t bypasses the
+# identity check on purpose.
+container: vllm-node-b12x
+image_id: sha256:c34501ebfa793ce49408a72e559e70b765fd1e28e1f6012370a744635340cc02
+
+build_args:
+  - --exp-b12x
+
+cluster_only: true
+
+mods:
+  - mods/b12x-kernel-cache
+  - mods/fes-weights
+
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 4
+  pipeline_parallel: 1
+  block_size: 16
+  max_model_len: 262144
+  max_num_seqs: 16
+  max_num_batched_tokens: 4096
+  gpu_memory_utilization: 0.7
+
+env:
+  FES_WEIGHTS_SLUG: "qwen3.8-flash-next-nvfp4-qad-nvidia"
+  VLLM_ENABLE_ROCE_ALLREDUCE: "1"
+  VLLM_ROCE_ALLREDUCE_MAX_SIZE: "2MB"
+  NCCL_BUFFSIZE: "1048576"
+  NCCL_MAX_CTAS: "8"
+  CUTE_DSL_ARCH: "sm_121a"
+  SAFETENSORS_FAST_GPU: "1"
+  VLLM_WORKER_MULTIPROC_METHOD: "spawn"
+  VLLM_SSM_CONV_STATE_LAYOUT: "DS"
+  VLLM_USE_AOT_COMPILE: "1"
+  VLLM_USE_MEGA_AOT_ARTIFACT: "1"
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+  B12X_POLICY_MODE: "auto"
+  VLLM_MXFP8_LM_HEAD: "1"
+  VLLM_B12X_MOE_FP4_LAYER_MAX_INPUT_SCALE: "w13"
+  VLLM_B12X_MOE_FP4_FORCE_A16: "1"
+  B12X_W4A16_A4_PREFILL: "1"
+
+command: |
+  b12x-kcache exec vllm serve nvidia/Qwen3.8-Flash-Next-NVFP4-QAD \
+    --host {host} \
+    --port {port} \
+    --tensor-parallel-size {tensor_parallel} \
+    --pipeline-parallel-size {pipeline_parallel} \
+    --mamba-cache-mode align \
+    --enable-prefix-caching \
+    --enable-chunked-prefill \
+    --dtype bfloat16 \
+    --kv-cache-dtype fp8 \
+    --quantization modelopt_mixed \
+    --block-size {block_size} \
+    --load-format b12x \
+    --additional-config '{{"ple_table_memory":"device"}}' \
+    --max-model-len {max_model_len} \
+    --max-num-seqs {max_num_seqs} \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --enable-expert-parallel \
+    --linear-backend b12x \
+    --moe-backend b12x \
+    --no-enable-flashinfer-autotune \
+    --mm-encoder-tp-mode data \
+    --reasoning-parser qwen3 \
+    --tool-call-parser qwen3_coder \
+    --enable-auto-tool-choice \
+    --compilation-config '{{"pass_config":{{"fuse_act_quant":true}}}}' \
+    --gpu-memory-utilization {gpu_memory_utilization} \
+    --enable-mfu-metrics \
+    --kv-cache-metrics \
+    --kv-cache-metrics-sample 1.0
