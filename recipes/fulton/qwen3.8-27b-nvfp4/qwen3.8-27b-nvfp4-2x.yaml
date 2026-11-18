@@ -34,6 +34,21 @@
 # `auto` (the default) is what the coder390 arms resolved to after the dtype
 # blocker was settled.
 #
+# RoPE / long context: intentionally NO --hf-overrides. The target's own
+# config.json ships text_config.rope_parameters = {"mrope_interleaved": true,
+# "mrope_section": [11,11,10], "partial_rotary_factor": 0.25,
+# "rope_theta": 10000000, "rope_type": "default"} and
+# text_config.max_position_embeddings = 262144, and this arm serves at
+# max_model_len equal to that native window, so no rope scaling is applied and
+# the mrope values the vision tower needs come from the checkpoint unchanged.
+# The coder390 family's --hf-overrides (rope_type yarn, factor 4.0 over the
+# same 262144 native window -> ~1M context) is a long-context EXTENSION these
+# arms do not use; it re-states the mrope values it inherits rather than
+# supplying them. Eight fleet recipes carry that flag for their own 1M arms, so
+# its absence here reads like an oversight -- do NOT "restore" it: no arm of
+# this checkpoint has ever been measured under YaRN, and adding it would enable
+# YaRN silently under one that has not.
+#
 # No --speculative-config here: this is the no-decode arm. The drafted arms
 # are recipes/fulton/qwen3.8-27b-nvfp4/qwen3.8-27b-nvfp4-{2x,4x}-draft{4b,08b}.yaml,
 # which mount an external full-LM drafter at /drafter and replace this block.
