@@ -63,6 +63,14 @@ RECIPE YAML SCHEMA:
     command: str           # Required: vLLM serve command with {placeholders}
     description: str       # Optional: Brief description
     model: str             # Optional: HuggingFace model ID for --setup
+    draft_slug: str        # Optional: staged drafter slug, a sibling directory of
+                           #           the target slug under --weights-root. Mounted
+                           #           read-only at draft_dir for a
+                           #           --speculative-config {"model": "/drafter"} arm.
+    draft_hub_model: str   # Optional: 'org/model' id for the drafter hub shim
+                           #           (defaults to draft_slug).
+    draft_dir: str         # Optional: container mount for the drafter
+                           #           (default: /drafter)
     mods: list[str]        # Optional: Mod directories to apply
     defaults: dict         # Optional: Default values for command placeholders
     env: dict              # Optional: Environment variables
@@ -120,6 +128,17 @@ DISTRIBUTED_EXECUTOR_RE = re.compile(
 )
 FES_WEIGHTS_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 FES_WEIGHTS_MOD = "mods/fes-weights"
+FES_DRAFT_DIR_DEFAULT = "/drafter"
+# mods/fes-weights/run.sh:make_shim() turns FES_DRAFT_HUB_MODEL into an
+# HF-cache-layout symlink (models--<org>--<name>) so a hub-id reference can
+# resolve offline, and it exits 1 on any value without a slash. Our drafted
+# recipes point --speculative-config at the mounted PATH (/drafter), so nothing
+# resolves this id at launch: a wrong-but-well-formed value is a latent defect
+# (an unused bogus shim), not a boot failure -- which is why recipes must
+# declare the real hub id and this guard checks shape, not existence. The
+# charset is an HF repo id's, not merely "no slash": run.sh interpolates the
+# value into a cache path, so spaces or traversal must not pass here.
+FES_DRAFT_HUB_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def fes_weights_slug(value: str) -> str:
@@ -127,6 +146,20 @@ def fes_weights_slug(value: str) -> str:
     if not FES_WEIGHTS_SLUG_RE.fullmatch(value):
         raise argparse.ArgumentTypeError(
             "must match [A-Za-z0-9][A-Za-z0-9._-]* (no slashes or traversal)"
+        )
+    return value
+
+
+def fes_draft_dir(value: str) -> str:
+    """Accept a container-side mount path for a read-only staged weights mount."""
+    # Docker normalizes the mountpoint, so a naive prefix check is not enough:
+    # '//' is a root mount and '/a/../../etc' is not a /a mount.
+    components = value.split("/")
+    if (not value.startswith("/") or not [c for c in components if c not in ("", ".")]
+            or any(c in (".", "..") for c in components)):
+        raise argparse.ArgumentTypeError(
+            "must be a non-root absolute container path with no '.' or '..' "
+            "components (e.g. /drafter)"
         )
     return value
 
@@ -213,6 +246,130 @@ def resolve_fes_weights(
     if not (fes_mod / "run.sh").is_file():
         print(f"Error: Required mod not found: {fes_mod}")
         raise ValueError("missing staged weights mod")
+    args.fes_launch_mod = str(fes_mod)
+    return slug
+
+
+def resolve_fes_draft(
+    recipe: dict[str, Any], args: argparse.Namespace,
+    container_env: dict[str, str],
+) -> str | None:
+    """Resolve CLI > recipe drafter weights and add the read-only draft mount.
+
+    The drafter of a spec-decode arm is staged as a sibling slug directory of the
+    target under the SAME ``--weights-root``, and is mounted read-only at
+    ``draft_dir`` (default ``/drafter``) so the recipe's
+    ``--speculative-config '{"model": "/drafter", ...}'`` resolves offline.
+    ``mods/fes-weights/run.sh`` already verifies ``FES_DRAFT_DIR`` and builds the
+    ``FES_DRAFT_HUB_MODEL`` shim; this only sets the contract those steps read.
+
+    The staged directory is required only when a launch is actually intended:
+    ``--dry-run``, ``--build-only`` and ``--download-only`` resolve and render the
+    mount without demanding staged weights on the host.
+
+    A drafter exists only in staged-weights mode. ``--no-fes-weights`` makes the
+    target resolver return before it writes ``FES_WEIGHTS_ENABLED``, and
+    ``mods/fes-weights/run.sh`` exits early without it, so mounting a drafter in
+    that mode would advertise ``/drafter`` while its per-node ``verify`` and hub
+    shim silently never ran. Requesting a drafter then is an error, not a no-op;
+    ``--no-fes-weights --no-fes-draft`` stays valid as an explicit opt-out.
+    """
+    if args.no_fes_draft:
+        return None
+    slug = args.draft_slug
+    if slug is None:
+        value = recipe.get("draft_slug")
+        if value is not None:
+            slug = str(value)
+    if slug is None:
+        return None
+    try:
+        slug = fes_weights_slug(slug)
+    except argparse.ArgumentTypeError as exc:
+        print(f"Error: Invalid FES_DRAFT_SLUG {slug!r}: {exc}")
+        raise ValueError("invalid staged drafter slug") from exc
+
+    if args.no_fes_weights:
+        print("Error: Draft weights require staged-weights mode, but --no-fes-weights "
+              "was given.")
+        print(f"mods/fes-weights verifies FES_DRAFT_DIR only when the target is staged, "
+              f"so slug {slug!r} would be mounted at /drafter with no per-node "
+              "verification or hub shim.")
+        print("Drop --no-fes-weights to stage the target and its drafter, or pass "
+              "--no-fes-draft to launch this recipe without its drafter.")
+        raise ValueError("drafter requested in hub-cache mode")
+
+    # The drafter shares the target's weights root: no second root flag, and a
+    # declared drafter is never silently dropped (no global fallback).
+    if not args.weights_root:
+        print("Error: --weights-root cannot be empty when draft weights are selected.")
+        raise ValueError("missing drafter weights root")
+    weights_dir = str((Path(args.weights_root).expanduser() / slug).absolute())
+    # Only a real launch needs the drafter on the host. --dry-run, --build-only and
+    # --download-only never require staged state, matching the model/image
+    # prerequisite guards further down: a preview must render the mount it would use,
+    # and building an image must not depend on weights being staged yet.
+    if not (args.dry_run or args.build_only or args.download_only):
+        if not Path(weights_dir).is_dir():
+            print(f"Error: Draft weights are not staged: {weights_dir}")
+            print(f"Stage slug {slug!r} under {args.weights_root} before launching a "
+                  "drafted recipe (scripts/model-weights.sh stage), "
+                  "or pass --no-fes-draft.")
+            raise ValueError("missing staged drafter weights")
+        if not (Path(weights_dir) / "config.json").is_file():
+            print(f"Error: Draft weights {weights_dir} contain no config.json.")
+            print(f"Stage slug {slug!r} completely before launching a drafted recipe, "
+                  "or pass --no-fes-draft.")
+            raise ValueError("incomplete staged drafter weights")
+
+    enabled = container_env.get("FES_DRAFT_ENABLED")
+    if enabled is not None and enabled != "FES_DRAFT_ENABLED=1":
+        print("Error: Draft weights require FES_DRAFT_ENABLED=1; got "
+              f"{enabled!r}. Refusing to bypass per-node verification.")
+        raise ValueError("drafter verification disabled")
+    assignment = container_env.get(
+        "FES_DRAFT_DIR",
+        f"FES_DRAFT_DIR={recipe.get('draft_dir') or FES_DRAFT_DIR_DEFAULT}",
+    )
+    if not assignment.startswith("FES_DRAFT_DIR="):
+        print("Error: Draft weights require an assigned FES_DRAFT_DIR.")
+        raise ValueError("drafter mount unset")
+    try:
+        draft_dir = fes_draft_dir(assignment.split("=", 1)[1])
+    except argparse.ArgumentTypeError as exc:
+        print(f"Error: Invalid FES_DRAFT_DIR {assignment!r}: {exc}")
+        raise ValueError("invalid drafter mount") from exc
+
+    hub_model = recipe.get("draft_hub_model") or slug
+    for assignment in container_env.values():
+        if assignment.startswith("FES_DRAFT_HUB_MODEL="):
+            hub_model = assignment.split("=", 1)[1]
+        elif assignment == "FES_DRAFT_HUB_MODEL":
+            hub_model = os.environ.get("FES_DRAFT_HUB_MODEL", "")
+    # Fail on the host rather than inside the container: run.sh's make_shim exits 1
+    # on the same shape, after docker run, on every rank. draft_slug is a path
+    # component and can never satisfy this, so a recipe that omits
+    # draft_hub_model: is told so before anything starts.
+    if not FES_DRAFT_HUB_MODEL_RE.fullmatch(str(hub_model)):
+        print(f"Error: FES draft weights need an 'org/model' FES_DRAFT_HUB_MODEL, "
+              f"got {hub_model!r}.")
+        print(f"Declare draft_hub_model: 'org/model' in the recipe (the drafter slug "
+              f"{slug!r} is not a hub id), or pass -e FES_DRAFT_HUB_MODEL=org/model.")
+        raise ValueError("invalid drafter hub model")
+
+    mapping = f"{weights_dir}:{draft_dir}:ro"
+    if mapping not in args.volume_mappings:
+        args.volume_mappings.insert(0, mapping)
+    container_env["FES_DRAFT_ENABLED"] = "FES_DRAFT_ENABLED=1"
+    container_env["FES_DRAFT_DIR"] = f"FES_DRAFT_DIR={draft_dir}"
+    container_env["FES_DRAFT_HUB_MODEL"] = f"FES_DRAFT_HUB_MODEL={hub_model}"
+    container_env["FES_DRAFT_SLUG"] = f"FES_DRAFT_SLUG={slug}"
+    # The same mod that verifies the target mount verifies the drafter mount, so
+    # a drafted launch never reaches the container unchecked.
+    fes_mod = SCRIPT_DIR / FES_WEIGHTS_MOD
+    if not (fes_mod / "run.sh").is_file():
+        print(f"Error: Required mod not found: {fes_mod}")
+        raise ValueError("missing drafter weights mod")
     args.fes_launch_mod = str(fes_mod)
     return slug
 
@@ -375,6 +532,27 @@ def ensure_ray_backend(command: str) -> str:
 
 
 
+RECIPE_KEYS = frozenset({
+    "name",
+    "recipe_version",
+    "container",
+    "image_id",
+    "command",
+    "description",
+    "model",
+    "draft_slug",
+    "draft_hub_model",
+    "draft_dir",
+    "mods",
+    "defaults",
+    "env",
+    "build_args",
+    "cluster_only",
+    "solo_only",
+    "pd_kv_backend",
+})
+
+
 def load_recipe(recipe_path: Path) -> dict[str, Any]:
     """
     Load and validate a recipe YAML file.
@@ -403,6 +581,13 @@ def load_recipe(recipe_path: Path) -> dict[str, Any]:
         command (str, required): vLLM serve command template with {placeholders}
         description (str, optional): Brief description shown in --list
         model (str, optional): HuggingFace model ID for --setup downloads
+        draft_slug (str, optional): Staged drafter slug, a sibling directory of the
+            target slug under --weights-root, mounted read-only at draft_dir for a
+            --speculative-config {'model': '/drafter'} arm. Same path-component rule
+            as FES_WEIGHTS_SLUG; a value with a separator or traversal is an error.
+        draft_hub_model (str, optional): 'org/model' id used for the drafter hub
+            shim; defaults to draft_slug.
+        draft_dir (str, optional): Container mount for the drafter (default '/drafter').
         mods (list[str], optional): List of mod directories to apply (e.g., 'mods/fix-glm')
         defaults (dict, optional): Default values for command placeholders
         env (dict, optional): Container environment defaults; CLI -e values override them
@@ -454,9 +639,21 @@ def load_recipe(recipe_path: Path) -> dict[str, Any]:
             print(f"Error: Recipe missing required field: {field}")
             sys.exit(1)
 
+    # Unknown fields are an error, not a silence: a misspelled key would otherwise
+    # look applied while the launch behaves as if it were absent. New optional
+    # fields land in RECIPE_KEYS together with their setdefault() below.
+    unknown = sorted(set(recipe) - RECIPE_KEYS)
+    if unknown:
+        print(f"Error: Recipe has unknown field(s): {', '.join(unknown)}")
+        print(f"Known fields: {', '.join(sorted(RECIPE_KEYS))}")
+        sys.exit(1)
+
     # Set defaults for optional fields
     recipe.setdefault("description", "")
     recipe.setdefault("model", None)
+    recipe.setdefault("draft_slug", None)
+    recipe.setdefault("draft_hub_model", None)
+    recipe.setdefault("draft_dir", FES_DRAFT_DIR_DEFAULT)
     recipe.setdefault("mods", [])
     recipe.setdefault("defaults", {})
     recipe.setdefault("env", {})
@@ -476,6 +673,29 @@ def load_recipe(recipe_path: Path) -> dict[str, Any]:
                 f"got: {image_id}"
             )
             sys.exit(1)
+
+    # Drafter weights are staged under the same root as the target, so the slug
+    # takes the same single-path-component rule: a '../etc' or 'a/b' value here
+    # would otherwise become a read-only mount of a directory outside the root.
+    draft_slug = recipe.get("draft_slug")
+    if draft_slug is not None:
+        try:
+            recipe["draft_slug"] = fes_weights_slug(str(draft_slug))
+        except argparse.ArgumentTypeError as exc:
+            print(f"Error: Recipe 'draft_slug' is invalid: {draft_slug!r}: {exc}")
+            sys.exit(1)
+    draft_dir = recipe.get("draft_dir")
+    if draft_dir is not None:
+        try:
+            recipe["draft_dir"] = fes_draft_dir(str(draft_dir))
+        except argparse.ArgumentTypeError as exc:
+            print(f"Error: Recipe 'draft_dir' is invalid: {draft_dir!r}: {exc}")
+            sys.exit(1)
+    draft_hub_model = recipe.get("draft_hub_model")
+    if draft_hub_model is not None and not str(draft_hub_model).strip():
+        print("Error: Recipe 'draft_hub_model' must be a non-empty 'org/model' id "
+              "when present.")
+        sys.exit(1)
 
     # Validate recipe version compatibility
     # EXTENSIBILITY: When adding new schema versions, update SUPPORTED_VERSIONS
@@ -1135,9 +1355,20 @@ Examples:
         "--no-fes-weights", action="store_true",
         help="Use hub-cache behavior, ignoring recipe/default FES_WEIGHTS_SLUG",
     )
+    draft_group = launch_group.add_mutually_exclusive_group()
+    draft_group.add_argument(
+        "--draft-slug", type=fes_weights_slug,
+        help="FES staged drafter slug (a sibling of the target under --weights-root); "
+             "overrides recipe draft_slug",
+    )
+    draft_group.add_argument(
+        "--no-fes-draft", action="store_true",
+        help="Skip the recipe-owned drafter mount, ignoring recipe draft_slug",
+    )
     launch_group.add_argument(
         "--weights-root", default="/opt/llm/models", metavar="DIR",
-        help="Host root containing staged slugs (default: /opt/llm/models)",
+        help="Host root containing staged slugs, the target and its drafter "
+             "(default: /opt/llm/models)",
     )
     launch_group.add_argument(
         "--solo", action="store_true", help="Run in solo mode (single node, no Ray)"
@@ -1417,10 +1648,16 @@ Examples:
 
     try:
         fes_slug = resolve_fes_weights(recipe, args, container_env)
+        draft_slug = resolve_fes_draft(recipe, args, container_env)
     except ValueError:
         return 1
     if fes_slug:
         print(f"FES staged weights: {Path(args.weights_root).expanduser() / fes_slug}")
+        print()
+    if draft_slug:
+        draft_dir = container_env["FES_DRAFT_DIR"].split("=", 1)[1]
+        print(f"FES staged drafter: "
+              f"{Path(args.weights_root).expanduser() / draft_slug} -> {draft_dir}")
         print()
 
     # Parse nodes - check command line first, then .env file, then autodiscover
