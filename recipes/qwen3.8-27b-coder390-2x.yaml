@@ -25,13 +25,24 @@
 # flag, so none is passed; decode runs the default fused CUDA GDN kernel
 # (VLLM_GDN_DECODE_KERNEL defaults to "cuda").
 #
-# Weight loader: --load-format instanttensor, not b12x. The b12x loader in
-# this vLLM build is the opt-in Flash Next (Qwen4Exp) loader and rejects every
-# other architecture outright (b12x_loader.py:119-126); this checkpoint is
-# Qwen3_5ForConditionalGeneration, so b12x could never load it. instanttensor
-# runs through the default safetensors iterator with a CUDA-resident read
-# path and no architecture allow-list, matching the sibling
-# recipes/qwen3.8-27b-nvfp4-dflash2.yaml for the same model family.
+# Weight loader: --load-format instanttensor, not b12x — which is what this
+# family boots on today, matching the sibling
+# recipes/qwen3.8-27b-nvfp4-dflash2.yaml. The reason recorded here before
+# ("the b12x loader is the opt-in Flash Next (Qwen4Exp) loader and rejects
+# every other architecture outright (b12x_loader.py:119-126)") describes
+# docker/patches/qwen3.8/vllm/17-flash-next-b12x-loader.patch, which CREATES
+# that gated loader on the upstream build lane. It is not in the images we
+# ship: our builds set VLLM_REPO to the fork with
+# VLLM_REF=dev/karmic-kraken@local-inference-lab/vllm, and
+# docker/apply_patch_series.sh returns early for any repository other than
+# https://github.com/vllm-project/vllm and unless the series is enabled
+# (VLLM_REF=main). Measured in both image configs we use (c34501ebfa79,
+# 319205b2ff31): b12x_loader.py is 316 lines with 0 Qwen4Exp references and
+# implements read_mode "gds", which patch 17 rejects — it is the fork branch's
+# transport loader, gated on checkpoint format and read mode, not
+# architecture. So b12x is not rejected here for being the wrong
+# architecture; it is untried for this Qwen3_5ForConditionalGeneration
+# checkpoint, and instanttensor stands on measured behaviour, not on a gate.
 #
 # Reasoning effort: the checkpoint's own chat_template.jinja accepts only
 # xhigh|medium|low (xhigh IS its default when no effort is sent), and `none`

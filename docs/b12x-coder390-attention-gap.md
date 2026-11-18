@@ -134,18 +134,35 @@ Fixed in all five GDN recipes (the three coder390 recipes and both
 `qwen3.8-flash-next-nvfp4` recipes). No env var was added: `cuda` is already the
 default.
 
-## 5. Defect 4 — the b12x loader is Flash-Next-only
+## 5. Defect 4 — the b12x loader is Flash-Next-only (upstream lane only)
 
 ```
 ValueError: the regular b12x loader currently supports Flash Next only
 ```
 
-`vllm/model_executor/model_loader/b12x_loader.py:119-126` allow-lists exactly
-`{Qwen4ExpForCausalLM, Qwen4ExpForConditionalGeneration, Qwen4ExpMTP}`; the
-class docstring is *"Opt-in Flash Next loader for Spark, including its embedded
-MTP draft."* The coder390 checkpoint is
-`Qwen3_5ForConditionalGeneration` (confirmed from the staged
-`config.json`), so `--load-format b12x` could never load it.
+That message, the allow-list `{Qwen4ExpForCausalLM,
+Qwen4ExpForConditionalGeneration, Qwen4ExpMTP}` at `b12x_loader.py:119-126`, and
+the docstring *"Opt-in Flash Next loader for Spark, including its embedded MTP
+draft."* belong to `docker/patches/qwen3.8/vllm/17-flash-next-b12x-loader.patch`,
+which **creates** `vllm/model_executor/model_loader/b12x_loader.py` on the
+upstream build lane (`new file mode`; subject *"Flash Next B12X checkpoint
+loading in the regular lane"*; "Apply after 16-flash-next-fp4.patch"). They are
+**not** in the images we run. Our builds set `VLLM_REPO` to the fork with
+`VLLM_REF=dev/karmic-kraken@local-inference-lab/vllm`, and
+`docker/apply_patch_series.sh` exits early for any repository other than
+`https://github.com/vllm-project/vllm` and unless the series is enabled
+(`VLLM_REF=main`). Measured in both image configs in use (`c34501ebfa79`,
+`319205b2ff31`): `b12x_loader.py` is 316 lines with **0** `Qwen4Exp` references,
+0 hits for the message above, and it implements `read_mode == "gds"` — which
+patch 17 rejects. The installed file is the fork branch's own loader
+(`local-inference-lab/vllm` `3a947437cf`, "B12xModelLoader and transfer hooks"),
+a transport loader gated on checkpoint format and read mode rather than
+architecture.
+
+The coder390 checkpoint is `Qwen3_5ForConditionalGeneration` (confirmed from the
+staged `config.json`). `--load-format b12x` is therefore not rejected here for
+being the wrong architecture; it is simply untried for it, and instanttensor is
+what this family boots on.
 
 Fixed by switching the three coder390 recipes to
 `--load-format instanttensor`, which routes through `DefaultModelLoader`'s
@@ -154,8 +171,9 @@ CUDA-resident read path and **no architecture allow-list** — the same choice t
 sibling `qwen3.8-27b-nvfp4-dflash2` recipe already makes for this family.
 
 The two `qwen3.8-flash-next-nvfp4` recipes keep `--load-format b12x`: their
-checkpoint is `Qwen4ExpForConditionalGeneration`, which is exactly what the
-loader supports.
+checkpoint is `Qwen4ExpForConditionalGeneration`, which is what patch 17's loader
+targets. In our shipped images that loader imposes no such gate, so b12x there
+follows NVIDIA's own serve line for the checkpoint rather than a loader contract.
 
 ## 6. Defect 5 — B12X attention vs hybrid mamba alignment (OPEN)
 
