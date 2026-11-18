@@ -965,104 +965,129 @@ class FesRecipeCatalogTests(unittest.TestCase):
                 self.assertNotIn("FES_WEIGHTS_SLUG", recipe["env"])
 
     # The Qwen NVFP4 / QAD arms of the shared recipe<->launcher contract: canonical
-    # spec -> the staged-weights fields that recipe must declare. cluster-config
-    # maps these same specs to these same slugs and cluster-control-infra names
-    # them in its presets, so this table is the coupling point and a one-sided
-    # rename turns a row red. The recipe files are authored in a sibling layer:
-    # while recipes/<spec>.yaml is absent the row is exercised against a
-    # contract-built recipe, and from the moment it lands against the real file.
-    # The last two specs are the parked faithful (worker-cls) pair: they declare
-    # no drafter, and stay out of the cluster-config maps and the CCI presets.
+    # spec -> the staged-weights fields that recipe must declare. The spec strings
+    # are the design doc's corrected placement (.design/spark-vllm-docker/
+    # new-qwen-recipes.md:102-112 -- recipes/fulton/<family>/, superseding the plan's
+    # recipes/qwen3.8-27b/ and recipes/qwen3.8-flash-next/), and they are the very
+    # strings cluster-config keys SPARK_VLLM_DOCKER_SLUGS / _MAX_PARALLEL /
+    # _LITELLM_ROUTES by and cluster-control-infra stores in preset.recipe, so this
+    # table is the coupling point: a one-sided rename turns a row red.
+    #
+    # node_count is the launcher's -n arity. Every one of these recipes is
+    # cluster_only and declares tensor_parallel=node_count, pipeline_parallel=1, so
+    # the launch case below runs in cluster mode and cross-checks that shard count.
+    #
+    # The parked faithful (worker-cls) QAD pair has NO row here. It is registered in
+    # neither the cluster-config maps nor the CCI presets, so a row would be the one
+    # place that parked variant still exists in code -- which is how a parked design
+    # decision leaks back in.
     QWEN_NVFP4_CONTRACT = {
-        "qwen3.8-27b/qwen3.8-27b-nvfp4-2x": {
+        "fulton/qwen3.8-27b-nvfp4/qwen3.8-27b-nvfp4-2x": {
             "model": "RedHatAI/Qwen3.8-27B-NVFP4",
             "weights_slug": "qwen3.8-27b-nvfp4",
             "draft_slug": None,
             "draft_hub_model": None,
+            "node_count": 2,
         },
-        "qwen3.8-27b/qwen3.8-27b-nvfp4-4x": {
+        "fulton/qwen3.8-27b-nvfp4/qwen3.8-27b-nvfp4-4x": {
             "model": "RedHatAI/Qwen3.8-27B-NVFP4",
             "weights_slug": "qwen3.8-27b-nvfp4",
             "draft_slug": None,
             "draft_hub_model": None,
+            "node_count": 4,
         },
-        "qwen3.8-27b/qwen3.8-27b-nvfp4-2x-draft4b": {
-            "model": "RedHatAI/Qwen3.8-27B-NVFP4",
-            "weights_slug": "qwen3.8-27b-nvfp4",
-            "draft_slug": "qwen3.5-4b-qwen3.8-27b-draft",
-            "draft_hub_model": "nvidia/Qwen3.5-4B-Qwen3.8-27B-Draft",
-        },
-        "qwen3.8-27b/qwen3.8-27b-nvfp4-4x-draft4b": {
+        "fulton/qwen3.8-27b-nvfp4/qwen3.8-27b-nvfp4-2x-draft4b": {
             "model": "RedHatAI/Qwen3.8-27B-NVFP4",
             "weights_slug": "qwen3.8-27b-nvfp4",
             "draft_slug": "qwen3.5-4b-qwen3.8-27b-draft",
             "draft_hub_model": "nvidia/Qwen3.5-4B-Qwen3.8-27B-Draft",
+            "node_count": 2,
         },
-        "qwen3.8-27b/qwen3.8-27b-nvfp4-2x-draft08b": {
+        "fulton/qwen3.8-27b-nvfp4/qwen3.8-27b-nvfp4-4x-draft4b": {
+            "model": "RedHatAI/Qwen3.8-27B-NVFP4",
+            "weights_slug": "qwen3.8-27b-nvfp4",
+            "draft_slug": "qwen3.5-4b-qwen3.8-27b-draft",
+            "draft_hub_model": "nvidia/Qwen3.5-4B-Qwen3.8-27B-Draft",
+            "node_count": 4,
+        },
+        "fulton/qwen3.8-27b-nvfp4/qwen3.8-27b-nvfp4-2x-draft08b": {
             "model": "RedHatAI/Qwen3.8-27B-NVFP4",
             "weights_slug": "qwen3.8-27b-nvfp4",
             "draft_slug": "qwen3.5-0.8b-qwen3.8-27b-draft",
             "draft_hub_model": "nvidia/Qwen3.5-0.8B-Qwen3.8-27B-Draft",
+            "node_count": 2,
         },
-        "qwen3.8-27b/qwen3.8-27b-nvfp4-4x-draft08b": {
+        "fulton/qwen3.8-27b-nvfp4/qwen3.8-27b-nvfp4-4x-draft08b": {
             "model": "RedHatAI/Qwen3.8-27B-NVFP4",
             "weights_slug": "qwen3.8-27b-nvfp4",
             "draft_slug": "qwen3.5-0.8b-qwen3.8-27b-draft",
             "draft_hub_model": "nvidia/Qwen3.5-0.8B-Qwen3.8-27B-Draft",
+            "node_count": 4,
         },
-        "qwen3.8-flash-next/qwen3.8-flash-next-nvfp4-qad-nvidia-2x": {
+        "fulton/qwen3.8-flash-next-nvfp4/qwen3.8-flash-next-nvfp4-qad-nvidia-2x": {
             "model": "nvidia/Qwen3.8-Flash-Next-NVFP4-QAD",
             "weights_slug": "qwen3.8-flash-next-nvfp4-qad-nvidia",
             "draft_slug": None,
             "draft_hub_model": None,
+            "node_count": 2,
         },
-        "qwen3.8-flash-next/qwen3.8-flash-next-nvfp4-qad-nvidia-4x": {
+        "fulton/qwen3.8-flash-next-nvfp4/qwen3.8-flash-next-nvfp4-qad-nvidia-4x": {
             "model": "nvidia/Qwen3.8-Flash-Next-NVFP4-QAD",
             "weights_slug": "qwen3.8-flash-next-nvfp4-qad-nvidia",
             "draft_slug": None,
             "draft_hub_model": None,
-        },
-        "qwen3.8-flash-next/qwen3.8-flash-next-nvfp4-qad-nvidia-2x-workercls": {
-            "model": "nvidia/Qwen3.8-Flash-Next-NVFP4-QAD",
-            "weights_slug": "qwen3.8-flash-next-nvfp4-qad-nvidia",
-            "draft_slug": None,
-            "draft_hub_model": None,
-        },
-        "qwen3.8-flash-next/qwen3.8-flash-next-nvfp4-qad-nvidia-4x-workercls": {
-            "model": "nvidia/Qwen3.8-Flash-Next-NVFP4-QAD",
-            "weights_slug": "qwen3.8-flash-next-nvfp4-qad-nvidia",
-            "draft_slug": None,
-            "draft_hub_model": None,
+            "node_count": 4,
         },
     }
 
-    def contract_recipe(self, spec, row):
-        """The minimal recipe a contract row requires, for specs not yet on disk."""
-        recipe = {
-            "recipe_version": "1", "name": spec, "container": "vllm-node-b12x",
-            "model": row["model"], "command": f"vllm serve {row['model']}",
-            "env": {"FES_WEIGHTS_SLUG": row["weights_slug"]},
-        }
-        if row["draft_slug"] is not None:
-            recipe["draft_slug"] = row["draft_slug"]
-            recipe["draft_hub_model"] = row["draft_hub_model"]
-        return recipe
+    # Specs whose recipe file may still be absent, because the recipes layers that
+    # author them are stacked on top of this commit. Membership makes absence an
+    # explicit SKIP -- never a synthetic pass -- and
+    # test_qwen_nvfp4_unlanded_allowlist_tracks_the_recipe_files fails as soon as a
+    # listed file appears, so this allowance cannot outlive the recipes: the flip is
+    # enforced, not remembered.
+    NOT_YET_LANDED = frozenset(QWEN_NVFP4_CONTRACT)
 
-    def spec_declaration(self, spec):
-        """Raw (un-defaulted) recipe YAML, or None while the recipe is unwritten."""
-        path = ROOT / "recipes" / f"{spec}.yaml"
+    def recipe_path(self, spec):
+        """The repo path a contract spec's recipe file must occupy."""
+        return ROOT / "recipes" / f"{spec}.yaml"
+
+    def declared_recipe(self, spec):
+        """The raw (un-defaulted) recipe document a contract row binds to.
+
+        Nothing here may build a recipe from the row it is about to assert against:
+        an assertion against a document derived from the row is true by construction
+        and keeps passing whether the real file is absent, mis-keyed or renamed. A
+        missing file is therefore a hard failure unless the spec is listed in
+        NOT_YET_LANDED, where it is reported as a skip instead.
+        """
+        path = self.recipe_path(spec)
         if not path.is_file():
-            return None
+            if spec in self.NOT_YET_LANDED:
+                self.skipTest(f"recipes/{spec}.yaml has not landed yet")
+            self.fail(f"recipes/{spec}.yaml is missing, but {spec} is in "
+                      "QWEN_NVFP4_CONTRACT")
         with open(path) as handle:
             return runner.yaml.safe_load(handle)
+
+    def test_qwen_nvfp4_unlanded_allowlist_tracks_the_recipe_files(self):
+        self.assertLessEqual(self.NOT_YET_LANDED, set(self.QWEN_NVFP4_CONTRACT),
+                             "NOT_YET_LANDED names a spec the contract does not")
+        for spec in sorted(self.QWEN_NVFP4_CONTRACT):
+            with self.subTest(recipe=spec):
+                if self.recipe_path(spec).is_file():
+                    self.assertNotIn(
+                        spec, self.NOT_YET_LANDED,
+                        f"recipes/{spec}.yaml now exists; drop it from "
+                        "NOT_YET_LANDED so the contract binds to the file")
 
     def test_qwen_nvfp4_specs_declare_their_drafter_contract(self):
         for spec, row in self.QWEN_NVFP4_CONTRACT.items():
             with self.subTest(recipe=spec):
-                declaration = self.spec_declaration(spec)
-                recipe = declaration or self.contract_recipe(spec, row)
+                recipe = self.declared_recipe(spec)
                 weights_slug = (recipe.get("env") or {}).get("FES_WEIGHTS_SLUG")
                 self.assertEqual(weights_slug, row["weights_slug"])
+                self.assertEqual(recipe.get("model"), row["model"])
                 self.assertEqual(
                     runner.fes_weights_slug(row["weights_slug"]), row["weights_slug"])
                 # Absence is asserted on the raw document: load_recipe() would have
@@ -1081,6 +1106,15 @@ class FesRecipeCatalogTests(unittest.TestCase):
     def test_qwen_nvfp4_launches_mount_only_the_declared_drafter(self):
         for spec, row in self.QWEN_NVFP4_CONTRACT.items():
             with self.subTest(recipe=spec):
+                declaration = self.declared_recipe(spec)
+                # The row's arity has to be the file's own shard count: -n is how the
+                # launcher learns the node count, and every one of these recipes is
+                # cluster_only, so --solo would be rejected outright.
+                defaults = declaration.get("defaults") or {}
+                self.assertEqual(
+                    defaults.get("tensor_parallel", 1)
+                    * defaults.get("pipeline_parallel", 1),
+                    row["node_count"], f"recipes/{spec}.yaml shard count")
                 with tempfile.TemporaryDirectory() as temporary:
                     weights_root = Path(temporary) / "models"
                     for slug in (row["weights_slug"], row["draft_slug"]):
@@ -1089,17 +1123,13 @@ class FesRecipeCatalogTests(unittest.TestCase):
                         staged = weights_root / slug
                         staged.mkdir(parents=True)
                         (staged / "config.json").write_text("{}")
-                    recipe = self.contract_recipe(spec, row)
-                    declaration = self.spec_declaration(spec)
-                    if declaration:
-                        for key in ("draft_slug", "draft_hub_model", "draft_dir",
-                                    "model"):
-                            if declaration.get(key) is not None:
-                                recipe[key] = declaration[key]
-                    recipe_path = weights_root.parent / "recipe.yaml"
-                    recipe_path.write_text(runner.yaml.safe_dump(recipe))
-                    argv = ["run-recipe.py", str(recipe_path), "--config", "/dev/null",
-                            "--solo", "--weights-root", str(weights_root)]
+                    nodes = ",".join(f"192.0.2.{index}"
+                                     for index in range(1, row["node_count"] + 1))
+                    # The shipped file is the launch input, so a renamed or dropped
+                    # draft_slug in the YAML reaches the resolver here.
+                    argv = ["run-recipe.py", str(self.recipe_path(spec)),
+                            "--config", "/dev/null", "-n", nodes,
+                            "--weights-root", str(weights_root)]
                     launched = {}
                     output = io.StringIO()
                     with patch.object(sys, "argv", argv), \
@@ -1120,17 +1150,21 @@ class FesRecipeCatalogTests(unittest.TestCase):
                         self.assertEqual(
                             [key for key in env if key.startswith("FES_DRAFT_")], [])
                     else:
-                        draft_dir = recipe.get("draft_dir") or "/drafter"
+                        draft_dir = declaration.get("draft_dir") or "/drafter"
                         expected = [f"{weights_root / row['draft_slug']}:{draft_dir}:ro"]
                         self.assertEqual(env["FES_DRAFT_SLUG"], row["draft_slug"])
                         self.assertEqual(env["FES_DRAFT_ENABLED"], "1")
                         self.assertEqual(env["FES_DRAFT_DIR"], draft_dir)
                         self.assertEqual(env["FES_DRAFT_HUB_MODEL"],
                                          row["draft_hub_model"])
-                    # Exactly one drafter mount, plus the target's own.
-                    self.assertEqual(StagedWeightsTests.args_for(args, "-v"), expected + [
+                    # Exactly one drafter mount, plus the target's own, and no other
+                    # staged directory leaks in. Mounts the launcher adds for
+                    # unrelated host paths are outside this assertion's scope.
+                    staged = [volume for volume in StagedWeightsTests.args_for(args, "-v")
+                              if volume.startswith(f"{weights_root}/")]
+                    self.assertEqual(sorted(staged), sorted(expected + [
                         f"{weights_root / row['weights_slug']}:/model:ro",
-                    ])
+                    ]))
 
 
 class Coder390ActivationTests(unittest.TestCase):
