@@ -3,10 +3,15 @@
 # Deliberate clone of recipes/qwen3.8-flash-next-nvfp4-2x-fulton.yaml — the same
 # Qwen4ExpForConditionalGeneration arch family, same B12X serving stack, same
 # PLE-on-device tables — with exactly THREE intentional differences from that
-# base, each cited below. It is the 4-node twin of
+# base, each cited below, plus one topology change (TP=4, documented in the
+# paragraph after the list). It is the 4-node twin of
 # recipes/fulton/qwen3.8-flash-next-nvfp4/qwen3.8-flash-next-nvfp4-qad-nvidia-2x.yaml:
-# the two files share a byte-identical command block and differ only in
-# defaults.tensor_parallel, so all four files can be diffed to see only intent.
+# the two files share a byte-identical command block AND a byte-identical env
+# block (both verified 2026-11-18) and differ only in defaults.tensor_parallel,
+# so all four files can be diffed to see only intent. "Only TP" governs the serve
+# command and env, NOT the image: the container/image_id pair differs by design —
+# this arm pins the plain `vllm-node-b12x` tag (c34501ebfa79…), the 2x arm the
+# dated `vllm-node-b12x-20261118` (319205b2ff31…).
 #
 #   1. The served checkpoint is the NVIDIA QAD release, not the
 #      local-inference-lab one: /nas-1/models/qwen3.8/qwen3.8-flash-next-nvfp4-qad-nvidia
@@ -37,12 +42,29 @@
 #      base's now-unused `num_speculative_tokens` default is dropped with the
 #      flag it existed for.
 #
-#   3. NVIDIA's own serve line adds `--enable-expert-parallel` and selects
-#      `--reasoning-parser qwen3 --tool-call-parser qwen3_coder`. The reasoning
-#      parser already matches the base; the tool-call parser is CHANGED from the
-#      base's qwen3_xml to qwen3_coder, and --enable-expert-parallel is added.
-#      Whether expert parallelism helps at TP=4 is unmeasured; it follows the
-#      vendor command rather than a local measurement.
+#   3. `--tool-call-parser` is CHANGED from the base's qwen3_xml to qwen3_coder,
+#      following NVIDIA's serve line (which also selects `--reasoning-parser
+#      qwen3`; that one already matches the base). NVIDIA's line additionally
+#      adds `--enable-expert-parallel`, and it is DELIBERATELY OMITTED here: the
+#      B12X NVFP4 MoE backends cannot do expert parallelism at all, so the flag
+#      is not an unmeasured optimisation, it is a boot failure. It is also a
+#      reversion rather than a fourth delta: neither base declares this flag, so
+#      dropping it restores the base's flag set exactly. The full gate
+#      trail is cited in the 2x twin
+#      (recipes/fulton/qwen3.8-flash-next-nvfp4/qwen3.8-flash-next-nvfp4-qad-nvidia-2x.yaml,
+#      delta 3); the short form, measured in image 319205b2ff31 on 2026-11-18 —
+#      fused_moe/b12x.py:815-823 requires `not use_ep and ep_size == 1` (plus no
+#      all2all kernels, no EPLB) and its A4-prefill path rejects EP again at
+#      :367-377; experts/flashinfer_b12x_moe.py:234-237 is `not use_ep` ("local
+#      expert count must equal the global expert count"); and
+#      fused_moe/config.py:1216-1219 derives
+#      `use_ep = dp_size * pcp_size * tp_size > 1 and enable_expert_parallel`,
+#      then sets `ep_size = tp_size` with `tp_size = 1` (:1240-1245). At TP=4
+#      that is (tp_size=1, ep_size=4, use_ep=True) — the same rejected shape that
+#      killed the 2x arm at TP=2 (ep_size=2) on gx10-node3/4 at 16:28:30, so this
+#      arm could never have booted either. NVIDIA's line was evaluated on GB300,
+#      a different kernel path. EP would also buy no memory headroom here:
+#      weights are already sharded across TP.
 #
 # Four-node topology: the recipe schema carries no node count — RECIPE_KEYS
 # (run-recipe.py:518-536) has no such field, `grep '^nodes:' recipes/` matches
@@ -81,8 +103,9 @@
 # recipe remains the bootable flavour.
 #
 # Pre-existing defect in the base, NOT replicated here: the base declares
-# --enable-auto-tool-choice twice (recipes/4x-spark-cluster/qwen3.8-flash-next-nvfp4-fulton.yaml
-# lines 92 and 95). Here it is emitted exactly once.
+# --enable-auto-tool-choice twice (recipes/qwen3.8-flash-next-nvfp4-2x-fulton.yaml
+# lines 90 and 93 — the declared base; the repo's own 4-node base repeats the
+# same slip at its lines 92 and 95). Here it is emitted exactly once.
 #
 # NOTE: NOT registered in infra/cluster-config/scripts/lib/spark-launch.sh's
 # `--ray` gate because vllm-node-b12x recipes run no-Ray by construction.
@@ -90,7 +113,7 @@
 recipe_version: "1"
 name: Qwen3.8-Flash-Next-NVFP4-QAD-NVIDIA (4x TP=4)
 description: >
-  vLLM serving the NVIDIA QAD Qwen3.8 Flash Next NVFP4 checkpoint from /nas-1/models/qwen3.8/qwen3.8-flash-next-nvfp4-qad-nvidia on four DGX Sparks with B12X, PLE device tables, and expert parallelism. The MTP draft head is omitted: the QAD release documents it as unvalidated.
+  vLLM serving the NVIDIA QAD Qwen3.8 Flash Next NVFP4 checkpoint from /nas-1/models/qwen3.8/qwen3.8-flash-next-nvfp4-qad-nvidia on four DGX Sparks with B12X and PLE device tables. The MTP draft head is omitted: the QAD release documents it as unvalidated. Expert parallelism is omitted: the B12X NVFP4 MoE kernels do not support it.
 
 model: nvidia/Qwen3.8-Flash-Next-NVFP4-QAD
 #
@@ -187,7 +210,6 @@ command: |
     --max-model-len {max_model_len} \
     --max-num-seqs {max_num_seqs} \
     --max-num-batched-tokens {max_num_batched_tokens} \
-    --enable-expert-parallel \
     --linear-backend b12x \
     --moe-backend b12x \
     --no-enable-flashinfer-autotune \

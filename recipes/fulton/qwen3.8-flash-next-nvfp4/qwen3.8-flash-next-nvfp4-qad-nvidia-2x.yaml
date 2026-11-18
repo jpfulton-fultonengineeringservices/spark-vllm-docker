@@ -35,12 +35,30 @@
 #      base's now-unused `num_speculative_tokens` default is dropped with the
 #      flag it existed for.
 #
-#   3. NVIDIA's own serve line adds `--enable-expert-parallel` and selects
-#      `--reasoning-parser qwen3 --tool-call-parser qwen3_coder`. The reasoning
-#      parser already matches the base; the tool-call parser is CHANGED from the
-#      base's qwen3_xml to qwen3_coder, and --enable-expert-parallel is added.
-#      Whether expert parallelism helps at TP=2 across two Sparks is unmeasured;
-#      it follows the vendor command rather than a local measurement.
+#   3. `--tool-call-parser` is CHANGED from the base's qwen3_xml to qwen3_coder,
+#      following NVIDIA's serve line (which also selects `--reasoning-parser
+#      qwen3`; that one already matches the base). NVIDIA's line additionally
+#      adds `--enable-expert-parallel`, and it is DELIBERATELY OMITTED here: the
+#      B12X NVFP4 MoE backends cannot do expert parallelism at all, so the flag
+#      is not an unmeasured optimisation, it is a boot failure. It is also a
+#      reversion rather than a fourth delta: neither base declares this flag, so
+#      dropping it restores the base's flag set exactly. Measured 2026-11-18
+#      in BOTH serving images this family runs (config c34501ebfa79 and
+#      319205b2ff31 — the EP gates are byte-identical): fused_moe/b12x.py:815-823
+#      `_supports_parallel_config` requires `not use_ep and ep_size == 1` plus no
+#      all2all kernels and no EPLB, `supports_expert_map()` returns False, and
+#      because this recipe sets B12X_W4A16_A4_PREFILL=1 a second reject fires at
+#      b12x.py:367-377 ("B12X hybrid A4 prefill supports TP/DCP without DP, PCP,
+#      EP, sequence parallelism or ubatching"). The SM12x-native alternative is no
+#      better: experts/flashinfer_b12x_moe.py:234-237 returns `not use_ep` since
+#      "B12xMoEWrapper does not yet support expert parallelism: its local expert
+#      count must equal the global expert count". With the flag, FusedMoE turns
+#      TP=2 into (tp_size=1, ep_size=2, use_ep=True) and the engine dies at boot
+#      with "NvFp4 MoE backend 'B12X' does not support the deployment
+#      configuration" (gx10-node3/4, 2026-11-18 16:28:30); the same recipe without
+#      it serves normally on gx10-node1/2 (/v1/models 200). NVIDIA's line was
+#      evaluated on GB300 at TP=4, a different kernel path. EP would also buy no
+#      memory headroom here: weights are already sharded across TP.
 #
 # Deliberately ABSENT: `--worker-cls` and any PYTHONPATH override. The faithful
 # NVIDIA flavour belongs to the parked QAD runtime mod under mods/, and recipes
@@ -72,15 +90,18 @@
 recipe_version: "1"
 name: Qwen3.8-Flash-Next-NVFP4-QAD-NVIDIA (2x TP=2)
 description: >
-  vLLM serving the NVIDIA QAD Qwen3.8 Flash Next NVFP4 checkpoint from /nas-1/models/qwen3.8/qwen3.8-flash-next-nvfp4-qad-nvidia on two DGX Sparks with B12X, PLE device tables, and expert parallelism. The MTP draft head is omitted: the QAD release documents it as unvalidated.
+  vLLM serving the NVIDIA QAD Qwen3.8 Flash Next NVFP4 checkpoint from /nas-1/models/qwen3.8/qwen3.8-flash-next-nvfp4-qad-nvidia on two DGX Sparks with B12X and PLE device tables. The MTP draft head is omitted: the QAD release documents it as unvalidated. Expert parallelism is omitted: the B12X NVFP4 MoE kernels do not support it.
 
 model: nvidia/Qwen3.8-Flash-Next-NVFP4-QAD
 #
 # Image pin: image_id is the image CONFIG ID (`docker image inspect .Id`) of the
-# content this family is certified against, measured on gx10-node1 by the
-# orchestrator on 2026-11-18. It is exactly what `vllm-node-b12x:latest` resolves
-# to on the nodes today, so the pin is a no-op now and only bites on future tag
-# drift — which is why it is required at all: `container:` alone pins nothing.
+# content this family is certified against. This arm previously declared no pin at
+# all while this paragraph described one; the pin is now present and was measured
+# on 2026-11-18 by reading `docker image inspect vllm-node-b12x-20261118
+# --format '{{.Id}}'` on BOTH gx10-node1 and gx10-node3, which resolve that tag to
+# the same content (319205b2ff31…). It is therefore a no-op now and only bites on
+# future tag drift — which is why it is required at all: `container:` alone pins
+# nothing.
 # Tags are mutable, and the SAME tag name carries DIFFERENT content in the two
 # registries the nodes pull from: node1-registry
 # `10.100.170.3:5000/spark-vllm:vllm-node-b12x-20261106-1` is c34501eb… while
@@ -90,19 +111,23 @@ model: nvidia/Qwen3.8-Flash-Next-NVFP4-QAD
 # carries the RepoTags `vllm-node-b12x:latest`, `eugr/spark-vllm-b12x:latest`,
 # `10.100.170.3:5000/vllm-node-b12x:latest`,
 # `10.100.170.3:5000/spark-vllm:vllm-node-b12x-20261106-1` and
-# `10.100.170.3:5000/spark-vllm:coder390-kr-20261019`. The launcher refuses to
-# start when `container` resolves to other content (run-recipe.py:1618) and hands
-# the pin to launch-cluster.sh as `--image-id` (run-recipe.py:1972); the pin also
+# `10.100.170.3:5000/spark-vllm:coder390-kr-20261019`. That c34501eb content is
+# what the plain `vllm-node-b12x` tag carries — i.e. the 4x arm's content, NOT
+# this arm's; this arm's container resolves to 319205b2ff31, the digest pinned
+# below. The launcher refuses to start when `container` resolves to other content
+# (run-recipe.py:1618) and hands the pin to launch-cluster.sh as `--image-id`
+# (run-recipe.py:1972); the pin also
 # enters the KV cache-lineage prefix (run-recipe.py:483), so re-validating on a
 # new image must change `container:` and `image_id:` together.
 #
 # AUDIT NOTE — read this before concluding the pin is wrong: `docker images
-# --digests` on gx10-node1 does NOT list c34501eb at all; it reports
-# `10.100.170.3:5000/vllm-node-b12x:latest` with RepoDigest sha256:8e2b6339….
+# --digests` reports REGISTRY MANIFEST digests and will not show `image_id:`
+# anywhere — on gx10-node1 it reports `10.100.170.3:5000/vllm-node-b12x:latest`
+# with RepoDigest sha256:8e2b6339…, which is the OTHER arm's c34501eb content.
 # That is not a contradiction and does not invalidate the pin. RepoDigest is the
 # REGISTRY MANIFEST digest; `image_id:` is the image CONFIG ID. The same image
 # has both. Audit with
-#   docker image inspect c34501eb --format '{{.Id}}'
+#   docker image inspect vllm-node-b12x-20261118 --format '{{.Id}}'
 # and never with --digests.
 #
 # Scope: the pin governs the DEFAULT launch only — an explicit -t/--container
@@ -110,6 +135,7 @@ model: nvidia/Qwen3.8-Flash-Next-NVFP4-QAD
 # entirely (run-recipe.py:1618), so an operator who passes -t bypasses the
 # identity check on purpose.
 container: vllm-node-b12x-20261118
+image_id: sha256:319205b2ff31868d1578e8efc5d9faa16cbe76b23b613f220b0a4eb8d71323ed
 
 build_args:
   - --exp-b12x
@@ -168,7 +194,6 @@ command: |
     --max-model-len {max_model_len} \
     --max-num-seqs {max_num_seqs} \
     --max-num-batched-tokens {max_num_batched_tokens} \
-    --enable-expert-parallel \
     --linear-backend b12x \
     --moe-backend b12x \
     --no-enable-flashinfer-autotune \
