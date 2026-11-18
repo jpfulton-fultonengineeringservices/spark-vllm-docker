@@ -74,6 +74,11 @@ cluster_only: true
 # is the same mod that verifies the read-only drafter mount.
 mods:
   - mods/fes-weights
+  # Keep target-index-aware tensor selection compatible with InstantTensor
+  # 0.2.2: this image's _restrict_instanttensor_to_selected_ranges still calls
+  # the removed _determine_buffer_size, so every --load-format instanttensor
+  # boot dies in it while loading the target weights.
+  - mods/instanttensor-selected-ranges
   - mods/b12x-kernel-cache
   # B12X_SKIP_RECLAIM is only the GATE - the patch that honours it lives in
   # this mod, so the env var alone does nothing.
