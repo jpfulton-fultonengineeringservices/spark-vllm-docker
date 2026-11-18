@@ -1040,13 +1040,13 @@ class FesRecipeCatalogTests(unittest.TestCase):
         },
     }
 
-    # Specs whose recipe file may still be absent, because the recipes layers that
-    # author them are stacked on top of this commit. Membership makes absence an
-    # explicit SKIP -- never a synthetic pass -- and
-    # test_qwen_nvfp4_unlanded_allowlist_tracks_the_recipe_files fails as soon as a
-    # listed file appears, so this allowance cannot outlive the recipes: the flip is
-    # enforced, not remembered.
-    NOT_YET_LANDED = frozenset(QWEN_NVFP4_CONTRACT)
+    # Specs whose recipe file is legitimately absent. Every contract spec has now
+    # landed, so this MUST stay empty: declared_recipe() fails outright on a
+    # missing file that is not listed here, and
+    # test_qwen_nvfp4_unlanded_allowlist_tracks_the_recipe_files fails if a file
+    # exists while its spec is still listed. Keeping it empty is enforced by the
+    # suite rather than remembered by whoever lands a recipe.
+    NOT_YET_LANDED = frozenset()
 
     def recipe_path(self, spec):
         """The repo path a contract spec's recipe file must occupy."""
@@ -1109,7 +1109,12 @@ class FesRecipeCatalogTests(unittest.TestCase):
                 declaration = self.declared_recipe(spec)
                 # The row's arity has to be the file's own shard count: -n is how the
                 # launcher learns the node count, and every one of these recipes is
-                # cluster_only, so --solo would be rejected outright.
+                # cluster_only, so --solo would be rejected outright. Topology lives
+                # under the recipe's `defaults:` block, which run-recipe.py merges
+                # into the command placeholders; there is no top-level
+                # `tensor_parallel_size` and no `node_count` key in this schema, so
+                # reading those here would compare two identical defaults and pass
+                # whatever the shipped file says.
                 defaults = declaration.get("defaults") or {}
                 self.assertEqual(
                     defaults.get("tensor_parallel", 1)
