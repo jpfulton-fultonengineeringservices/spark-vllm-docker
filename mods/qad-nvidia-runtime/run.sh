@@ -20,6 +20,16 @@
 # sha256:c34501ebfa793ce49408a72e559e70b765fd1e28e1f6012370a744635340cc02) and
 # the fork build ghcr.io/fulton-engineering-services/spark-vllm:
 # vllm-node-b12x-20261106-0/1 (sha256:b76585f9020097bc9984b914bbcdebd5cdce5bbf66911ada28a9d7fa3649f096).
+# A fourth sample, measured on gx10-node1 on 2026-11-18: the newest build,
+# vllm-node-b12x-20261118 (config ID sha256:319205b2ff31…, also tagged
+# 10.100.170.3:5000/spark-vllm:vllm-node-b12x-20261118), ships the byte-identical
+# 5dfedfbd… modelopt.py. It is a rebuild of the same vLLM commit 8244d1c44 whose
+# only vllm/ delta over c34501eb is the tracked
+# docker/patch_vllm_b12x_storage_block_split.py layer plus a refreshed dependency
+# set (CUDA 13.4→13.5, nccl_extensions 0.1.0→0.2.0, instanttensor 0.2.2→0.2.3).
+# Re-pinning a recipe to it therefore does not enable this mod — running it
+# there reaches gate_modelopt_runtime and fails closed, which is the behaviour
+# verified for both bash and sourced invocation.
 # canonical_worker.py verifies that hash itself, so --worker-cls aborts on
 # launch: NVIDIA's command cannot simply be dropped into a recipe.
 #

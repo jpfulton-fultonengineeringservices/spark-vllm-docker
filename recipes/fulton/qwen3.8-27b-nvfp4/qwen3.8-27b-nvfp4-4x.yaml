@@ -20,11 +20,21 @@
 # b12x mirror the coder390 family (recipes/qwen3.8-27b-coder390-4x.yaml),
 # which is the same architecture on the same b12x image.
 #
-# Weight loader: --load-format instanttensor, NOT --load-format b12x. The b12x
-# loader in this vLLM build is the opt-in Flash Next (Qwen4Exp) loader and
-# rejects every other architecture outright (b12x_loader.py:119-126), so it
-# could never load this checkpoint. instanttensor runs the default safetensors
-# iterator with a CUDA-resident read path and no architecture allow-list.
+# Weight loader: --load-format instanttensor, NOT --load-format b12x. This is a
+# checkpoint-format choice, not an architecture one. B12xModelLoader
+# (model_executor/model_loader/b12x_loader.py, 316 lines) subclasses
+# DefaultModelLoader and references no architecture set at all: measured in the
+# shipped image, the file has no frozenset, allow-list or architectures
+# reference. The only {Qwen4ExpForCausalLM, Qwen4ExpForConditionalGeneration,
+# Qwen4ExpMTP} frozenset in vLLM is
+# DEFAULT_BREAKABLE_CUDAGRAPH_ARCHITECTURES (config/vllm.py:132), read only by
+# default_breakable_cudagraph_architectures() — nothing to do with loading, and
+# an easy thing to mistake for a b12x gate. It is a transport loader: it needs a
+# CUDA device (:90), vLLM's file-source hooks (:58) and a
+# model.safetensors.index.json-described checkpoint (:226-247). So b12x would
+# not fail here for being the wrong architecture; instanttensor is chosen
+# because it runs the default safetensors iterator with a CUDA-resident read
+# path, which is what this family boots on today. b12x is untried for it.
 #
 # Attention: no --attention-backend and --block-size 16 (image defaults), for
 # the same reason as the coder390 family. BasePlatform._align_hybrid_block_size
