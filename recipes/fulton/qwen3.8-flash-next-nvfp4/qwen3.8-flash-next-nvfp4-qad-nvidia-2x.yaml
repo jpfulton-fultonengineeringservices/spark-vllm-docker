@@ -178,6 +178,7 @@ env:
   B12X_W4A16_A4_PREFILL: "1"
   FIX_MFU_METRICS: "1"
 
+# --moe-backend b12x \
 command: |
   b12x-kcache exec vllm serve nvidia/Qwen3.8-Flash-Next-NVFP4-QAD \
     --host {host} \
@@ -198,7 +199,6 @@ command: |
     --max-num-batched-tokens {max_num_batched_tokens} \
     --speculative-config '{{"method":"mtp","num_speculative_tokens":{num_speculative_tokens}, "draft_tensor_parallel_size": {tensor_parallel} }}' \
     --linear-backend b12x \
-    --moe-backend b12x \
     --no-enable-flashinfer-autotune \
     --mm-encoder-tp-mode data \
     --reasoning-parser qwen3 \
