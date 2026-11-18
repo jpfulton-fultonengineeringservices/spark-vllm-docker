@@ -2,10 +2,10 @@
 """Exercise source-series application and lane guards without Docker or GPUs."""
 
 import ast
-from abc import ABC, abstractmethod
 import bisect
 from contextlib import nullcontext
 from functools import partial
+import functools
 import os
 from pathlib import Path
 import re
@@ -123,9 +123,9 @@ class PatchSeriesTests(unittest.TestCase):
         self.assertIn("README.md", self.git("diff", "--name-only", "--diff-filter=U"))
         self.assertFalse((self.source / "later").exists())
 
-    def test_nvfp4_patch_preserves_upstream_quantized_input_test(self):
-        # #59612 inserted a sibling test where #54614 originally added its test.
-        # Replay the real vendored hunk against that upstream excerpt.
+    def test_nvfp4_patch_preserves_upstream_w4a16_test(self):
+        # Upstream replaced the old backend tests; preserve the current W4A16
+        # test when adding dynamic-precision coverage at the end of the file.
         path = "tests/kernels/quantization/test_flashinfer_nvfp4_scaled_mm.py"
         upstream = (
             PROJECT / "tests/fixtures/qwen38-patch-series/nvfp4_upstream.py"
@@ -416,7 +416,9 @@ class PatchSeriesTests(unittest.TestCase):
                 self.max_num_reqs = 4
                 self.device = device
 
-        namespace = {"torch": torch, "DefaultModelState": DefaultModelState}
+        recover = Mock()
+        namespace = {"torch": torch, "DefaultModelState": DefaultModelState,
+                     "RecoverSSMState": recover}
         exec("from __future__ import annotations\n" + updated, namespace)
         for mode in ("align", "none"):
             for depth in (0, 2):
@@ -424,16 +426,17 @@ class PatchSeriesTests(unittest.TestCase):
                     with self.subTest(mode=mode, depth=depth, replay=replay):
                         config = SimpleNamespace(
                             cache_config=SimpleNamespace(
-                                mamba_cache_mode=mode, use_kda_recoverssm=False,
+                                mamba_cache_mode=mode, use_kda_recoverssm=replay,
                             ),
                             num_speculative_tokens=depth,
-                            use_flashinfer_replayssm=replay,
+                            use_replayssm_trackers=replay,
                         )
                         state = namespace["MambaHybridModelState"](
                             config, None, None, torch.device("cpu"),
                         )
                         self.assertIsNone(state._replayssm_query_start_loc)
-                        self.assertEqual(state._use_flashinfer_replayssm, replay)
+                        self.assertEqual(state._use_replayssm_trackers, replay)
+                        self.assertIs(state.recoverssm, recover.return_value if replay else None)
                         if replay:
                             torch.testing.assert_close(
                                 state._is_prefilling_gpu, torch.zeros(4, dtype=torch.bool),
@@ -442,7 +445,6 @@ class PatchSeriesTests(unittest.TestCase):
                             self.assertFalse(hasattr(state, "_is_prefilling_gpu"))
                         if mode == "align" or replay:
                             self.assertIsNone(state._mamba_ctx)
-                            self.assertEqual(state._mamba_group_ids, [])
                             self.assertIsNone(state._mamba_state_copy_funcs)
                         batch = state._mamba_num_accepted_tokens_batch
                         if mode == "align" and depth:
@@ -465,7 +467,7 @@ class PatchSeriesTests(unittest.TestCase):
         cache_class = next(n for n in tree.body if isinstance(n, ast.ClassDef)
                            and n.name == "QSARawKeyCache")
         method = next(n for n in cache_class.body if isinstance(n, ast.FunctionDef)
-                      and n.name == "get_kv_cache_spec")
+                      and n.name == "get_kv_cache_config")
         selected = [n for n in tree.body if (
             isinstance(n, ast.FunctionDef) and n.name == "qsa_ring_capacity"
             or isinstance(n, ast.Assign)
@@ -476,8 +478,11 @@ class PatchSeriesTests(unittest.TestCase):
         namespace = {
             "cdiv": lambda a, b: (a + b - 1) // b,
             "logger": SimpleNamespace(info_once=Mock()),
-            "VllmConfig": object, "KVCacheSpec": object,
-            "CircularBufferSpec": SimpleNamespace,
+            "VllmConfig": object, "KVCacheLayerConfig": object,
+            "AttentionSpec": SimpleNamespace,
+            "CircularBufferManager": SimpleNamespace(
+                layer_config=lambda spec: SimpleNamespace(spec=spec, manager="circular"),
+            ),
         }
         exec(compile(module, path, "exec"), namespace)
         for block_size in (848, 1616):
@@ -487,9 +492,11 @@ class PatchSeriesTests(unittest.TestCase):
             )
             for depth in range(13):
                 with self.subTest(block_size=block_size, depth=depth):
-                    spec = namespace["get_kv_cache_spec"](
+                    spec = namespace["get_kv_cache_config"](
                         cache, SimpleNamespace(num_speculative_tokens=depth),
                     )
+                    self.assertEqual(spec.manager, "circular")
+                    spec = spec.spec
                     minimal = 4 * ((4 + depth + 3) // 4)
                     self.assertGreaterEqual(spec.block_size, 4 + depth)
                     self.assertEqual(block_size % spec.block_size, 0)
@@ -499,7 +506,7 @@ class PatchSeriesTests(unittest.TestCase):
                     if block_size % minimal == 0:
                         self.assertEqual(spec.block_size, minimal)
             with self.assertRaisesRegex(ValueError, "QSA ring"):
-                namespace["get_kv_cache_spec"](
+                namespace["get_kv_cache_config"](
                     cache, SimpleNamespace(num_speculative_tokens=13),
                 )
         self.assertEqual(namespace["qsa_ring_capacity"](4, 5, 848), 16)
@@ -689,6 +696,248 @@ class PatchSeriesTests(unittest.TestCase):
         self.assertTrue(runner(10, 7, False, None, low_m_only=True))
         self.assertFalse(runner(10, 0, False, None))
 
+    def test_flashinfer_multi_runner_preserves_sm10x_and_isolates_sm12x(self):
+        _, updated = self.apply_upstream_excerpt(
+            "02-pr5943.patch", "flashinfer/gemm/gemm_base.py",
+            "flashinfer_mxfp8_runners_upstream.py",
+            ('Runners of ``mm_mxfp8',), project="flashinfer",
+        )
+        cluster = Mock(return_value=object())
+        warp = Mock()
+        warp.supports_inputs.return_value = True
+        warp_factory = Mock(return_value=warp)
+        available = Mock(return_value=True)
+        namespace = {
+            "__name__": "fixture.gemm.gemm_base", "__package__": "fixture.gemm",
+            "_cute_dsl_gemm_mxfp8_runner": cluster,
+            "_cute_dsl_warp_splitk_mxfp8_gemm_runner": warp_factory,
+            "get_device_sm_count": lambda _: 100,
+        }
+        exec(updated, namespace)
+        runners = namespace["_cute_dsl_mxfp8_runners"]
+        inputs = [SimpleNamespace(device="cuda"), SimpleNamespace(shape=(128, 64))]
+        module = SimpleNamespace(is_cute_dsl_experimental_available=available)
+        with patch.dict("sys.modules", {"fixture.cute_dsl.availability": module}):
+            for minor in (0, 1):
+                self.assertEqual(runners(12, minor, True, "bf16", inputs),
+                                 [cluster.return_value])
+                cluster.assert_called_with(12, minor, True, "bf16")
+            available.assert_not_called()
+            warp_factory.assert_not_called()
+            self.assertEqual(runners(10, 0, True, "bf16", inputs),
+                             [warp, cluster.return_value])
+            inputs[1].shape = (128, 4096)
+            self.assertEqual(runners(10, 0, True, "bf16", inputs),
+                             [cluster.return_value, warp])
+            available.return_value = False
+            warp_factory.reset_mock()
+            self.assertEqual(runners(10, 7, True, "bf16", inputs),
+                             [cluster.return_value])
+            warp_factory.assert_not_called()
+
+    def test_flashinfer_mixed_backend_tuning_keeps_cute_dsl_policy(self):
+        _, updated = self.apply_upstream_excerpt(
+            "02-pr5943.patch", "flashinfer/gemm/gemm_base.py",
+            "flashinfer_mxfp8_tuning_upstream.py",
+            ('+    elif "cute-dsl" in backends',), project="flashinfer",
+        )
+        namespace = {
+            "AutoTuner": SimpleNamespace(get=lambda: SimpleNamespace(
+                choose_one=lambda **kwargs: (None, None))),
+            "_MM_MXFP8_SM12X_CUTE_DSL_TUNING_CONFIG": "sm12x",
+            "_MM_MXFP8_CUTE_DSL_TUNING_CONFIG": "cute",
+            "_MM_MXFP8_TUNING_CONFIG": "default",
+        }
+        exec(updated, namespace)
+        for major, backends, expected in [
+            (12, ["cute-dsl"], "sm12x"), (10, ["cute-dsl"], "cute"),
+            (10, ["cudnn", "cute-dsl"], "cute"),
+            (12, ["cudnn", "cute-dsl"], "cute"),
+            (10, ["cutedsl_low_latency"], "cute"),
+            (12, ["b12x"], "default"), (10, ["cudnn"], "default"),
+        ]:
+            with self.subTest(major=major, backends=backends):
+                self.assertEqual(namespace["select_tuning"](backends, major), expected)
+
+    def test_confidence_draft_counts_preserve_separate_verification_lengths(self):
+        try:
+            import numpy as np
+            import torch
+        except ImportError:
+            self.skipTest("CPU tensor checks require torch and numpy")
+        _, updated = self.apply_upstream_excerpt(
+            "04-pr60068.patch", "vllm/v1/worker/gpu/model_runner.py",
+            "draft_counts_upstream.py", ('# An early stop',),
+        )
+        namespace = {"torch": torch}
+        exec("from __future__ import annotations\n" + updated, namespace)
+        runner = namespace["GPUModelRunner"]()
+        runner.req_states = SimpleNamespace(
+            draft_tokens=torch.tensor([[1, 2, 3, 4], [5, 6, -1, -1]]),
+        )
+        runner.model_state = SimpleNamespace(num_new_sampled_tokens_per_step=1)
+        batch = SimpleNamespace(
+            idx_mapping=torch.tensor([1, 0]), idx_mapping_np=np.array([1, 0]),
+            cu_num_logits=torch.tensor([0, 2, 4]),
+            num_draft_tokens_per_req=np.array([1, 1]),
+        )
+        for enabled, expected in ((False, [2, 4]), (True, [2, 3])):
+            stop = SimpleNamespace(num_verifiable_drafts=Mock(return_value=np.array([2, 3])))
+            runner.speculator = SimpleNamespace(confidence_stop=stop if enabled else None)
+            drafted, verified = runner._get_num_drafted_and_verified(batch)
+            self.assertEqual(drafted.tolist(), expected)
+            self.assertEqual(verified.tolist(), [1, 1])
+            if enabled:
+                self.assertIs(stop.num_verifiable_drafts.call_args.args[0], batch.idx_mapping_np)
+            else:
+                stop.num_verifiable_drafts.assert_not_called()
+        for speculator, counts in ((None, np.array([1, 1])), (object(), None)):
+            runner.speculator = speculator
+            batch.num_draft_tokens_per_req = counts
+            self.assertEqual(runner._get_num_drafted_and_verified(batch), (None, None))
+
+    def test_flashinfer_margin_preserves_tie_confirmation_and_selection_record(self):
+        _, updated = self.apply_upstream_excerpt(
+            "02-pr5943.patch", "flashinfer/autotuner/autotuner.py",
+            "flashinfer_selection_upstream.py",
+            ("+                            margin = tuning_config.first_tactic_margin",),
+            project="flashinfer",
+        )
+        namespace = {"functools": functools, "statistics": statistics,
+                     "logger": Mock(), "_tune_process_group": None}
+        exec("from __future__ import annotations\n" + updated, namespace)
+        cases = [
+            # Initial times, margin, tie tolerance, confirmation times, winner.
+            ([3.0, 2.94], .03, 0, [3.0, 2.94], 0),
+            ([3.0, 2.7], .03, 0, [3.0, 2.7], 1),
+            ([float("inf"), 2.94], .03, 0, [float("inf"), 2.94], 1),
+            ([3.0, 2.94], 0, 0, [3.0, 2.94], 1),
+            ([3.0, 2.94], 0, .03, [3.0, 2.94], 0),
+            ([3.0, 2.94], 0, .03, [4.0, 2.94], 1),
+        ]
+        for times, margin, tolerance, retimed, winner in cases:
+            with self.subTest(times=times, margin=margin, tolerance=tolerance,
+                              retimed=retimed):
+                tuner = namespace["AutoTuner"]()
+                tuner._tie_tolerance = tolerance
+                tuner._TIE_MAX_CONTENDERS, tuner._TIE_CONFIRM_ROUNDS = 3, 2
+                tuner._retime_candidate = Mock(side_effect=lambda *args: retimed[args[-1]])
+                tuner._get_cache_key = Mock(return_value=SimpleNamespace(file_key="key"))
+                tuner._discard_profile_cache = Mock()
+                tuner._cache_profile_result = Mock()
+                tuner.stats = SimpleNamespace(tuned_op_successful_configs={})
+                runners = [Mock()]
+                tuner.select(
+                    [(t, 0, i) for i, t in enumerate(times)], min(times),
+                    SimpleNamespace(first_tactic_margin=margin), runners, [],
+                    SimpleNamespace(get_opt_shapes=lambda: ()), "gemm", [],
+                )
+                args = tuner._cache_profile_result.call_args.args
+                self.assertEqual(args[3], winner)
+                self.assertEqual(args[4]["time_ms"], times[winner])
+                self.assertEqual(args[4]["candidates"], sum(t < float("inf") for t in times))
+                if times[1 - winner] < float("inf"):
+                    self.assertEqual(args[4]["runner_up_ms"], times[1 - winner])
+                if tolerance:
+                    self.assertGreater(tuner._retime_candidate.call_count, 0)
+                else:
+                    tuner._retime_candidate.assert_not_called()
+                self.assertEqual(tuner.stats.tuned_op_successful_configs, {"gemm": 1})
+
+    def test_flashinfer_sm12x_requirement_accepts_batch_invariance_argument(self):
+        _, updated = self.apply_upstream_excerpt(
+            "02-pr5943.patch", "flashinfer/gemm/gemm_base.py",
+            "flashinfer_mxfp8_requirement_upstream.py",
+            ("+@supported_compute_capability([100, 103, 107, 120, 121])",),
+            project="flashinfer",
+        )
+        import builtins
+        check = Mock(return_value=True)
+
+        def fake_import(name, *args, **kwargs):
+            if name == "kernels.sm12x_mxfp8.runner":
+                return SimpleNamespace(check_requirement=check)
+            return __import__(name, *args, **kwargs)
+
+        namespace = {
+            "__builtins__": {**vars(builtins), "__import__": fake_import},
+            "torch": SimpleNamespace(bfloat16="bf16"),
+            "supported_compute_capability": lambda caps: lambda fn: fn,
+            "is_sm12x_supported": lambda device: device in (120, 121),
+            "_check_cute_dsl_availability": Mock(), "_check_cute_dsl_arch": Mock(),
+        }
+        exec("from __future__ import annotations\n" + updated, namespace)
+        requirement = namespace["_cute_dsl_gemm_mxfp8_requirement"]
+        scales = SimpleNamespace(ndim=1)
+        for arch in (100, 107, 120, 121):
+            for invariant in (False, True):
+                with self.subTest(arch=arch, invariant=invariant):
+                    check.reset_mock()
+                    a, b = SimpleNamespace(device=arch), object()
+                    self.assertTrue(requirement(a, b, scales, scales, batch_invariant=invariant))
+                    if arch in (120, 121):
+                        check.assert_called_once_with(a, b, scales, scales, None, "bf16", True)
+                    else:
+                        check.assert_not_called()
+        check.side_effect = ValueError("unsupported layout")
+        a = SimpleNamespace(device=121)
+        self.assertFalse(requirement(a, b, scales, scales, backend="auto", batch_invariant=True))
+        with self.assertRaisesRegex(ValueError, "unsupported layout"):
+            requirement(a, b, scales, scales, backend="cute-dsl", batch_invariant=True)
+
+    def test_heap_trim_preserves_external_weight_budget_update(self):
+        _, updated = self.apply_upstream_excerpt(
+            "16-flash-next-fp4.patch", "vllm/v1/worker/gpu_worker.py",
+            "worker_external_weights_upstream.py",
+            ("+        if envs.VLLM_TRIM_HOST_HEAP_AFTER_LOAD:",),
+        )
+        events = []
+
+        class Tracking:
+            def __enter__(self):
+                events.append("track")
+
+            def __exit__(self, *args):
+                events.append("tracked")
+
+        namespace = {
+            "envs": SimpleNamespace(VLLM_TRIM_HOST_HEAP_AFTER_LOAD=True),
+            "set_current_vllm_config": lambda config: nullcontext(),
+            "trim_host_heap": lambda: events.append("trim"),
+            "logger": Mock(), "format_gib": str, "has_ec_transfer": lambda: True,
+            "get_ec_transfer": lambda: SimpleNamespace(
+                start_worker_services=lambda: events.append("services")),
+            "set_torch_threads_for_runtime": lambda: events.append("threads"),
+        }
+        exec("from __future__ import annotations\n" + updated, namespace)
+        for enabled in (False, True):
+            for fallback in (0, 1024):
+                with self.subTest(trim=enabled, fallback=fallback):
+                    events.clear()
+                    namespace["envs"].VLLM_TRIM_HOST_HEAP_AFTER_LOAD = enabled
+                    worker = namespace["Worker"]()
+                    worker.vllm_config = SimpleNamespace(weight_transfer_config=None)
+                    worker._maybe_get_memory_pool_context = lambda **kw: nullcontext()
+                    worker._scoped_allocator_max_split = lambda **kw: nullcontext()
+                    worker._external_weight_charges = SimpleNamespace(
+                        track=Tracking, fallback_bytes=fallback,
+                    )
+                    worker.model_runner = SimpleNamespace(
+                        load_model=lambda **kw: events.append("load"),
+                    )
+                    worker._resolve_requested_memory = Mock(
+                        side_effect=lambda: events.append("budget") or 42,
+                    )
+                    worker.load_model()
+                    self.assertEqual(events, ["track", "load", "tracked"]
+                                     + (["trim"] if enabled else [])
+                                     + (["budget"] if fallback else [])
+                                     + ["services", "threads"])
+                    if fallback:
+                        self.assertEqual(worker.requested_memory, 42)
+                    else:
+                        worker._resolve_requested_memory.assert_not_called()
+
     def test_streaming_update_preserves_outputs_and_invalidates_lookahead_hash(self):
         _, updated = self.apply_upstream_excerpt(
             "06-pr50897.patch", "vllm/v1/core/sched/scheduler.py",
@@ -696,7 +945,8 @@ class PatchSeriesTests(unittest.TestCase):
             ("+        # A lookahead hash also covers",),
         )
         statuses = SimpleNamespace(WAITING_FOR_STREAMING_REQ="streaming", WAITING="waiting")
-        namespace = {"RequestStatus": statuses}
+        extend = Mock(side_effect=lambda dst, src, start, end: dst.extend(src[start:end]))
+        namespace = {"RequestStatus": statuses, "extend_from_slice": extend}
         exec("from __future__ import annotations\n" + updated, namespace)
         for token_count, computed, retained_by_depth in (
             (9, 3, (2, 1, 1, 1, 1, 0)),
@@ -720,6 +970,7 @@ class PatchSeriesTests(unittest.TestCase):
                         block_hashes=["block0", "block1"],
                         status=statuses.WAITING_FOR_STREAMING_REQ,
                         update_block_hashes=Mock(),
+                        get_prefix_cache_hit_limit=Mock(return_value=7),
                     )
                     update = SimpleNamespace(
                         prompt_token_ids=[20, 21], mm_features=[],
@@ -735,44 +986,12 @@ class PatchSeriesTests(unittest.TestCase):
                     session.update_block_hashes.assert_called_once_with()
                     self.assertEqual(runner.num_waiting_for_streaming_input, 0)
                     self.assertEqual(session.status, statuses.WAITING)
-
-    def test_draft_vocab_guard_preserves_parse_mtp_guard(self):
-        _, updated = self.apply_upstream_excerpt(
-            "03-pr59740-60226.patch", "vllm/config/vllm.py",
-            "parse_mtp_guard_upstream.py",
-        )
-        namespace = {}
-        exec(updated, namespace)
-        config = namespace["VllmConfig"]()
-        config.speculative_config = SimpleNamespace(
-            method="mtp", is_xpress=lambda: False,
-            enable_adaptive_verification=False, draft_lm_head_quantization=None,
-            draft_token_map="vocab.json",
-            draft_model_config=SimpleNamespace(architectures=["ParseAuxMTPModel"]),
-        )
-        self.assertEqual(config.unsupported_features(),
-                         ["speculative draft_token_map", "Parse 3.5 MTP"])
-
-    def test_disk_offload_implements_embedding_interface(self):
-        _, updated = self.apply_upstream_excerpt(
-            "01-pr59958.patch", "vllm/models/qwen4_exp/nvidia/ngram_embedding.py",
-            "ple_file_gather_interface_upstream.py",
-            ("class Qwen4ExpPLEDiskOffloadEmbedding",),
-        )
-        namespace = {
-            "ABC": ABC, "abstractmethod": abstractmethod,
-            "PLEVocabParallelEmbedding": type("PLEVocabParallelEmbedding", (), {}),
-            "nn": SimpleNamespace(Module=object),
-        }
-        exec("from __future__ import annotations\n" + updated, namespace)
-        embedding_cls = namespace["Qwen4ExpPLEDiskOffloadEmbedding"]
-        # Allocation alone enforces ABC completeness, before tensor allocation
-        # or loading weights. This is the startup failure with either loader.
-        embedding = embedding_cls.__new__(embedding_cls)
-        self.assertFalse(embedding.supports_prefetch)
-        self.assertIsNone(embedding.start_prefetch(object()))
-        with self.assertRaisesRegex(RuntimeError, "does not support prefetch"):
-            embedding.finalize_prefetch(total_tokens=4)
+                    self.assertEqual(session.prefix_cache_hit_limit, 7)
+                    session.get_prefix_cache_hit_limit.assert_called_once_with()
+                    extend.assert_called_with(
+                        session.prompt_token_ids, session._all_token_ids,
+                        prompt_end, token_count - 1,
+                    )
 
     def test_sparse_mtp_imports_preserve_upstream_shared_expert_removal(self):
         for path, fixture in (
@@ -934,33 +1153,6 @@ class PatchSeriesTests(unittest.TestCase):
                         for call in model.compute_logits.call_args_list:
                             self.assertEqual(call.args, ("randomized hidden states",))
 
-    def test_dynamic_nvfp4_preserves_fused_activation_for_other_kernels(self):
-        _, updated = self.apply_upstream_excerpt(
-            "07-pr54614.patch", "vllm/model_executor/models/qwen2_moe.py",
-            "qwen2_moe_mlp_upstream.py",
-        )
-        fuse = Mock(return_value="quantized")
-        namespace = {"nn": SimpleNamespace(Module=object), "maybe_fused_act_quant": fuse}
-        exec("from __future__ import annotations\n" + updated, namespace)
-        mlp = namespace["Qwen2MoeMLP"].__new__(namespace["Qwen2MoeMLP"])
-        kernel = SimpleNamespace(apply_silu_or_linear=Mock(return_value="dynamic"))
-        mlp.gate_up_proj = Mock(return_value=("gate_up", None))
-        mlp.down_proj = Mock(return_value=("fused", None))
-        mlp.down_proj.quant_method = SimpleNamespace(kernel=kernel)
-        mlp.act_fn = object()
-        mlp.expert_gate = None
-        mlp._dynamic_nvfp4 = False
-        self.assertEqual(mlp.forward("input"), "fused")
-        fuse.assert_called_once_with(mlp.act_fn, "gate_up", mlp.down_proj)
-        mlp.down_proj.assert_called_once_with("quantized")
-        fuse.reset_mock()
-        mlp.down_proj.reset_mock()
-        mlp._dynamic_nvfp4 = True
-        self.assertEqual(mlp.forward("input"), "dynamic")
-        kernel.apply_silu_or_linear.assert_called_once_with(mlp.down_proj, "gate_up", True)
-        fuse.assert_not_called()
-        mlp.down_proj.assert_not_called()
-
     def test_resident_csf_preserves_online_shared_expert_redirection(self):
         _, updated = self.apply_upstream_excerpt(
             "16-flash-next-fp4.patch",
@@ -990,175 +1182,6 @@ class PatchSeriesTests(unittest.TestCase):
         layer.get_parameter.reset_mock()
         list(layer.load_weights([("0.scale", weight)]))
         layer.get_parameter.assert_not_called()
-
-    def test_cudnn_bf16_refresh_limits_dispatch_to_sm12x_narrow_outputs(self):
-        _, updated = self.apply_upstream_excerpt(
-            "11-pr59025.patch", "vllm/model_executor/layers/utils.py",
-            "bf16_mm_dispatch_upstream.py",
-            ("+def _can_use_flashinfer_cudnn_bf16(",),
-        )
-        node = next(n for n in ast.parse(updated).body
-                    if getattr(n, "name", None) == "_can_use_flashinfer_cudnn_bf16")
-        shape_check = Mock(return_value=True)
-        platform = SimpleNamespace(is_cuda=lambda: True,
-                                   is_device_capability_family=lambda family: False)
-        namespace = {"current_platform": platform, "_FLASHINFER_BF16_MAX_N": 128,
-                     "_bf16_mm_shape_supported": shape_check}
-        exec("from __future__ import annotations\n" + ast.unparse(node), namespace)
-        dispatch = namespace[node.name]
-        x, weight = object(), SimpleNamespace(shape=(128, 5120))
-        self.assertFalse(dispatch(x, weight, None))
-        shape_check.assert_not_called()
-        platform.is_device_capability_family = lambda family: family == 120
-        self.assertTrue(dispatch(x, weight, None))
-        weight.shape = (129, 5120)
-        self.assertFalse(dispatch(x, weight, None))
-        weight.shape = (128, 5120)
-        shape_check.return_value = False
-        self.assertFalse(dispatch(x, weight, None))
-
-    def test_disk_offload_reuses_merged_nvfp4_lookup(self):
-        # #56273 is now in main. Apply only the remaining shared-decoder
-        # integration to its real device and pinned lookup implementations.
-        _, updated = self.apply_upstream_excerpt(
-            "01-pr59958.patch", "vllm/models/qwen4_exp/common/ngram_embedding.py",
-            "nvfp4_ple_merged_upstream.py",
-            ("+    def decode_rows(",),
-        )
-        launch = Mock()
-        grids = []
-
-        class Kernel:
-            def __getitem__(self, grid):
-                grids.append(grid)
-                return launch
-
-        ids = Mock(device="cuda", shape=(4,), is_cuda=True)
-        ids.numel.return_value = 4
-        ids.reshape.return_value = ids
-        output = SimpleNamespace(shape=(4, 160))
-        layer = SimpleNamespace(
-            weight=SimpleNamespace(shape=(8, 80)), weight_scale=Mock(),
-            weight_scale_2=object(), params_dtype="bf16", embedding_dim=160,
-            _uva_weight=object(), shard_indices=SimpleNamespace(
-                org_vocab_start_index=8, org_vocab_end_index=16,
-            ),
-        )
-        namespace = {
-            "torch": SimpleNamespace(empty=Mock(return_value=output), uint8="uint8"),
-            "triton": SimpleNamespace(next_power_of_2=lambda n: 1 << (n - 1).bit_length()),
-            "_lookup_nvfp4_ple_embedding_kernel": Kernel(),
-        }
-        exec("from __future__ import annotations\n" + updated, namespace)
-        method = namespace["Qwen4ExpPLENvFp4EmbeddingMethod"]()
-        method._uva_weight_scale = Mock()
-        self.assertIs(method.embedding(layer, ids), output)
-        launch.assert_called_once_with(
-            layer.weight, layer.weight_scale.view.return_value,
-            layer.weight_scale_2, ids, output, 160, 0, 8, BLOCK_D=256,
-        )
-        layer.weight_scale.view.assert_called_once_with("uint8")
-
-        launch.reset_mock()
-        method.lookup_from_pinned(layer, ids, output)
-        launch.assert_called_once_with(
-            layer._uva_weight, method._uva_weight_scale.view.return_value,
-            layer.weight_scale_2, ids, output, 160, 8, 16, BLOCK_D=256,
-        )
-        method._uva_weight_scale.view.assert_called_once_with("uint8")
-
-        launch.reset_mock()
-        staged_weight, staged_scale = object(), Mock()
-        method.decode_rows(staged_weight, staged_scale, layer.weight_scale_2,
-                           ids, output, 0, 4)
-        launch.assert_called_once_with(
-            staged_weight, staged_scale.view.return_value,
-            layer.weight_scale_2, ids, output, 160, 0, 4, BLOCK_D=256,
-        )
-        self.assertEqual(grids, [(4,), (4,), (4,)])
-        launch.reset_mock()
-        ids.numel.return_value = 0
-        method.decode_rows(staged_weight, staged_scale, layer.weight_scale_2,
-                           ids, output, 0, 0)
-        launch.assert_not_called()
-
-    def test_disk_offload_stages_checkpoint_bytes_without_resident_tables(self):
-        try:
-            import torch
-            from safetensors import safe_open
-            from safetensors.torch import save_file
-            import numpy  # noqa: F401 - used by the PR's row-buffer views
-        except ImportError:
-            self.skipTest("CPU tensor checks require torch, safetensors and numpy")
-        import mmap
-
-        _, updated = self.apply_upstream_excerpt(
-            "01-pr59958.patch", "vllm/models/qwen4_exp/nvidia/ngram_embedding.py",
-            "ple_file_gather_interface_upstream.py",
-            ("class Qwen4ExpPLEDiskOffloadEmbedding",),
-        )
-        nvfp4 = type("NvFp4Method", (), {})
-        namespace = {
-            "ABC": ABC, "abstractmethod": abstractmethod, "os": os, "mmap": mmap,
-            "torch": torch, "nn": SimpleNamespace(Module=object),
-            "PLEVocabParallelEmbedding": type("PLEVocabParallelEmbedding", (), {}),
-            "Qwen4ExpPLENvFp4EmbeddingMethod": nvfp4,
-            "get_current_vllm_config": lambda: SimpleNamespace(
-                load_config=SimpleNamespace(load_format="safetensors")),
-        }
-        exec("from __future__ import annotations\n" + updated, namespace)
-
-        def base_init(layer, rows, width, *, params_dtype, embedding_method, **kw):
-            layer.org_vocab_size = rows
-            if isinstance(embedding_method, nvfp4):
-                layer.weight = layer.allocate_embedding_weight(rows, width // 2, torch.uint8)
-                layer.weight_scale = layer.allocate_embedding_weight(rows, width // 16,
-                                                                     torch.float8_e4m3fn)
-            else:
-                layer.weight = layer.allocate_embedding_weight(rows, width, params_dtype)
-
-        namespace["Qwen4ExpPLEEmbedding"].__init__ = base_init
-        cls = namespace["Qwen4ExpPLEDiskOffloadEmbedding"]
-        ids = torch.tensor([[23, 0], [5, 6], [12, 17], [23, 23]])
-        for fmt, dtype in (("bf16", torch.bfloat16), ("fp8", torch.float8_e4m3fn),
-                           ("nvfp4", torch.uint8)):
-            with self.subTest(format=fmt):
-                path = self.root / f"{fmt}.safetensors"
-                width = 16 if fmt == "nvfp4" else 32
-                planes = {"weight": torch.arange(24 * width).reshape(24, width).to(dtype)}
-                if fmt == "nvfp4":
-                    planes["weight_scale"] = torch.arange(48).reshape(24, 2).to(torch.float8_e4m3fn)
-                save_file({f"{name}.{i}": shard.clone() for name, plane in planes.items()
-                           for i, shard in enumerate(plane.split(6))}, path)
-                layer = cls(24, 32, params_dtype=dtype, padding_size=1, prefix="ple",
-                            embedding_method=nvfp4() if fmt == "nvfp4" else object(),
-                            num_ngram_heads=2, max_total_tokens=4)
-                self.assertEqual(layer.weight.numel(), 0)
-                with safe_open(path, framework="pt") as checkpoint:
-                    for name in planes:
-                        for i in range(4):
-                            layer.accept_checkpoint_shard(i, checkpoint.get_tensor(f"{name}.{i}"), 6, name)
-                    layer.bind_file_shards()
-                try:
-                    moved = path.with_suffix(".renamed")
-                    path.rename(moved)  # Binding retains open descriptors, not filenames.
-                    addresses = {name: buffers[0].data_ptr() for name, buffers in layer._planes.items()}
-                    for selected in (ids, ids.flip(0)):
-                        layer.copy_ids_to_host(selected)
-                        layer.stage_rows(4)
-                        for name, plane in planes.items():
-                            staging = layer._planes[name][0]
-                            expected = plane.view(torch.uint8)[selected]
-                            self.assertTrue(torch.equal(staging.view(torch.uint8), expected))
-                            self.assertEqual(staging.data_ptr(), addresses[name])
-                    os.truncate(moved, 0)
-                    with self.assertRaisesRegex(ValueError, "truncated at offset"):
-                        layer.stage_rows(4)
-                    with self.assertRaisesRegex(RuntimeError, "does not support weight reload"):
-                        layer.accept_checkpoint_shard(0, planes["weight"][:6], 6, "weight")
-                finally:
-                    for fd in layer._fds.values():
-                        os.close(fd)
 
     def test_refreshed_sparse_vocab_preserves_logits_and_quantized_padding(self):
         try:
@@ -1247,81 +1270,6 @@ class PatchSeriesTests(unittest.TestCase):
         namespace["load_draft_token_map"](SimpleNamespace(draft_vocab=vocab, lm_head=head), config)
         namespace["load_draft_token_ids"].assert_called_once_with("vocab.json", [0, 1, 2])
         vocab.load_token_map.assert_called_once_with(head, ids, 3, "nvfp4")
-
-    def test_ple_sequence_parallel_preserves_full_token_rows(self):
-        _, updated = self.apply_upstream_excerpt(
-            "01-pr59958.patch", "vllm/models/qwen4_exp/nvidia/ngram_embedding.py",
-            "ple_sequence_parallel_upstream.py",
-            ("self.use_reduce_scatter =", "embedding.finalize_prefetch("),
-        )
-
-        class Rows(list):
-            dtype = "bf16"
-
-            @property
-            def shape(self):
-                return (len(self),)
-
-            def flatten(self, _):
-                return self
-
-            def view(self, _):
-                return self
-
-        class DeviceEmbedding:
-            supports_prefetch = False
-
-            def __init__(self, *args, reduce_results, **kwargs):
-                self.reduce_results = reduce_results
-
-            def __call__(self, ids):
-                return Rows([2 if self.reduce_results else 1] * len(ids))
-
-        class PinnedEmbedding(DeviceEmbedding):
-            supports_prefetch = True
-
-            def finalize_prefetch(self, *, total_tokens):
-                return super().__call__(range(total_tokens))
-
-        class DiskEmbedding(DeviceEmbedding):
-            def staged_rows(self, num_tokens):
-                # Disk staging already has every rank's vocabulary rows.
-                return Rows([2] * num_tokens)
-
-        namespace = {
-            "Qwen4ExpPLEDeviceEmbedding": DeviceEmbedding,
-            "Qwen4ExpPLEPinnedHostEmbedding": PinnedEmbedding,
-            "Qwen4ExpPLEDiskOffloadEmbedding": DiskEmbedding,
-            "is_fp8": lambda _: False,
-            "get_tp_group": lambda: SimpleNamespace(world_size=2),
-            "sp_shard": lambda rows: Rows(rows[:len(rows) // 2]),
-            "sp_reduce_scatter": lambda rows: Rows(
-                [2 * value for value in rows[:len(rows) // 2]]
-            ),
-        }
-        exec("from __future__ import annotations\n" + updated, namespace)
-        for storage in ("device", "pinned", "disk"):
-            for sequence_parallel in (False, True):
-                for etp_size in (1, 2):
-                    with self.subTest(storage=storage, sp=sequence_parallel, etp=etp_size):
-                        config = SimpleNamespace(
-                            disk_offload=storage == "disk",
-                            cpu_offload=storage == "pinned",
-                        )
-                        namespace["get_current_vllm_config"] = lambda: SimpleNamespace(
-                            engram_config=config
-                        )
-                        namespace["get_etp_group"] = lambda: SimpleNamespace(
-                            world_size=etp_size
-                        )
-                        module = namespace["Qwen4ExpNGramEmbedding"]()
-                        module.use_sequence_parallel = sequence_parallel
-                        module.head_dim = module.ngram_heads = 1
-                        module.configure_embedding("bf16", 8, 1, "ple", None, 4, 0)
-                        module.compute_ngram_ids = lambda ids, *_: ids
-                        hidden = Rows([0] * (2 if sequence_parallel else 4))
-                        result = module.forward(hidden, Rows(range(4)), None, None)
-                        self.assertEqual(result, [2] * len(hidden))
 
     def test_confidence_stop_preserves_watermarked_and_sharded_sampling(self):
         _, updated = self.apply_upstream_excerpt(
@@ -1702,11 +1650,15 @@ class PatchSeriesTests(unittest.TestCase):
             "B12X_BLOCK_CODECS": {"iq2_xs": (256, 74), "iq2_xxs": (256, 66),
                                   "q8_0": (32, 34)},
             "_BLOCK_FP8_MOE_ALGOS": set(), "ModelOptNvFp4FusedMoE": regular,
+            "_reject_int8_pb_wo_moe": Mock(),
+            "get_current_vllm_config_or_none": lambda: None,
+            "ModelOptNvFp4EmbeddingMethod": Mock(),
         }
         exec("from __future__ import annotations\n" + updated, namespace)
         config = namespace["ModelOptMixedPrecisionConfig"]()
         config.is_layer_excluded = lambda _: False
         config._resolve_weight_scale_encoding = Mock(return_value="csf")
+        config._resolve_layer_field = Mock(return_value="csf")
         config._csf_state = None
         config.nvfp4_config, config.w4a16_nvfp4_config = object(), object()
         modules = {
@@ -1760,11 +1712,18 @@ class PatchSeriesTests(unittest.TestCase):
                             self.assertIs(result, regular.return_value)
                             regular.assert_called_once_with(
                                 quant_config=subconfig, moe_config=layer.moe_config,
+                                scale_encoding="csf",
                             )
                             resident.assert_not_called()
                         resident.reset_mock()
                         regular.reset_mock()
             state.assert_called_once_with()
+            # Upstream embedding dispatch must precede resident expert selection.
+            for enabled in (False, True):
+                envs.VLLM_CSF_RESIDENT = enabled
+                config._resolve_quant_algo = lambda _: "W4A16_NVFP4"
+                self.assertIs(config.get_quant_method(embedding(), "model.embed"),
+                              namespace["ModelOptNvFp4EmbeddingMethod"].return_value)
 
     def test_resident_csf_loader_preserves_default_decoding(self):
         _, updated = self.apply_upstream_excerpt(
