@@ -9,35 +9,46 @@
 # cluster-control-infra preset names it. It exists so the faithful command
 # lives in the repository instead of only in a design doc.
 #
-# WHY IT CANNOT BE A RECIPE TODAY. The checkpoint's
-# serving/runtime-manifest.json pins
+# WHY IT WAS A RECIPE IMPOSSIBILITY, AND WHAT CHANGED ON 2026-11-18. The
+# checkpoint's serving/runtime-manifest.json AS DELIVERED pinned
 #   pinned_modelopt_runtime_sha256 =
 #     41e00493d2770af19db03f585e9edb0004093c98b851d0f6726c2870cba11e22
 # which is vLLM v0.30.0's vllm/model_executor/layers/quantization/modelopt.py
-# (2656 lines, fetched from GitHub). Every image we build today ships
+# (2656 lines, verified against the tag). Every image we build ships
 # modelopt.py hashing 5dfedfbd… instead — vLLM 0.1.dev21830+g8244d1c44
-# (2026-11-02) — in both upstream vllm-node-b12x:latest (image ID
-# sha256:c34501ebfa793ce49408a72e559e70b765fd1e28e1f6012370a744635340cc02) and
+# (2026-11-02) — measured in four configs: upstream vllm-node-b12x:latest
+# (sha256:c34501ebfa793ce49408a72e559e70b765fd1e28e1f6012370a744635340cc02),
 # the fork build ghcr.io/fulton-engineering-services/spark-vllm:
-# vllm-node-b12x-20261106-0/1 (sha256:b76585f9020097bc9984b914bbcdebd5cdce5bbf66911ada28a9d7fa3649f096).
-# A fourth sample, measured on gx10-node1 on 2026-11-18: the newest build,
-# vllm-node-b12x-20261118 (config ID sha256:319205b2ff31…, also tagged
-# 10.100.170.3:5000/spark-vllm:vllm-node-b12x-20261118), ships the byte-identical
-# 5dfedfbd… modelopt.py. It is a rebuild of the same vLLM commit 8244d1c44 whose
-# only vllm/ delta over c34501eb is the tracked
-# docker/patch_vllm_b12x_storage_block_split.py layer plus a refreshed dependency
-# set (CUDA 13.4→13.5, nccl_extensions 0.1.0→0.2.0, instanttensor 0.2.2→0.2.3).
-# Re-pinning a recipe to it therefore does not enable this mod — running it
-# there reaches gate_modelopt_runtime and fails closed, which is the behaviour
-# verified for both bash and sourced invocation.
-# canonical_worker.py verifies that hash itself, so --worker-cls aborts on
-# launch: NVIDIA's command cannot simply be dropped into a recipe.
+# vllm-node-b12x-20261106-0/1 (sha256:b76585f9020097bc9984b914bbcdebd5cdce5bbf66911ada28a9d7fa3649f096),
+# and the newest vllm-node-b12x-20261118 (sha256:319205b2ff31…, also tagged
+# 10.100.170.3:5000/spark-vllm:vllm-node-b12x-20261118). Building against
+# v0.30.0 to satisfy that pin is NOT available: no upstream tag ships the B12X
+# loader at all (model_loader/b12x_loader.py, model_executor/weight_transfer.py
+# and model_loader/csf_scales.py are absent at v0.30.0, v0.32.0, v0.33.0,
+# v0.34.0 and main), and our docker/patches/qwen3.8/vllm series cannot add it
+# there — on a full clone with the build's own `git apply --3way --index`, 12
+# of 13 patches fail and only 13-draft-vocab applies. A hash-faithful graft of
+# v0.30.0's file onto the fork is out too: the two differ by +100/-5 lines with
+# an identical class set, and those 100 lines ARE the b12x surface
+# (Nvfp4CsfState/Nvfp4CsfMoEMethod, modelopt_iq2_xs block codecs,
+# prepares_b12x MXFP8 prep, W4A16 zero-init calibrated scales, workspace
+# plumbing).
+# So, with operator approval, the delivered manifest's pin was RESTAMPED on
+# 2026-11-18 to the fork revision actually installed,
+#   5dfedfbdeda804aa8ff45d84f9d823bd8d45e13d4134a11d97012e05635d10d6
+# leaving the four vendor .py files byte-identical (their manifest digests
+# still match) and preserving the vendor value in a `restamp` block plus a
+# sibling backup file; see README.md for the hashes and the review trail.
+# Because canonical_worker.py:33 asserts modelopt_hash against
+# manifest["pinned_modelopt_runtime_sha256"] — the same JSON field this gate
+# reads, with no separate literal in the worker — restamping moves BOTH gates
+# together, and a vendor manifest bump or a re-download reverts both.
 #
-# ENABLEMENT CONDITION (the only thing standing between this and a recipe):
-# build the b12x image against the vLLM tag whose modelopt.py hashes to the
-# manifest pin — vLLM v0.30.0, i.e. --build-arg VLLM_REF=v0.30.0 — then point a
-# recipe at this mod and use the launch line in README.md. Until then this mod
-# fails closed below, before launch, so a half-enabled arm can never serve.
+# STILL PARKED, for a different reason than before. The mod stays unapplied
+# until an operator first-boot validates the GPU-side asserts the worker makes
+# after loading (fused per-rank counts MXFP8 144 / NVFP4_shared 96, kernel
+# identity, weight dtypes). Until then this mod fails closed below, before
+# launch, so a half-enabled arm can never serve.
 #
 # What it does when applied:
 #   1. resolve the fes-weights mount (FES_WEIGHTS_DIR, default /model) and
@@ -118,7 +129,7 @@ ACTUAL="$( { sha256sum "$MODELLOPT" 2>/dev/null || shasum -a 256 "$MODELLOPT"; }
 [ -n "$ACTUAL" ] || fail "op=hash_modelopt could not hash $MODELLOPT"
 
 if [ "$ACTUAL" != "$PIN" ]; then
-    fail "op=gate_modelopt_runtime installed=$ACTUAL pinned=$PIN — $CANONICAL_WORKER would abort on its own hash gate. Remedy: build the b12x image against vLLM v0.30.0 (--build-arg VLLM_REF=v0.30.0) so $MODELLOPT hashes to the manifest pin, then re-enable this mod."
+    fail "op=gate_modelopt_runtime installed=$ACTUAL pinned=$PIN — $CANONICAL_WORKER asserts the same value at load and would abort. Remedy: either re-stamp pinned_modelopt_runtime_sha256 in $MANIFEST to the installed fork revision (mods/qad-nvidia-runtime/README.md, restamp of 2026-11-18; the vendor value names vLLM v0.30.0's verbatim modelopt.py, which no image we build can provide) or build the b12x image against vLLM v0.30.0 (--build-arg VLLM_REF=v0.30.0). NEVER edit serving/*.py to widen the gate: runtime-manifest.json pins their hashes and the worker verifies them."
 fi
 
 info "ok (modelopt.py matches manifest pin ${PIN:0:12}…; PYTHONPATH=${PYTHONPATH:-unset}; VLLM_WORKER_MULTIPROC_METHOD=${VLLM_WORKER_MULTIPROC_METHOD:-unset})"

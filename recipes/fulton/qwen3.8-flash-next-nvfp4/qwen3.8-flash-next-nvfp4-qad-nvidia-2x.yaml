@@ -42,15 +42,23 @@
 #      Whether expert parallelism helps at TP=2 across two Sparks is unmeasured;
 #      it follows the vendor command rather than a local measurement.
 #
-# Deliberately ABSENT: `--worker-cls` and any PYTHONPATH override. The QAD
-# checkpoint ships a serving/canonical_worker.py whose runtime-manifest.json
-# pins pinned_modelopt_runtime_sha256 = 41e00493d2770af19db03f585e9edb0004093c98b851d0f6726c2870cba11e22,
-# which is vLLM v0.30.0's model_executor/layers/quantization/modelopt.py. Every
-# b12x image we build today carries the 5dfedfbd… revision (vLLM
-# 0.1.dev21830+g8244d1c44), so a custom worker class would fail the runtime's
-# own hash gate before serving. The faithful NVIDIA command (with --worker-cls
-# canonical_worker.CanonicalWorker) stays parked until a vLLM v0.30.0-pinned
-# b12x image exists; this recipe is the bootable flavour.
+# Deliberately ABSENT: `--worker-cls` and any PYTHONPATH override. The faithful
+# NVIDIA flavour belongs to the parked QAD runtime mod under mods/, and recipes
+# must not name that mod while it is parked — that is exactly what
+# tests/test_qad_nvidia_runtime_mod.sh enforces, and it is why this paragraph
+# points at it obliquely. It used to be blocked by a hash no image could
+# satisfy: the delivered serving/runtime-manifest.json pinned modelopt.py to
+# vLLM v0.30.0's verbatim
+# 41e00493d2770af19db03f585e9edb0004093c98b851d0f6726c2870cba11e22, while every
+# b12x image we build ships the fork's 5dfedfbd… revision (vLLM
+# 0.1.dev21830+g8244d1c44). That pin was restamped to the installed fork
+# revision on 2026-11-18, operator-approved, with the vendor bytes preserved in
+# a `.orig-41e00493…` backup and in the file's own `restamp` block; that mod's
+# README.md carries the full trail. So the hash gate is no longer what holds the
+# faithful flavour back. What does is that the worker's GPU-side asserts (fused
+# per-rank counts MXFP8 144 / NVFP4_shared 96, kernel identity, weight dtypes)
+# have never been exercised on GB10, and NVIDIA evaluated on GB300 at TP=4. This
+# recipe remains the bootable flavour.
 #
 # Pre-existing defect in the base, NOT replicated here: the base declares
 # --enable-auto-tool-choice twice (recipes/qwen3.8-flash-next-nvfp4-2x-fulton.yaml

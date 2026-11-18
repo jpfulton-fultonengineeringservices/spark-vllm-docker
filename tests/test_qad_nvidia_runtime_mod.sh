@@ -72,6 +72,8 @@ echo "$OUT" | grep -q "000000000000000000000000000000000000000000000000000000000
   || fail "gate did not report the expected pin: $OUT"
 echo "$OUT" | grep -q "$ACTUAL" || fail "gate did not report the installed hash: $OUT"
 echo "$OUT" | grep -q "v0.30.0" || fail "gate did not name the remedy image build: $OUT"
+echo "$OUT" | grep -q "re-stamp" || fail "gate did not name the restamp remedy: $OUT"
+echo "$OUT" | grep -q "NEVER edit serving" || fail "gate did not warn against editing the vendor runtime: $OUT"
 
 # 4. Active and matching: ok, with the worker-class env exported.
 write_manifest "$ACTUAL"
