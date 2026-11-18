@@ -15,14 +15,20 @@
 #      nvidia/Qwen3.8-Flash-Next-NVFP4-QAD, so `model:` is the real hub id and
 #      mods/fes-weights overlays the staged NAS directory onto that name as an
 #      offline hub-cache shim (env.FES_WEIGHTS_SLUG below). Same arch family as
-#      the base, so --load-format b12x remains the correct loader — but not
-#      because of an architecture gate. B12xModelLoader has none: it subclasses
-#      DefaultModelLoader (model_loader/b12x_loader.py) and is a transport loader
-#      gated on checkpoint format, requiring a CUDA device (:90), vLLM's
-#      file-source hooks (:58) and a model.safetensors.index.json-described
-#      checkpoint (:226-247). The staged directory does carry
-#      model.safetensors.index.json (measured on gx10-node1, 2026-11-18), which
-#      is why b12x is the right loader here.
+#      the base, so it keeps the base's --load-format b12x — but not
+#      because of an architecture gate. B12xModelLoader in the shipped images has
+#      none: it subclasses DefaultModelLoader (model_loader/b12x_loader.py, 317
+#      lines, 0 Qwen4Exp references in both c34501ebfa79 and 319205b2ff31) and is
+#      a transport loader on a ring/GDS read path (read_mode auto|bounce|gds).
+#      Two loaders share that name: 17-flash-next-b12x-loader.patch adds one that
+#      gates on {Qwen4ExpForCausalLM, Qwen4ExpForConditionalGeneration,
+#      Qwen4ExpMTP} and rejects gds, but the regular patch series runs only when
+#      VLLM_REF=main (Dockerfile:411-415) and this image pins
+#      dev/karmic-kraken@local-inference-lab/vllm, so that gate never ships.
+#      b12x here follows NVIDIA's own serve line for this checkpoint, not a
+#      loader contract measured against it: the loader consults a
+#      model.safetensors.index.json when present (:226-247) and the staged
+#      directory does carry one (gx10-node1, 2026-11-18).
 #
 #   2. NO --speculative-config at all. The base runs the MTP draft head; the
 #      QAD release documents MTP as unvalidated for it, so these two arms are

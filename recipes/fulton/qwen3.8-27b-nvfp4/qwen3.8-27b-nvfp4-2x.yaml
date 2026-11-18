@@ -24,10 +24,16 @@
 # Qwen4ExpMTP} frozenset in vLLM is
 # DEFAULT_BREAKABLE_CUDAGRAPH_ARCHITECTURES (config/vllm.py:132), read only by
 # default_breakable_cudagraph_architectures() — nothing to do with loading, and
-# an easy thing to mistake for a b12x gate. It is a transport loader: it needs a
-# CUDA device (:90), vLLM's file-source hooks (:58) and a
-# model.safetensors.index.json-described checkpoint (:226-247). So b12x would
-# not fail here for being the wrong architecture; instanttensor is chosen
+# an easy thing to mistake for a b12x gate. The loader in the images we ship is a
+# transport loader on a ring/GDS read path: it needs a CUDA device (:90) and
+# vLLM's file-source hooks (:58), and consults a model.safetensors.index.json
+# only when one is present (:226-247). So b12x would not fail here for being the
+# wrong architecture. Worth knowing there are two loaders of this name:
+# docker/patches/qwen3.8/vllm/17-flash-next-b12x-loader.patch adds one that DOES
+# gate on {Qwen4ExpForCausalLM, Qwen4ExpForConditionalGeneration, Qwen4ExpMTP}
+# and rejects gds, but the regular patch series runs only when VLLM_REF=main
+# (Dockerfile:411-415) and these images pin dev/karmic-kraken@
+# local-inference-lab/vllm, so it is never applied. instanttensor is chosen
 # because it runs the default safetensors iterator with a CUDA-resident read
 # path, which is what this family boots on today. b12x is untried for it.
 #
