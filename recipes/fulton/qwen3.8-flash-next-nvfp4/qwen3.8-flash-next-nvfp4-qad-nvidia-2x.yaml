@@ -53,8 +53,10 @@
 # b12x image we build ships the fork's 5dfedfbd… revision (vLLM
 # 0.1.dev21830+g8244d1c44). That pin was restamped to the installed fork
 # revision on 2026-11-18, operator-approved, with the vendor bytes preserved in
-# a `.orig-41e00493…` backup and in the file's own `restamp` block; that mod's
-# README.md carries the full trail. So the hash gate is no longer what holds the
+# a `.orig-41e00493…` backup kept outside the delivery tree — in the
+# `.restamp-backups/` directory beside the checkpoint — and in the file's own
+# `restamp` block; that mod's README.md carries the full trail. So the hash gate
+# is no longer what holds the
 # faithful flavour back. What does is that the worker's GPU-side asserts (fused
 # per-rank counts MXFP8 144 / NVFP4_shared 96, kernel identity, weight dtypes)
 # have never been exercised on GB10, and NVIDIA evaluated on GB300 at TP=4. This

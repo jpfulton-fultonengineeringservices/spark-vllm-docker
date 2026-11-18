@@ -38,7 +38,8 @@
 #   5dfedfbdeda804aa8ff45d84f9d823bd8d45e13d4134a11d97012e05635d10d6
 # leaving the four vendor .py files byte-identical (their manifest digests
 # still match) and preserving the vendor value in a `restamp` block plus a
-# sibling backup file; see README.md for the hashes and the review trail.
+# backup file kept OUTSIDE the delivery tree, in .restamp-backups/ beside the
+# checkpoint; see README.md for the hashes and the review trail.
 # Because canonical_worker.py:33 asserts modelopt_hash against
 # manifest["pinned_modelopt_runtime_sha256"] — the same JSON field this gate
 # reads, with no separate literal in the worker — restamping moves BOTH gates
@@ -129,7 +130,7 @@ ACTUAL="$( { sha256sum "$MODELLOPT" 2>/dev/null || shasum -a 256 "$MODELLOPT"; }
 [ -n "$ACTUAL" ] || fail "op=hash_modelopt could not hash $MODELLOPT"
 
 if [ "$ACTUAL" != "$PIN" ]; then
-    fail "op=gate_modelopt_runtime installed=$ACTUAL pinned=$PIN — $CANONICAL_WORKER asserts the same value at load and would abort. Remedy: either re-stamp pinned_modelopt_runtime_sha256 in $MANIFEST to the installed fork revision (mods/qad-nvidia-runtime/README.md, restamp of 2026-11-18; the vendor value names vLLM v0.30.0's verbatim modelopt.py, which no image we build can provide) or build the b12x image against vLLM v0.30.0 (--build-arg VLLM_REF=v0.30.0). NEVER edit serving/*.py to widen the gate: runtime-manifest.json pins their hashes and the worker verifies them."
+    fail "op=gate_modelopt_runtime installed=$ACTUAL pinned=$PIN — $CANONICAL_WORKER asserts the same value at load and would abort. This gate detects DRIFT: a re-synced delivery restoring the vendor pin, an image re-pinned off dev/karmic-kraken, or a swapped modelopt.py. Remedy: re-stamp pinned_modelopt_runtime_sha256 in $MANIFEST to the installed fork revision — the sanctioned restamp of 2026-11-18, whose hashes and backup path are in mods/qad-nvidia-runtime/README.md. Do NOT chase the vendor pin by building the b12x image against vLLM v0.30.0: no upstream ref ships the B12X loader there, and 12 of 13 docker/patches/qwen3.8/vllm patches fail git apply --3way on that tag. NEVER edit serving/*.py to widen the gate: runtime-manifest.json pins their hashes and the worker verifies them."
 fi
 
 info "ok (modelopt.py matches manifest pin ${PIN:0:12}…; PYTHONPATH=${PYTHONPATH:-unset}; VLLM_WORKER_MULTIPROC_METHOD=${VLLM_WORKER_MULTIPROC_METHOD:-unset})"

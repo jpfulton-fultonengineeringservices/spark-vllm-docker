@@ -49,7 +49,10 @@ never serve.
 
 There is no vendor-provided runtime to install: `serving/` holds only
 `canonical_worker.py`, `baseline_canonical_worker.py`, `indexer_order.py`,
-`mxfp8_padding.py`, `README.md`, `runtime-manifest.json` and `LICENSE`.
+`mxfp8_padding.py`, `README.md`, `runtime-manifest.json` and `LICENSE` — exactly
+seven entries, re-listed on gx10-node1 on 2026-11-18 *after* the restamp backup
+was moved out of the delivery tree, so anything that walks this directory sees
+vendor bytes and nothing of ours.
 
 ### Why "build against v0.30.0" was never a remedy (measured 2026-11-18)
 
@@ -84,7 +87,7 @@ an exact hash, so matching it and keeping those paths are mutually exclusive.
 | --- | --- |
 | vendor-delivered manifest | `f1331ad9c8a269b8bc40b2e6a250e46074aca49baae8c8c51d276b4a866fe06e` |
 | restamped manifest | `bc8cb1bd7b40256924570b8ab95435ec27098fc8472db65154e4f17394045301` |
-| backup, kept beside it | `runtime-manifest.json.orig-41e00493d2770af19db03f585e9edb0004093c98b851d0f6726c2870cba11e22` (hashes to `f1331ad9…`) |
+| backup, kept **outside** the delivery tree | `/nas-1/models/qwen3.8/.restamp-backups/runtime-manifest.json.orig-41e00493d2770af19db03f585e9edb0004093c98b851d0f6726c2870cba11e22` (hashes to `f1331ad9…`; moved out of `serving/` on 2026-11-18 so "which bytes are vendor-delivered" stays unambiguous) |
 
 The edit touches **exactly one key**, `pinned_modelopt_runtime_sha256`, plus an
 additive `restamp` block recording the vendor value, the date and the reason.
@@ -103,6 +106,13 @@ vendor's. Re-downloading the checkpoint restores `f1331ad9…` and
 `op=gate_modelopt_runtime` fails closed again — intended, not a regression:
 re-apply the restamp deliberately rather than editing `serving/*.py`, which the
 manifest pins and the worker verifies.
+
+Read the gate as a **drift detector**, not as vendor attestation. A green
+`op=gate_modelopt_runtime` now certifies only that the installed `modelopt.py`
+still matches the bytes *this deployment* attests to; it says nothing about
+NVIDIA's evaluation. A red one means one of exactly three things: the delivery
+was re-synced and the vendor pin came back, the image was re-pinned off
+`dev/karmic-kraken`, or `modelopt.py` was swapped.
 
 ## Prerequisites for enablement (all three, from NVIDIA's own text)
 
@@ -151,8 +161,9 @@ Copied character-for-character from
 reference: `runtime-manifest.json` was delivered as
 `f1331ad9c8a269b8bc40b2e6a250e46074aca49baae8c8c51d276b4a866fe06e` and is
 `bc8cb1bd7b40256924570b8ab95435ec27098fc8472db65154e4f17394045301` since the
-2026-11-18 restamp (the vendor bytes survive in the `.orig-41e00493…` backup and
-in its own `restamp` block); `canonical_worker.py`
+2026-11-18 restamp (the vendor bytes survive in the `.orig-41e00493…` backup —
+kept outside the delivery tree, in the `.restamp-backups/` directory beside the
+checkpoint — and in the file's own `restamp` block); `canonical_worker.py`
 `01c907d271aacf14322d0119aac9145050179c8dafe7c7790148a91c715baa9d` — unmodified,
 and equal to the manifest's own entry for that file, so the staged vendor tree
 is intact.
@@ -181,6 +192,28 @@ vllm serve ./Qwen3.8-Flash-Next-NVFP4-QAD \
 --model-loader-extra-config '{"enable_multithread_load":true,"num_threads":128}' \
 --override-generation-config '{"max_new_tokens":null}' \
 --trust-remote-code
+```
+
+**After any `hf download` or re-sync, check the pin before launching.** That
+command restores the delivered `f1331ad9…` manifest, which silently re-arms both
+gates with no other symptom; that is the expected consequence of the restamp, not
+corruption, and the remedy is the restamp above — never an edit to
+`serving/*.py`.
+
+```bash
+python3 - <<'PY'
+import json, sys
+m = json.load(open("Qwen3.8-Flash-Next-NVFP4-QAD/serving/runtime-manifest.json"))
+want = "5dfedfbdeda804aa8ff45d84f9d823bd8d45e13d4134a11d97012e05635d10d6"
+got = m["pinned_modelopt_runtime_sha256"]
+print("pinned_modelopt_runtime_sha256 =", got)
+if got != want:
+    print("RESTAMP NEEDED: the delivered vendor pin (41e00493…) is back.")
+    print("vendor bytes: /nas-1/models/qwen3.8/.restamp-backups/")
+    print("  runtime-manifest.json.orig-41e00493…  (sha256 f1331ad9…)")
+    sys.exit(1)
+print("restamped pin in place — op=gate_modelopt_runtime will evaluate ok")
+PY
 ```
 
 The two `export` lines are exactly what `run.sh` exports, with the download dir
@@ -221,9 +254,14 @@ parameters.
    value is read from the JSON, never hard-coded, so a vendor manifest bump
    needs no mod edit);
 5. `op=gate_modelopt_runtime` — installed `modelopt.py` hash ≠ the manifest
-   pin. The failure names both remedies (re-stamp the manifest to the installed
-   fork revision, or build against vLLM v0.30.0) and warns never to edit
-   `serving/*.py`, whose hashes the manifest pins and the worker verifies.
+   pin. The failure first says what the gate detects — **drift**: a re-synced
+   delivery, a re-pinned image, or a swapped `modelopt.py` — then names one
+   remedy: re-stamp the manifest to the installed fork revision, as was done on
+   2026-11-18. It explicitly rules *out* the vLLM v0.30.0 image build that
+   earlier wording offered as a second remedy, because no upstream ref ships the
+   B12X loader and 12 of 13 `docker/patches/qwen3.8/vllm` patches fail `--3way`
+   there. It also warns never to edit `serving/*.py`, whose hashes the manifest
+   pins and the worker verifies.
 
 On success the `ok` line interpolates the live `PYTHONPATH` and
 `VLLM_WORKER_MULTIPROC_METHOD`, so the log itself is evidence the exports
